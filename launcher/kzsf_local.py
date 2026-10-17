@@ -137,6 +137,18 @@ def launch_spec(values, folder):
                'out/content.bin', '--app0', values['game_dir']]
     return dict(command=command, env=env, cwd=str(ROOT), folder=str(folder))
 
+def session_window_icon(command, folder):
+    """SDL loads BMP; derive it from the user's dump instead of shipping artwork."""
+    if '--app0' not in command:
+        return None
+    from PIL import Image
+    source = Path(command[command.index('--app0') + 1]) / 'sce_sys' / 'icon0.png'
+    destination = Path(folder) / 'window-icon.bmp'
+    with Image.open(source) as original:
+        original.convert('RGB').resize((128, 128), Image.Resampling.LANCZOS).save(destination)
+    return destination.resolve()
+
+
 def run_session(manifest):
     """Independent monitor retains exit status even if the launcher window closes."""
     spec = json.loads(Path(manifest).read_text(encoding='utf-8'))
@@ -144,7 +156,16 @@ def run_session(manifest):
     result = {'started':time.strftime('%Y-%m-%d %H:%M:%S')}
     try:
         with (folder/'stdout.log').open('wb') as out, (folder/'stderr.log').open('wb') as err:
-            game = subprocess.Popen(spec['command'], env=spec.get('env',os.environ), cwd=spec['cwd'], stdout=out, stderr=err,
+            env = dict(spec.get('env', os.environ))
+            env.pop('GOW3_WINDOW_ICON', None)
+            try:
+                icon = session_window_icon(spec['command'], folder)
+                if icon:
+                    env['GOW3_WINDOW_ICON'] = str(icon)
+            except (ImportError, OSError, ValueError, IndexError) as exc:
+                err.write(f'Window icon unavailable: {exc}\n'.encode('utf-8'))
+                err.flush()
+            game = subprocess.Popen(spec['command'], env=env, cwd=spec['cwd'], stdout=out, stderr=err,
                                     creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             result['pid'] = game.pid
             (folder/'status.json').write_text(json.dumps(result), encoding='utf-8')

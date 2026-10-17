@@ -77,7 +77,8 @@ The game image, executables, saves and caches are generated locally.
   inherited ISA fallback has not been validated across older CPUs for Killzone.
 - Your own decrypted **CUSA00190 / 01.81** dump, including `eboot.bin`,
   `all_programs.prx`, `sce_module`, `sce_sys` and the game's data directories.
-- [MSYS2](https://www.msys2.org), using **CLANG64**, and Python 3 with Tkinter.
+- [MSYS2](https://www.msys2.org), using **CLANG64**, and Python 3 with Tkinter
+  and Pillow (`python -m pip install pillow`, for the game window icon).
   Install the compiler and libraries listed in the inherited
   [Windows build dependencies](packaging/windows/README.md#build). Its GOW
   packaging and launch instructions do not apply to this branch.
