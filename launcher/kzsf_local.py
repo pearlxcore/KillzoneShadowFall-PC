@@ -52,12 +52,13 @@ DEFAULTS = dict(game_dir='', profile='Current build',
 DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_ads_sensitivity='100',mouse_invert_y=False)
 DEFAULTS.update(motion_blur=True)
 DEFAULTS.update(mouse_horizontal_speed='100',mouse_vertical_speed='100')
+DEFAULTS.update(sprint_turn_speed='100')
 LIVE_CONFIG = {'fps':'fps_limit', 'upscaler':'upscaler', 'display_mode':'display_mode',
     **{key:key for key in ('vsync','rcas','show_fps','async_shaders','stale_readback',
        'deferred_readback','frames_queued','mouse_aim','mouse_invert_y','mouse_sensitivity',
        'mouse_ads_sensitivity','mouse_horizontal_speed','mouse_vertical_speed','motion_blur',
        'unlimited_health','infinite_ammo','controller_look_gain','controller_aim_gain',
-       'controller_turn_speed','controller_pitch_speed')}}
+       'controller_turn_speed','controller_pitch_speed','sprint_turn_speed')}}
 
 def load_preferences():
     try:
@@ -93,6 +94,8 @@ def load_preferences():
     for key in ('controller_look_gain','controller_aim_gain','controller_turn_speed','controller_pitch_speed'):
         value=str(settings.get(key,values[key]))
         values[key]=value if value.isdigit() and 50<=int(value)<=300 else '100'
+    sprint=str(values.get('sprint_turn_speed','100'))
+    values['sprint_turn_speed']=sprint if sprint.isdigit() and 100<=int(sprint)<=500 else '100'
     return values
 
 def validate_game(folder):
@@ -120,7 +123,8 @@ def persist(values):
                    controller_look_gain=values['controller_look_gain'],
                    controller_aim_gain=values['controller_aim_gain'],
                    controller_turn_speed=values['controller_turn_speed'],
-                   controller_pitch_speed=values['controller_pitch_speed'])
+                   controller_pitch_speed=values['controller_pitch_speed'],
+                   sprint_turn_speed=values.get('sprint_turn_speed','100'))
     for key in ('mouse_aim','mouse_invert_y','mouse_sensitivity','mouse_ads_sensitivity',
                 'mouse_horizontal_speed','mouse_vertical_speed','motion_blur','unlimited_health','infinite_ammo'):
         value=values.get(key,DEFAULTS[key])
@@ -166,6 +170,7 @@ def launch_spec(values, folder):
         GOW3_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
         GOW3_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
         GOW3_PAD_TURN_SPEED=str(values.get('controller_turn_speed','100')),
+        KZSF_SPRINT_TURN_SPEED=str(values.get('sprint_turn_speed','100')),
         GOW3_PAD_PITCH_SPEED=str(values.get('controller_pitch_speed','100')),
         GOW3_DEFERRED_READBACK=str(int(values['deferred_readback'])),
         GOW3_STALE_READBACK=str(int(values['stale_readback'])), GOW3_FRAMES_AHEAD=values['frames_queued'])
@@ -372,6 +377,9 @@ class Launcher:
         self.label(p,'Axis speed multiplies both look and ADS sensitivity. 100% keeps the original mouse scale.',True).pack(fill='x',pady=(0,8))
         self.check(p,'Invert mouse Y axis','mouse_invert_y')
         self.label(p,'Click the game to capture the mouse. Left Alt releases it.\nLeft click fires; right click aims. Insert opens the in-game menu.\nMouse look uses the game\'s camera controls and turn-speed limits.',True).pack(fill='x',pady=(0,20))
+        self.heading(p,'Sprint turning · Controller and mouse')
+        self.choice(p,'Sprint horizontal turn speed (%)','sprint_turn_speed',('100','125','150','175','200','250','300','400','500'))
+        self.label(p,'Sprint speed applies to controller and mouse only while sprinting. 100% is original; try 200%. Walking and vertical look stay unchanged.',True).pack(fill='x',pady=(0,8))
         self.heading(p,'Controller')
         self.choice(p,'Horizontal turn speed (%)','controller_turn_speed',gains)
         self.choice(p,'Vertical turn speed (%)','controller_pitch_speed',gains)
@@ -422,6 +430,7 @@ class Launcher:
         self.vars['mouse_vertical_speed'].set('100')
         self.vars['mouse_invert_y'].set(False)
         self.vars['controller_turn_speed'].set('100')
+        self.vars['sprint_turn_speed'].set('100')
         self.vars['controller_pitch_speed'].set('100')
         self.vars['controller_look_gain'].set('100'); self.vars['controller_aim_gain'].set('100')
         for key,label,keyboard,pad in BUTTONS: self.key_vars[key].set(keyboard); self.pad_vars[key].set(pad)

@@ -12,7 +12,7 @@ weapon, vehicle, scripted camera or motion-controller input scheme.
 |---|---|---|---|
 | Horizontal turn speed | Changes the player's left/right camera turn factor. | The working hook scales sensitivity outputs in the `SoldierJoystickController` path after `FUN_8eed80`, at `0xb8af5e`. It replaces the earlier spectator-camera hook. Range 50–300%; 100% preserves the original factor. | Implemented; user confirmed turning improvement. Available in launcher Controls and overlay Game → Controller aiming. |
 | Vertical turn speed | Changes the player's up/down camera turn factor independently. | Uses the same guarded player-input hook with a separate pitch multiplier. Range 50–300%. | Implemented and wired to launcher/overlay. Exact angular speeds have not been measured. |
-| Sprint turn speed | Would change the turn restriction specifically while sprinting. | Leads include `MovementHeadingFactorCurve`, `VelocityToMaxTurnSpeed`, `MaxTurnSpeed`, and movement-component heading/pitch modifiers. Their relationship to the player's sprint restriction is not yet established. | No dedicated sprint control or verified sprint-cap removal for controller or keyboard/mouse. |
+| Sprint horizontal turn speed | Multiplies horizontal camera input only while actually sprinting. | `FUN_b87dd0`, reached from the player joystick path, calls `FUN_b363f0`, the registered `IsSprinting` query. Its sprint branch multiplies both look axes by `SoldierResource.SprintAimSpeedFactor` (offset `0x3dc`). A signature-guarded hook at `0xb87e1a` scales only heading input before that native reduction when the query returns true. The separate `+0xad0` fallback is unchanged. | Implemented in launcher Controls and overlay Game; 100–500%, live, default 100%. Supports controller and emulated mouse. Automated checks pass; gameplay confirmation pending. |
 | Normal/zoomed response curves | Adjusts how input becomes camera movement when looking or aiming. | `LookCurve`, `HeadingCurve`, `HeadingCurveZoomed`, `PitchCurve`, `PitchSpeedFactorCurve`, `ZoomedPitchSpeedFactorCurve`. Some belong to motion-controller resources. Ordinary joystick look processing has been identified, but these curves are not all traced to editable player settings. | Engine curve overrides are not implemented. Port-side look/aim gains are available separately. |
 | Deadzones | Controls how far a stick must move before movement/aiming starts. | `LookDeadzoneCurve`, `MoveDeadzoneCurve`, `NormalDeadzone`, `ZoomedDeadzone`, `ScopedDeadzone`, `MountedDeadzone`. Different resources/input modes use different definitions. | Identified; no universal override exposed. |
 | Aim assist / slowdown | May control target attraction, tracking speed and slowdown near enemies. | `SoftlockLookSpeedCurve`, `SoftlockPitchModifier`, `AimAssistDistanceCurve`, `AimAssistSpeedCurve`, `MaxAimAssistFactorAcceleration`. Another sensitivity consumer exists in `FUN_e4ae70`, but its role as aim assist is unproven. | Candidates only; no aim-assist disable/strength setting. |
@@ -46,16 +46,21 @@ engine settings. All are in launcher Controls and the overlay's Game tab.
 
 ## Sprint turning: what is and is not implemented
 
-There is **no separate sprint-turn setting** for either input method.
+**Sprint horizontal turn speed** is available for both input methods. Start at
+200% and compare against 100% in the same open area. This is a multiplier of the
+original sprint response, not a fixed degrees-per-second setting or removal of
+every downstream camera limit.
 
-- **Controller:** the general player heading/pitch multipliers are available,
-  but a sprint-specific override has not been traced or verified.
-- **Keyboard/mouse:** normal/ADS sensitivity and independent mouse axis speeds
-  are available. Mouse input still passes through the game's camera system, so
-  these controls do not establish that its sprint turn limit has been bypassed.
-- **Walking versus sprinting:** an improvement during ordinary camera movement
-  is not sufficient evidence of a sprint fix. A future change needs to identify
-  and test the actual movement-conditioned restriction.
+- **Activation:** the game's actual `IsSprinting` result is used, rather than
+  whether L3 or a keyboard binding is held. Toggle sprint is therefore supported.
+- **Scope:** horizontal turning only. Walking, vertical look, locomotion speed,
+  resource data and simulation timing are unchanged. It combines with the general
+  horizontal player-turn setting; mouse input reaches the same native camera path.
+- **Verification:** tests cover all byte-valued query results, original/default
+  and invalid settings, unchanged registers/SIMD, TEST flags and both branches,
+  non-finite input, the actual guest-image signature, and settings persistence.
+  The log marker `KILLZONE_SPRINT_TURN` confirms execution while sprinting at a
+  non-default multiplier. Gameplay feel still needs user testing.
 
 Gameplay calibration of the new mouse controls is still pending. Motion blur OFF
 and the replacement player-controller turn hook have received user confirmation.

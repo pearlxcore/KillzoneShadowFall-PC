@@ -25,6 +25,7 @@
 #include "kzsf_cheats_win.h"
 #include "kzsf_turn_speed_win.h"
 #include "kzsf_player_turn_win.h"
+#include "kzsf_sprint_turn_win.h"
 #include <tlhelp32.h>
 #else
 #include <sys/mman.h>
@@ -53,6 +54,7 @@ static int kzsf_turn_speed_enabled;
 static int kzsf_turn_log;
 static int kzsf_player_turn_enabled;
 static unsigned kzsf_player_turn_events;
+static unsigned kzsf_sprint_events;
 static unsigned kzsf_turn_speed_reported;
 /* Gameplay verification for the engine look-rate hooks: per-axis windowed maximum of the
  * engine's own value (before scaling) and of the value actually stored. The local-input
@@ -359,6 +361,23 @@ static void isa_context_regs(CONTEXT *c, IsaRegs *regs, int to_context) {
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
+    if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled &&
+       record->ExceptionAddress==image+KZSF_SPRINT_SITE) {
+        float before,after;
+        const int sprinting=(unsigned char)info->ContextRecord->Rax!=0;
+        const int percent=gow3gpu_sprint_turn_speed();
+        if(kzsf_sprint_turn(info->ContextRecord,(uintptr_t)image,percent,
+            kzsf_cheat_read,kzsf_turn_write,NULL,&before,&after)) {
+            if(sprinting && percent!=100) {
+                unsigned event=__atomic_add_fetch(&kzsf_sprint_events,1,__ATOMIC_RELAXED);
+                if(event==1 || event%512==0)
+                    fprintf(stderr,"KILLZONE_SPRINT_TURN event=%u percent=%d heading %.5f -> %.5f\n",
+                        event,percent,(double)before,(double)after);
+            }
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        fprintf(stderr,"Killzone: sprint turn hook memory access failed\n");
+    }
     if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled &&
        record->ExceptionAddress==image+KZSF_PLAYER_TURN_SITE) {
         float before[2],after[2];unsigned user;
@@ -1465,6 +1484,10 @@ int main(int argc, char **argv) {
            !kzsf_patch_match(image,size,KZSF_PLAYER_TURN_GUARD,kzsf_player_turn_signature,sizeof(kzsf_player_turn_signature)))
             fail("Killzone player turn signature mismatch; refusing to patch");
         image[KZSF_PLAYER_TURN_SITE]=0xcc;
+        if(!mapped(segments,ns,KZSF_SPRINT_GUARD,sizeof(kzsf_sprint_signature)) ||
+           !kzsf_patch_match(image,size,KZSF_SPRINT_GUARD,kzsf_sprint_signature,sizeof(kzsf_sprint_signature)))
+            fail("Killzone sprint turn signature mismatch; refusing to patch");
+        image[KZSF_SPRINT_SITE]=0xcc;
         kzsf_player_turn_enabled=1;
         printf("Killzone: experimental SoldierJoystickController turn hook installed; execution unverified until KILLZONE_PLAYER_TURN\n");
     }

@@ -72,6 +72,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "motion_blur") { v.motion_blur=i!=0;
     } else if (key == "unlimited_health") { v.unlimited_health=i!=0;
     } else if (key == "infinite_ammo") { v.infinite_ammo=i!=0;
+    } else if (key == "sprint_turn_speed") {
+        v.sprint_turn_speed = i >= 100 && i <= 500 ? i : 100;
     } else if (key == "controller_turn_speed") {
         v.controller_turn_speed = i >= 50 && i <= 300 ? i : 100;
     } else if (key == "controller_pitch_speed") {
@@ -202,6 +204,7 @@ void Load() {
         {"GOW3_MOTION_BLUR", "motion_blur"}, {"KZSF_UNLIMITED_HEALTH", "unlimited_health"},
         {"KZSF_INFINITE_AMMO", "infinite_ammo"},
         {"GOW3_PAD_TURN_SPEED", "controller_turn_speed"},
+        {"KZSF_SPRINT_TURN_SPEED", "sprint_turn_speed"},
         {"GOW3_PAD_PITCH_SPEED", "controller_pitch_speed"},
         {"GOW3_PAD_LOOK_GAIN", "controller_look_gain"}, {"GOW3_PAD_AIM_GAIN", "controller_aim_gain"},
         {"GOW3_FSR_SHARPNESS", "sharpness"},        {"GOW3_JITTER", "jitter"},
@@ -344,6 +347,7 @@ void Save() {
     std::fprintf(file, "controller_look_gain=%d\ncontroller_aim_gain=%d\n",
                  v.controller_look_gain.load(), v.controller_aim_gain.load());
     std::fprintf(file, "controller_turn_speed=%d\n",v.controller_turn_speed.load());
+    std::fprintf(file, "sprint_turn_speed=%d\n",v.sprint_turn_speed.load());
     std::fprintf(file, "controller_pitch_speed=%d\n",v.controller_pitch_speed.load());
     std::fprintf(file,"mouse_aim=%d\nmouse_invert_y=%d\nmouse_sensitivity=%d\nmouse_ads_sensitivity=%d\n"
                       "mouse_horizontal_speed=%d\nmouse_vertical_speed=%d\nmotion_blur=%d\n"

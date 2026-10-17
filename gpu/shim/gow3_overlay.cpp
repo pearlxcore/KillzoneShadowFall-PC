@@ -295,7 +295,7 @@ void GameTab() {
     if (BeginRows("##controller-aim")) {
         ImGui::BeginDisabled(!s.engine_turn_hook.load());
         SliderRow("Horizontal turn speed", s.controller_turn_speed, 50, 300, "%d%%",
-                  s.engine_turn_hook.load() ? "Experimental engine horizontal look-rate multiplier. 100% is original. Sprint effect needs testing."
+                  s.engine_turn_hook.load() ? "Engine horizontal look-rate multiplier. 100% is original."
                                            : "Requires the engine turn-speed test build and launcher flag.");
         SliderRow("Vertical turn speed", s.controller_pitch_speed, 50, 300, "%d%%",
                   s.engine_turn_hook.load() ? "Experimental engine vertical look-rate multiplier, separate from heading. 100% is original."
@@ -314,6 +314,14 @@ void GameTab() {
         s.controller_pitch_speed = 100;
         dirty = true;
     }
+    ImGui::SeparatorText("Sprint turning (controller and mouse)");
+    if (BeginRows("##sprint-turn")) {
+        ImGui::BeginDisabled(!s.engine_turn_hook.load());
+        SliderRow("Sprint horizontal turn speed",s.sprint_turn_speed,100,500,"%d%%",
+                  "Only while the game reports sprinting. 100% is original; try 200%. Walking and vertical look are unchanged. Gameplay testing pending.");
+        ImGui::EndDisabled();ImGui::EndTable();
+    }
+    if (ImGui::Button("Reset sprint turn speed")) { s.sprint_turn_speed=100;dirty=true; }
     ImGui::SeparatorText("Player assists");
     if (BeginRows("##killzone-assists")) {
         const auto enabled = [](const char* key) {

@@ -342,6 +342,9 @@ extern "C" int gow3gpu_controller_aim_gain(int aiming) {
 extern "C" int gow3gpu_controller_turn_speed(void) {
     return Gow3Settings::Get().controller_turn_speed.load();
 }
+extern "C" int gow3gpu_sprint_turn_speed(void) {
+    return Gow3Settings::Get().sprint_turn_speed.load();
+}
 extern "C" int gow3gpu_controller_pitch_speed(void) {
     return Gow3Settings::Get().controller_pitch_speed.load();
 }

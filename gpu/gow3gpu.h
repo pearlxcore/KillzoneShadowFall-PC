@@ -39,6 +39,7 @@ int gow3gpu_overlay_captures_input(void);
 /* Live controller response gain in percent; aiming is nonzero while L2 is held. */
 int gow3gpu_controller_aim_gain(int aiming);
 int gow3gpu_controller_turn_speed(void);
+int gow3gpu_sprint_turn_speed(void);
 /* Live engine vertical look-rate multiplier in percent (the pitch field, separate from heading). */
 int gow3gpu_controller_pitch_speed(void);
 /* Captured mouse converted to held right-stick axes; buttons: 1 fire, 2 aim. */
