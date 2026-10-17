@@ -38,6 +38,7 @@ int gow3gpu_choice_poll(void);
 int gow3gpu_overlay_captures_input(void);
 /* Live controller response gain in percent; aiming is nonzero while L2 is held. */
 int gow3gpu_controller_aim_gain(int aiming);
+int gow3gpu_controller_drift_deadzone(void);
 int gow3gpu_controller_turn_speed(void);
 int gow3gpu_sprint_turn_speed(void);
 int gow3gpu_look_curve(void);

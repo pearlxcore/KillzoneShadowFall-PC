@@ -234,6 +234,25 @@ static void sample_host(PadData *d) {
         {
             int16_t rx=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX);
             int16_t ry=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY);
+            int drift_zone=gow3gpu_controller_drift_deadzone();
+            int16_t raw_x=rx,raw_y=ry;
+            int suppressed=kzsf_controller_drift_guard(&rx,&ry,drift_zone);
+            static int drift_log=-1;
+            if(drift_log<0)drift_log=getenv("KZSF_PAD_DRIFT_LOG")!=NULL;
+            if(drift_log) {
+                float raw_radius=hypotf((float)raw_x,(float)raw_y)/32768.0f;
+                static uint64_t report_at;static unsigned samples,blocked;
+                static float peak;
+                if(raw_radius>peak)peak=raw_radius;
+                ++samples;blocked+=(unsigned)suppressed;
+                uint64_t now=now_us();
+                if(!report_at)report_at=now;
+                if(now-report_at>=5000000) {
+                    fprintf(stderr,"KILLZONE_PAD_DRIFT raw_peak=%.2f%% guard=%d%% suppressed=%u/%u samples\n",
+                        (double)(peak*100.f),drift_zone,blocked,samples);
+                    report_at=now;samples=blocked=0;peak=0;
+                }
+            }
             kzsf_controller_aim(&rx,&ry,gow3gpu_controller_aim_gain(d->l2>30));
             d->right_x=axis(rx); d->right_y=axis(ry);
         }

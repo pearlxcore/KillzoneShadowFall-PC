@@ -82,6 +82,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.controller_turn_speed = i >= 50 && i <= 300 ? i : 100;
     } else if (key == "controller_pitch_speed") {
         v.controller_pitch_speed = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "controller_drift_deadzone") {
+        v.controller_drift_deadzone=std::clamp(i,0,30);
     } else if (key == "controller_look_gain") {
         v.controller_look_gain = i >= 50 && i <= 300 ? i : 100;
     } else if (key == "controller_aim_gain") {
@@ -213,6 +215,7 @@ void Load() {
         {"KZSF_LOOK_RAMP", "look_ramp"}, {"KZSF_LOOK_ASSIST", "look_assist"},
         {"GOW3_PAD_PITCH_SPEED", "controller_pitch_speed"},
         {"GOW3_PAD_LOOK_GAIN", "controller_look_gain"}, {"GOW3_PAD_AIM_GAIN", "controller_aim_gain"},
+        {"KZSF_PAD_DRIFT_DEADZONE", "controller_drift_deadzone"},
         {"GOW3_FSR_SHARPNESS", "sharpness"},        {"GOW3_JITTER", "jitter"},
         {"GOW3_REACTIVE", "reactive"},              {"GOW3_REACTIVE_SCALE", "reactive_scale"},
         {"GOW3_REACTIVE_THRESHOLD", "reactive_threshold"}, {"GOW3_REACTIVE_MAX", "reactive_max"},
@@ -353,6 +356,7 @@ void Save() {
     std::fprintf(file, "controller_look_gain=%d\ncontroller_aim_gain=%d\n",
                  v.controller_look_gain.load(), v.controller_aim_gain.load());
     std::fprintf(file, "controller_turn_speed=%d\n",v.controller_turn_speed.load());
+    std::fprintf(file, "controller_drift_deadzone=%d\n",v.controller_drift_deadzone.load());
     std::fprintf(file, "sprint_turn_speed=%d\n",v.sprint_turn_speed.load());
     std::fprintf(file,"look_curve=%d\nlook_deadzone=%d\nlook_ramp=%d\nlook_assist=%d\n",
         v.look_curve.load(),v.look_deadzone.load(),int(v.look_ramp.load()),int(v.look_assist.load()));

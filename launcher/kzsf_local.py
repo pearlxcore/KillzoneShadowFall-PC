@@ -54,14 +54,15 @@ DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_ads_sensitivity='10
 DEFAULTS.update(motion_blur=True)
 DEFAULTS.update(mouse_horizontal_speed='100',mouse_vertical_speed='100')
 DEFAULTS.update(sprint_turn_speed='100')
-DEFAULTS.update(look_curve='0',look_deadzone='10',look_ramp=True,look_assist=True)
+DEFAULTS.update(look_curve='1',look_deadzone='8',look_ramp=False,look_assist=True)
+DEFAULTS.update(controller_drift_deadzone='8')
 LIVE_CONFIG = {'fps':'fps_limit', 'upscaler':'upscaler', 'display_mode':'display_mode',
     **{key:key for key in ('vsync','rcas','show_fps','async_shaders','stale_readback',
        'deferred_readback','frames_queued','mouse_aim','mouse_invert_y','mouse_sensitivity',
        'mouse_ads_sensitivity','mouse_horizontal_speed','mouse_vertical_speed','motion_blur',
        'unlimited_health','infinite_ammo','controller_look_gain','controller_aim_gain',
        'controller_turn_speed','controller_pitch_speed','sprint_turn_speed',
-       'look_curve','look_deadzone','look_ramp','look_assist')}}
+       'look_curve','look_deadzone','look_ramp','look_assist','controller_drift_deadzone')}}
 
 def load_preferences():
     try:
@@ -101,7 +102,9 @@ def load_preferences():
     values['sprint_turn_speed']=sprint if sprint.isdigit() and 100<=int(sprint)<=500 else '100'
     if str(values['look_curve']) not in ('0','1','2'):values['look_curve']='0'
     deadzone=str(values['look_deadzone'])
-    values['look_deadzone']=deadzone if deadzone.isdigit() and 0<=int(deadzone)<=30 else '10'
+    values['look_deadzone']=deadzone if deadzone.isdigit() and 0<=int(deadzone)<=30 else '8'
+    drift=str(values['controller_drift_deadzone'])
+    values['controller_drift_deadzone']=drift if drift.isdigit() and 0<=int(drift)<=30 else '8'
     return values
 
 def validate_game(folder):
@@ -133,7 +136,7 @@ def persist(values):
                    sprint_turn_speed=values.get('sprint_turn_speed','100'))
     for key in ('mouse_aim','mouse_invert_y','mouse_sensitivity','mouse_ads_sensitivity',
                 'mouse_horizontal_speed','mouse_vertical_speed','motion_blur','unlimited_health','infinite_ammo',
-                'look_curve','look_deadzone','look_ramp','look_assist'):
+                'look_curve','look_deadzone','look_ramp','look_assist','controller_drift_deadzone'):
         value=values.get(key,DEFAULTS[key])
         updates[key]=str(int(value)) if isinstance(value,bool) else str(value)
     write_keys(CONFIG, updates)
@@ -175,12 +178,13 @@ def launch_spec(values, folder):
         GOW3_MOUSE_VERTICAL_SPEED=str(values.get('mouse_vertical_speed','100')),
         GOW3_MOUSE_INVERT_Y=str(int(values.get('mouse_invert_y',False))),
         GOW3_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
+        KZSF_PAD_DRIFT_DEADZONE=str(values.get('controller_drift_deadzone','8')),
         GOW3_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
         GOW3_PAD_TURN_SPEED=str(values.get('controller_turn_speed','100')),
         KZSF_SPRINT_TURN_SPEED=str(values.get('sprint_turn_speed','100')),
-        KZSF_LOOK_CURVE=str(values.get('look_curve','0')),
-        KZSF_LOOK_DEADZONE=str(values.get('look_deadzone','10')),
-        KZSF_LOOK_RAMP=str(int(values.get('look_ramp',True))),
+        KZSF_LOOK_CURVE=str(values.get('look_curve','1')),
+        KZSF_LOOK_DEADZONE=str(values.get('look_deadzone','8')),
+        KZSF_LOOK_RAMP=str(int(values.get('look_ramp',False))),
         KZSF_LOOK_ASSIST=str(int(values.get('look_assist',True))),
         GOW3_PAD_PITCH_SPEED=str(values.get('controller_pitch_speed','100')),
         GOW3_DEFERRED_READBACK=str(int(values['deferred_readback'])),
@@ -392,6 +396,8 @@ class Launcher:
         self.choice(p,'Sprint horizontal turn speed (%)','sprint_turn_speed',('100','125','150','175','200','250','300','400','500'))
         self.label(p,'Independent of horizontal turn speed while sprinting, for controller and mouse. 100% is original; try 200%. Input sensitivity still applies.',True).pack(fill='x',pady=(0,8))
         self.heading(p,'Controller')
+        self.choice(p,'Stick drift protection (%)','controller_drift_deadzone',('0','2','4','6','8','10','12','15','20','25','30'))
+        self.label(p,'Filters tiny right-stick movements before sensitivity gain. Mouse is unaffected. 0% disables protection.',True).pack(fill='x',pady=(0,8))
         self.choice(p,'Look response curve','look_curve',('0','1','2'))
         self.choice(p,'Look inner deadzone (%)','look_deadzone',('0','2','5','8','10','12','15','20','25','30'))
         self.label(p,'Deadzone applies with custom curves only. These replace native look curves and also affect mouse joystick emulation. Movement is unchanged.',True).pack(fill='x',pady=(0,8))
@@ -448,8 +454,9 @@ class Launcher:
         self.vars['mouse_invert_y'].set(False)
         self.vars['controller_turn_speed'].set('100')
         self.vars['sprint_turn_speed'].set('100')
-        self.vars['look_curve'].set('0');self.vars['look_deadzone'].set('10')
-        self.vars['look_ramp'].set(True);self.vars['look_assist'].set(True)
+        self.vars['look_curve'].set('1');self.vars['look_deadzone'].set('8')
+        self.vars['look_ramp'].set(False);self.vars['look_assist'].set(True)
+        self.vars['controller_drift_deadzone'].set('8')
         self.vars['controller_pitch_speed'].set('100')
         self.vars['controller_look_gain'].set('100'); self.vars['controller_aim_gain'].set('100')
         for key,label,keyboard,pad in BUTTONS: self.key_vars[key].set(keyboard); self.pad_vars[key].set(pad)

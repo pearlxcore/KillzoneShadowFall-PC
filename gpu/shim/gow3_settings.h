@@ -33,12 +33,13 @@ struct Values {
     std::atomic<int> mouse_horizontal_speed{100}, mouse_vertical_speed{100};
     std::atomic<bool> motion_blur{true}, unlimited_health{false}, infinite_ammo{false};
     std::atomic<int> controller_look_gain{100};
+    std::atomic<int> controller_drift_deadzone{8};
     std::atomic<int> controller_aim_gain{100};
     std::atomic<int> controller_turn_speed{100};
     /// Horizontal camera multiplier only when the engine reports IsSprinting.
     std::atomic<int> sprint_turn_speed{100};
-    std::atomic<int> look_curve{0}, look_deadzone{10}; // 0 original, 1 linear, 2 squared
-    std::atomic<bool> look_ramp{true}, look_assist{true};
+    std::atomic<int> look_curve{1}, look_deadzone{8}; // 0 original, 1 linear, 2 squared
+    std::atomic<bool> look_ramp{false}, look_assist{true};
     /// Engine vertical look rate (the local-input pitch field), separate from heading.
     std::atomic<int> controller_pitch_speed{100};
     std::atomic<bool> engine_turn_hook{false};

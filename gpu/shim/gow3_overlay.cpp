@@ -303,12 +303,15 @@ void GameTab() {
         ImGui::EndDisabled();
         SliderRow("Look response", s.controller_look_gain, 50, 300, "%d%%",
                   "Right-stick response without L2. 100% is original. Does not increase maximum turn speed.");
+        SliderRow("Stick drift protection",s.controller_drift_deadzone,0,30,"%d%%",
+                  "Ignores small physical right-stick movements before sensitivity amplifies them. Mouse is unaffected. 0% disables protection.");
         SliderRow("Aim response (L2)", s.controller_aim_gain, 50, 300, "%d%%",
                   "Right-stick response while aiming. Higher values reach full input sooner; lower values give finer aim.");
         ImGui::EndTable();
     }
-    if (ImGui::Button("Restore original controller response")) {
+    if (ImGui::Button("Reset controller response")) {
         s.controller_look_gain = 100;
+        s.controller_drift_deadzone = 8;
         s.controller_aim_gain = 100;
         s.controller_turn_speed = 100;
         s.controller_pitch_speed = 100;
