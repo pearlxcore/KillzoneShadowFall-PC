@@ -119,6 +119,8 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         mouse_input.Reset(false,MouseNow());
         const char* gain=std::getenv("GOW3_MOUSE_SENSITIVITY");
         mouse_input.gain=gain ? std::clamp(std::atoi(gain),50,300)/100.f : 1.f;
+        const char* aim_gain=std::getenv("GOW3_MOUSE_ADS_SENSITIVITY");
+        mouse_input.aim_gain=aim_gain ? std::clamp(std::atoi(aim_gain),25,300)/100.f : mouse_input.gain;
         const char* invert=std::getenv("GOW3_MOUSE_INVERT_Y");
         mouse_input.invert=invert && invert[0]=='1';
     }

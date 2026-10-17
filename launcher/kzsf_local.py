@@ -49,7 +49,7 @@ DEFAULTS = dict(game_dir='', profile='Current build',
                 unlimited_health=False, infinite_ammo=False,
                 controller_look_gain='100', controller_aim_gain='100', controller_turn_speed='100',
                 controller_pitch_speed='100', keys={}, pads={})
-DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_invert_y=False)
+DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_ads_sensitivity='100',mouse_invert_y=False)
 
 def load_preferences():
     try:
@@ -70,6 +70,8 @@ def load_preferences():
     settings=read_ini(CONFIG)
     mouse_gain=str(values.get('mouse_sensitivity','100'))
     values['mouse_sensitivity']=mouse_gain if mouse_gain.isdigit() and 50<=int(mouse_gain)<=300 else '100'
+    ads_gain=str(data.get('mouse_ads_sensitivity',values['mouse_sensitivity'])) if isinstance(data,dict) else '100'
+    values['mouse_ads_sensitivity']=ads_gain if ads_gain.isdigit() and 25<=int(ads_gain)<=300 else '100'
     for key in ('controller_look_gain','controller_aim_gain','controller_turn_speed','controller_pitch_speed'):
         value=str(settings.get(key,values[key]))
         values[key]=value if value.isdigit() and 50<=int(value)<=300 else '100'
@@ -134,6 +136,7 @@ def launch_spec(values, folder):
         GOW3_READBACK_LINEAR='1', GOW3_RCAS=str(int(values['rcas'])),
         GOW3_MOUSE_AIM=str(int(values.get('mouse_aim',True))),
         GOW3_MOUSE_SENSITIVITY=str(values.get('mouse_sensitivity','100')),
+        GOW3_MOUSE_ADS_SENSITIVITY=str(values.get('mouse_ads_sensitivity',values.get('mouse_sensitivity','100'))),
         GOW3_MOUSE_INVERT_Y=str(int(values.get('mouse_invert_y',False))),
         GOW3_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
         GOW3_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
@@ -336,7 +339,8 @@ class Launcher:
         self.heading(p,'Mouse')
         gains=('50','75','100','125','150','175','200','250','300')
         self.check(p,'Enable mouse look','mouse_aim')
-        self.choice(p,'Mouse sensitivity (%)','mouse_sensitivity',gains)
+        self.choice(p,'Mouse look sensitivity (%)','mouse_sensitivity',gains)
+        self.choice(p,'Mouse aim sensitivity / ADS (%)','mouse_ads_sensitivity',('25',)+gains)
         self.check(p,'Invert mouse Y axis','mouse_invert_y')
         self.label(p,'Click the game to capture the mouse. Left Alt releases it.\nLeft click fires; right click aims. Insert opens the in-game menu.\nMouse look uses the game\'s camera controls and turn-speed limits.',True).pack(fill='x',pady=(0,20))
         self.heading(p,'Controller')
@@ -384,6 +388,7 @@ class Launcher:
     def reset_controls(self):
         self.vars['mouse_aim'].set(True)
         self.vars['mouse_sensitivity'].set('100')
+        self.vars['mouse_ads_sensitivity'].set('100')
         self.vars['mouse_invert_y'].set(False)
         self.vars['controller_turn_speed'].set('100')
         self.vars['controller_pitch_speed'].set('100')

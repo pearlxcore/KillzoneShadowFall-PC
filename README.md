@@ -34,7 +34,7 @@ in the tree; the instructions below are for this Killzone branch.
 - **30, 60 and 120 FPS limits.** These are caps, not guaranteed frame rates.
 - Controller and keyboard input, button remapping, separate controller look/aim
   gains, and heading/pitch turn-speed controls.
-- Mouse look with adjustable sensitivity and Y inversion. Click the game window
+- Mouse look with separate look and right-click ADS sensitivity, plus Y inversion. Click the game window
   to capture the mouse; **Left Alt** releases it. **Left click** fires and
   **right click** aims. Capture also releases on focus loss, the port menu,
   Enter, or the controller's Start button. Mouse input drives the game's
