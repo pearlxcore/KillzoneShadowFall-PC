@@ -41,6 +41,8 @@ int gow3gpu_controller_aim_gain(int aiming);
 int gow3gpu_controller_turn_speed(void);
 /* Live engine vertical look-rate multiplier in percent (the pitch field, separate from heading). */
 int gow3gpu_controller_pitch_speed(void);
+/* Captured mouse converted to held right-stick axes; buttons: 1 fire, 2 aim. */
+int gow3gpu_mouse_state(int16_t *x, int16_t *y, uint32_t *buttons);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned gow3gpu_symbol_count(void);
 #ifdef __cplusplus

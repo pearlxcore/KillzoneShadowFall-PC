@@ -49,6 +49,7 @@ DEFAULTS = dict(game_dir='', profile='Current build',
                 unlimited_health=False, infinite_ammo=False,
                 controller_look_gain='100', controller_aim_gain='100', controller_turn_speed='100',
                 controller_pitch_speed='100', keys={}, pads={})
+DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_invert_y=False)
 
 def load_preferences():
     try:
@@ -67,6 +68,8 @@ def load_preferences():
     for key in ('keys','pads'):
         if not isinstance(values[key], dict): values[key] = {}
     settings=read_ini(CONFIG)
+    mouse_gain=str(values.get('mouse_sensitivity','100'))
+    values['mouse_sensitivity']=mouse_gain if mouse_gain.isdigit() and 50<=int(mouse_gain)<=300 else '100'
     for key in ('controller_look_gain','controller_aim_gain','controller_turn_speed','controller_pitch_speed'):
         value=str(settings.get(key,values[key]))
         values[key]=value if value.isdigit() and 50<=int(value)<=300 else '100'
@@ -129,6 +132,9 @@ def launch_spec(values, folder):
         GOW3_USER_DIR=str(ROOT/'user'), GOW3_GPU_USER_DIR=str(ROOT/'user'),
         GOW3_ASYNC_SHADERS=str(int(values['async_shaders'])), GOW3_UPSCALER=values['upscaler'],
         GOW3_READBACK_LINEAR='1', GOW3_RCAS=str(int(values['rcas'])),
+        GOW3_MOUSE_AIM=str(int(values.get('mouse_aim',True))),
+        GOW3_MOUSE_SENSITIVITY=str(values.get('mouse_sensitivity','100')),
+        GOW3_MOUSE_INVERT_Y=str(int(values.get('mouse_invert_y',False))),
         GOW3_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
         GOW3_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
         GOW3_PAD_TURN_SPEED=str(values.get('controller_turn_speed','100')),
@@ -327,8 +333,13 @@ class Launcher:
             if canvas.winfo_ismapped() and event.widget.winfo_class()!='TCombobox':
                 canvas.yview_scroll(-int(event.delta/120),'units')
         self.root.bind('<MouseWheel>',wheel,add='+')
-        self.heading(p,'Keyboard and controller')
+        self.heading(p,'Mouse')
         gains=('50','75','100','125','150','175','200','250','300')
+        self.check(p,'Enable mouse look','mouse_aim')
+        self.choice(p,'Mouse sensitivity (%)','mouse_sensitivity',gains)
+        self.check(p,'Invert mouse Y axis','mouse_invert_y')
+        self.label(p,'Click the game to capture the mouse. Left Alt releases it.\nLeft click fires; right click aims. Insert opens the in-game menu.\nMouse look uses the game\'s camera controls and turn-speed limits.',True).pack(fill='x',pady=(0,20))
+        self.heading(p,'Controller')
         self.choice(p,'Horizontal turn speed (%)','controller_turn_speed',gains)
         self.choice(p,'Vertical turn speed (%)','controller_pitch_speed',gains)
         self.choice(p,'Look sensitivity (%)','controller_look_gain',gains)
@@ -371,6 +382,9 @@ class Launcher:
             finish(value)
         popup.bind('<KeyPress>',press); popup.protocol('WM_DELETE_WINDOW',lambda:finish(old))
     def reset_controls(self):
+        self.vars['mouse_aim'].set(True)
+        self.vars['mouse_sensitivity'].set('100')
+        self.vars['mouse_invert_y'].set(False)
         self.vars['controller_turn_speed'].set('100')
         self.vars['controller_pitch_speed'].set('100')
         self.vars['controller_look_gain'].set('100'); self.vars['controller_aim_gain'].set('100')

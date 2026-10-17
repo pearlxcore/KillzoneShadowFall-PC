@@ -9,6 +9,24 @@
 #include "gow3_overlay.h"
 #include "gow3_graphics.h"
 #include "gow3_settings.h"
+#include "kzsf_mouse_input.h"
+#include <chrono>
+
+namespace {
+std::mutex mouse_mutex;
+KillzoneMouseInput mouse_input;
+uint64_t MouseNow() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}
+
+extern "C" int gow3gpu_mouse_state(int16_t* x,int16_t* y,uint32_t* buttons) {
+    std::scoped_lock lock{mouse_mutex};
+    mouse_input.Sample(MouseNow(),*x,*y);
+    *buttons=mouse_input.captured ? mouse_input.buttons : 0;
+    return mouse_input.captured;
+}
 
 namespace Frontend {
 
@@ -94,8 +112,17 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         Gow3Settings::Get().display_mode = Gow3Graphics::Borderless;
     }
     ApplyDisplayMode(Gow3Settings::Get().display_mode);
-    // gow3: the game has no mouse; the in-game menu draws its own cursor (Gow3Overlay::SetOpen).
-    SDL_HideCursor();
+    const char* mouse_env=std::getenv("GOW3_MOUSE_AIM");
+    mouse_enabled=mouse_env && mouse_env[0]=='1';
+    {
+        std::scoped_lock lock{mouse_mutex};
+        mouse_input.Reset(false,MouseNow());
+        const char* gain=std::getenv("GOW3_MOUSE_SENSITIVITY");
+        mouse_input.gain=gain ? std::clamp(std::atoi(gain),50,300)/100.f : 1.f;
+        const char* invert=std::getenv("GOW3_MOUSE_INVERT_Y");
+        mouse_input.invert=invert && invert[0]=='1';
+    }
+    if (mouse_enabled) SDL_ShowCursor(); else SDL_HideCursor();
     int w = 0, h = 0;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     width = w;
@@ -122,7 +149,23 @@ void WindowSDL::ApplyDisplayMode(int mode) {
 }
 
 WindowSDL::~WindowSDL() {
+    SetMouseCapture(false);
     SDL_DestroyWindow(window);
+}
+
+void WindowSDL::SetMouseCapture(bool active) {
+    if (active==mouse_captured) return;
+    if (!SDL_SetWindowRelativeMouseMode(window,active)) {
+        LOG_WARNING(Frontend,"Mouse capture failed: {}",SDL_GetError());
+        if (active) return;
+    }
+    mouse_captured=active;
+    mouse_capture_click=false;
+    SDL_SetWindowMouseGrab(window,active);
+    if (active) SDL_HideCursor(); else SDL_ShowCursor();
+    std::scoped_lock lock{mouse_mutex};
+    mouse_input.Reset(active,MouseNow());
+    std::printf("Mouse: %s\n",active ? "captured (Left Alt releases)" : "released");
 }
 
 void WindowSDL::BeginTextInput(const std::string& initial, const std::string& prompt) {
@@ -147,6 +190,8 @@ void WindowSDL::UpdateTextTitle() {
 }
 
 bool WindowSDL::PollEvents() {
+    if (mouse_enabled && (Gow3Overlay::CapturesInput() || text_active ||
+        !(SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS))) SetMouseCapture(false);
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread
@@ -164,6 +209,34 @@ bool WindowSDL::PollEvents() {
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        if (mouse_enabled) {
+            if (event.type==SDL_EVENT_WINDOW_FOCUS_LOST ||
+                (event.type==SDL_EVENT_KEY_DOWN && (event.key.key==SDLK_LALT ||
+                 event.key.key==SDLK_RETURN)) ||
+                (event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button==SDL_GAMEPAD_BUTTON_START))
+                SetMouseCapture(false);
+            const bool blocked=Gow3Overlay::CapturesInput() || text_active ||
+                               !(SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS);
+            if (!blocked && event.type==SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                event.button.button==SDL_BUTTON_LEFT && !mouse_captured) {
+                SetMouseCapture(true); mouse_capture_click=true;
+                continue; // clicking to capture must not fire
+            }
+            if (event.type==SDL_EVENT_MOUSE_BUTTON_UP && event.button.button==SDL_BUTTON_LEFT && mouse_capture_click) {
+                mouse_capture_click=false; continue;
+            }
+            if (!blocked && mouse_captured) {
+                std::scoped_lock lock{mouse_mutex};
+                if (event.type==SDL_EVENT_MOUSE_MOTION)
+                    mouse_input.Motion(event.motion.xrel,event.motion.yrel,MouseNow());
+                if (event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP) {
+                    const unsigned mask=event.button.button==SDL_BUTTON_LEFT ? 1u :
+                                        event.button.button==SDL_BUTTON_RIGHT ? 2u : 0u;
+                    if (event.type==SDL_EVENT_MOUSE_BUTTON_DOWN) mouse_input.buttons|=mask;
+                    else mouse_input.buttons&=~mask;
+                }
+            }
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
@@ -192,6 +265,7 @@ bool WindowSDL::PollEvents() {
             continue;
         }
         if (Gow3Overlay::HandleEvent(event)) {
+            if (mouse_enabled && Gow3Overlay::CapturesInput()) SetMouseCapture(false);
             continue;
         }
         switch (event.type) {
@@ -210,6 +284,10 @@ bool WindowSDL::PollEvents() {
         default:
             break;
         }
+    }
+    if (mouse_enabled && !mouse_captured) {
+        if (Gow3Overlay::CapturesInput()) SDL_HideCursor();
+        else SDL_ShowCursor();
     }
     return is_open;
 }

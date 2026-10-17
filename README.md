@@ -34,6 +34,12 @@ in the tree; the instructions below are for this Killzone branch.
 - **30, 60 and 120 FPS limits.** These are caps, not guaranteed frame rates.
 - Controller and keyboard input, button remapping, separate controller look/aim
   gains, and heading/pitch turn-speed controls.
+- Mouse look with adjustable sensitivity and Y inversion. Click the game window
+  to capture the mouse; **Left Alt** releases it. **Left click** fires and
+  **right click** aims. Capture also releases on focus loss, the port menu,
+  Enter, or the controller's Start button. Mouse input drives the game's
+  right-stick camera controls; native turn-speed limits still apply.
+  Gameplay sensitivity and aiming feel are still being tested.
 - **Shader-cache precompilation** on startup. Cached shaders persist between runs;
   new areas and shaders can still cause stutters.
 - **Launcher** with five settings pages and a Killzone-inspired design:

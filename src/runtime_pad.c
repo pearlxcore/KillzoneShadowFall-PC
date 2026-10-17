@@ -261,6 +261,14 @@ static void sample_host(PadData *d) {
             }
         }
     }
+    {
+        int16_t mx=0,my=0; uint32_t buttons=0;
+        if (gow3gpu_mouse_state(&mx,&my,&buttons)) {
+            if (mx || my) { d->right_x=axis(mx); d->right_y=axis(my); }
+            if (buttons&1) { d->buttons|=BTN_R2; d->r2=255; }
+            if (buttons&2) { d->buttons|=BTN_L2; d->l2=255; }
+        }
+    }
     /* The keyboard works with or without a gamepad: its buttons add to the pad's, and a stick
      * follows the keys only while one of them is held. */
     if (!k) return;
