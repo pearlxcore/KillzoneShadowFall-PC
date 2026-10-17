@@ -1,361 +1,188 @@
-# God of War III Remastered for PC 
+# Killzone Shadow Fall for PC
 
-<div align="center">
-  <a href="https://ko-fi.com/S7O428PBCC" target="_blank"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="ko-fi"></a>
-</div>
+A PC port of **Killzone Shadow Fall** (PlayStation 4) for Windows 10 and 11.
 
-**English** | [Português (Brasil)](README.pt-BR.md) | [Español](README.es.md)
+The CPU side is native: the game's original x86-64 code runs on the PC's processor,
+while a custom runtime replaces the PS4 system libraries. The graphics run through
+[shadPS4](https://github.com/shadps4-emu/shadPS4)'s video core, translating PS4 GPU
+commands and shaders to Vulkan.
 
-A PC port of **God of War III Remastered** (PlayStation 4) for Windows 10 and 11.
+This project builds on [Felipe Prado's God of War III PC port](https://github.com/FelipePrado0/gow3_pc),
+with Killzone-specific work on timing, dialogue synchronization, chapter transitions,
+memory, graphics, controls and the launcher. See [Credits](#credits).
 
-The CPU side is native: the game's original executable runs directly on the PC's processor (the
-PS4 uses the same x86-64 architecture), and a runtime written for this game replaces the PS4
-system libraries, so there is no emulator. The graphics are translated: they run on the
-[shadPS4](https://github.com/shadps4-emu/shadPS4) video core, which converts the PS4 GPU commands
-and shaders to Vulkan, with the God of War III rendering fixes from
-[cuesta4's `eltutz` branch](https://github.com/cuesta4/shadPS4/tree/eltutz). Running the game code
-directly on the CPU is also how shadPS4 works; what this project changes is the system layer and
-the game-specific work (patches, background shader cache, launcher and in-game menu).
-It is a fork of [Supermedo's Windows port](https://github.com/Supermedo/bloodborne_pc) of
-[deadinside28's bloodborne_pc](https://github.com/deadinside28/bloodborne_pc) (see
-[Credits](#credits)).
+> **No game files are included.** You need your own decrypted PS4 dump.
+> Supported build: **CUSA00190, version 01.81**.
+> This project is not affiliated with Sony Interactive Entertainment or Guerrilla Games.
+> Killzone is a trademark of Sony Interactive Entertainment.
 
-> **No game files are included.** You need a dump from your own PS4 (tested: CUSA01623 and
-> CUSA01715, versions 01.00 and 01.02).
-> This project is not affiliated with Sony Interactive Entertainment or Santa Monica Studio.
-> God of War is a trademark of Sony Interactive Entertainment.
+**The campaign has been completed on the development machine.** This is still an
+experimental port: performance varies by scene, stutters remain, and other hardware
+has not received the same testing. The development GPU is an AMD Radeon RX 9070 XT.
 
-On the test machine (AMD Radeon RX 6700 XT, Ryzen 5 5600X, 32 GB) the game runs at 144 FPS on
-average (55 to 240) at 1080p with the 240 FPS engine frame rate.
-
-**Tested and playable from start to finish** at native 1080p with the 240 FPS engine frame
-rate. At other render resolutions some textures look broken; a fix is in progress.
-
-Progress is tracked (in Portuguese) in [docs/gow3/ROADMAP.md](docs/gow3/ROADMAP.md).
+Development is on **`killzone-source`**. The repository's `main` branch currently
+retains the upstream GOW code. Older GOW documentation and packaging scripts remain
+in the tree; the instructions below are for this Killzone branch.
 
 ## What works
 
-- Opening, menus, video cutscenes (H.264) and gameplay.
-- Audio: music, voices and effects (ATRAC9 and MP3).
-- Controller (DualSense, Xbox and others, through SDL3) and keyboard at the same time, both
-  remappable.
-- **In-game button icons** (opt-in, off by default): the PlayStation button icons in the game can
-  show your controller's, Xbox or Nintendo ones (Game page, Controls).
-- Saving and loading: the save list is shown on screen, as on the PS4. Autosave works too. The
-  launcher backs the saves up before every start.
-- Patches: render resolution of 480p, 720p, 1440p, 1800p or 4K, corrupted texture fix and skip
-  videos with the X button (community); engine frame rate of 120 FPS (kvicken) or 240 FPS
-  (adapted by Felipe Prado).
-- **Instant start:** the saved shader cache loads in the background while you play, and new
-  shaders compile in the background too, so the game does not stop to build them.
-- **Launcher** in the game's colors, in English with partial translations: quick settings on the home page, display,
-  performance, game folder and save backups, patches, mods (order, presets and conflicts),
-  controls with PlayStation or Xbox button icons, updates and diagnostics.
-- **In-game menu** (Insert on the keyboard, R3+L2 on the controller), with four tabs:
-  - **Game:** cheats (infinite health, magic, item meter, Rage of Sparta, max red orbs);
-    multipliers from 0.1x to 100x for red, green (health), blue (magic) and gold (Rage of
-    Sparta) orbs and for damage dealt and taken; an enemy health bar.
-  - **Image:** display mode (windowed, borderless, fullscreen), VSync and RCAS sharpening.
-  - **Performance:** frame rate limit (30 to unlimited), frames queued, background shader
-    compiling; render resolution, engine frame rate and GPU readback options apply with one
-    "Apply and restart" button.
-  - **Overlay:** a performance overlay with FPS, frametime, upscaler, GPU (name and use), CPU,
-    RAM and VRAM, each optional, with font size, corner, background opacity and layout. The
-    numbers are the game's own use, not the whole system's.
+- Campaign gameplay, video cutscenes, saving and loading.
+- Dialogue and scripted-event synchronization, with corrected guest timing.
+- Chapter transitions and the previously reproducible Chapter 9 allocation crash.
+- Native 1080p rendering, including fixes for white/striped foliage and purple bark
+  in the tested scenes.
+- **30, 60 and 120 FPS limits.** These are caps, not guaranteed frame rates.
+- Controller and keyboard input, button remapping, separate controller look/aim
+  gains, and heading/pitch turn-speed controls.
+- **Shader-cache precompilation** on startup. Cached shaders persist between runs;
+  new areas and shaders can still cause stutters.
+- **Launcher** in the game's colors, with five tabs:
+  - **Game:** game-folder validation, build profile, saves and logs.
+  - **Graphics:** display mode, window size, frame limit, VSync, sharpening,
+    FPS display and experimental temporal filtering.
+  - **Controls:** keyboard/controller mappings and controller sensitivity.
+  - **Cheats:** unlimited player health and infinite ammo / no reload.
+  - **Advanced:** shader compilation, GPU readbacks, queued frames and session logs.
+- **In-game menu:** **Insert** on the keyboard or **R3 + L2** on the controller,
+  with display, performance, control and overlay options. Select campaign cheats
+  in the launcher before starting the game.
 
-## Download and play
+## What still needs work
+
+- **Performance:** wall-facing views can reach 60 FPS while open areas and dense
+  vegetation drop into the 40–50 FPS range on the development machine.
+- **Stuttering:** precompilation helps with cached shaders, but does not remove
+  every shader, streaming or frame-pacing stall.
+- **Graphics:** remaining effects and scene-specific rendering glitches need testing.
+- **Temporal filtering:** FSR 3.1 and TAA are experimental native-1080p paths,
+  with projection jitter disabled and camera-only motion. TAA has passed build,
+  camera-depth and startup checks; gameplay image quality is awaiting testing.
+  Moving objects and the weapon may ghost. Neither includes frame generation or
+  guarantees higher FPS. Reduced-resolution FSR remains a development experiment.
+- **Stability:** completing the campaign does not establish stability everywhere.
+  Long paused sessions and different GPU/driver configurations need more testing.
+
+FSR 4, FSR 4.1.1 and DLSS code inherited from upstream is **not currently connected
+as a supported Killzone option**. Native rendering (`none`) is the baseline.
+
+## Build and play
+
+This branch is a **source checkout**, not a self-contained Windows release.
+The game image, executables, saves and caches are generated locally.
 
 **You need**
-- Windows 10 (1903 or newer) or Windows 11, 64-bit.
-- A graphics card with Vulkan 1.3 and an up-to-date driver.
-- Your own copy of God of War III Remastered, as a folder that contains `eboot.bin`,
-  `sce_module` and `sce_sys`. Tested: **CUSA01623 (US) and CUSA01715 (EU), versions 01.00 and
-  01.02** (full update). Other regions and versions may work but are untested: if you try one,
-  please open an issue with your `user/last_run.log`. No game files are included in this download.
 
-**Steps**
-1. Download `gow3-windows.zip` from the
-   [Releases page](https://github.com/FelipePrado0/gow3_pc/releases/latest).
-2. Extract it to a folder of your choice, for example `C:\Games\gow3-windows`. Do not run it from
-   inside the zip.
-3. Open **`God of War III.exe`**. If Windows shows "Windows protected your PC", click
-   **More info**, then **Run anyway**: the program is not digitally signed.
-4. Click **Choose the game folder**. It takes you to the **Game** page. Next to **Game folder**,
-   click **Browse…** and select the folder with `eboot.bin`.
-5. Back on **Home**, the cover art and "CUSA01623 · version 01.02" appear. Adjust **Quick
-   settings** if you like: display mode, frame rate limit, render resolution and engine frame
-   rate.
-6. Click **PLAY**. The first start takes a little longer while the game image is prepared. The
-   next starts are quick.
+- 64-bit Windows 10 or Windows 11, and a Vulkan 1.3 graphics driver/GPU.
+- An x86-64 CPU with the instruction support required by the game/runtime. The
+  inherited ISA fallback has not been validated across older CPUs for Killzone.
+- Your own decrypted **CUSA00190 / 01.81** dump, including `eboot.bin`,
+  `all_programs.prx`, `sce_module`, `sce_sys` and the game's data directories.
+- [MSYS2](https://www.msys2.org), using **CLANG64**, and Python 3 with Tkinter.
+  Install the compiler and libraries listed in the inherited
+  [Windows build dependencies](packaging/windows/README.md#build). Its GOW
+  packaging and launch instructions do not apply to this branch.
 
-Patches and fixes are included and applied automatically: texture fix, skip videos with X and
-120 FPS are on by default. Change the resolution and frame rate on **Home** or **Performance**.
+**1. Clone and build** — in the MSYS2 CLANG64 shell:
 
-**While playing**
-- **Insert** on the keyboard, or **R3 + L2** on the controller, opens the port's menu: cheats,
-  multipliers, image, performance and the performance overlay.
-- Saved shaders load in the background. A small "Loading shader cache" note in the corner shows
-  the progress.
-
-**Next time**
-- **`Play God of War III.exe`** starts the game straight away with your saved settings. You can
-  make a desktop shortcut to it, or add it to Steam with **Add a Non-Steam Game**.
-- Your saves, shader cache and log are in the `user` folder next to `God of War III.exe`. Keep
-  that folder when you update.
-- **Advanced → Check for updates** downloads and installs a new version. Your saves and settings
-  are kept.
-
-**If something goes wrong**
-- Black screen at start: **Advanced → Clear shader cache**, then start again.
-- The game does not open: check **Advanced → Log**, or send `user\last_run.log` with your report.
-
-## Linux (AppImage, experimental)
-
-The Linux build runs the same native runtime and the same launcher. It was tested on Arch Linux
-with a Radeon RX 7800 XT (RADV) in a Wayland session.
-
-**You need:** a Vulkan 1.3 driver and your own dump of the game (CUSA01623, version 01.02).
-
-**Build and run**
-```
-bash build.sh
-bash packaging/linux/build.sh   # needs PyInstaller, Tk, Pillow and iced-x86 for Python, plus patchelf and curl
-./dist/gow3-x86_64.AppImage
-```
-Choose the game folder in the launcher. `--play` starts the game with the saved options and no
-window. From a source tree: `GOW3_GAME_DIR=/path/to/CUSA01623 python3 run.py` after `bash build.sh`.
-
-- **Files:** saves, settings, shader cache and the log are in `~/.local/share/gow3`; the launcher's
-  own settings in `~/.config/gow3-launcher`.
-- **Update folder:** if the update was dumped apart from the game, choose it under **Game → Update
-  folder**. It is laid over the game folder without changing either.
-- **Advanced → Linux:** window system (automatic, Wayland or X11), GameMode and MangoHud. Only the
-  tools installed on the system can be turned on.
-- **Steam:** **Advanced → Add to Steam** adds "God of War III Remastered" as a non-Steam game, with
-  the icon, the vertical and horizontal capsules, the library background and the logo made from the
-  dump's pictures. Close Steam first (it rewrites its shortcuts when it exits). The button is also in
-  the Windows launcher (not tested there yet).
-- **Menu entry:** the AppImage writes `~/.local/share/applications/gow3.desktop` when it starts, so
-  the launcher and the game window show their icon in the dock; **Advanced → Linux** turns it off and
-  removes the entry.
-- **Icon:** the AppImage, the launcher and the game window use `packaging/linux/gow3.png` when that
-  file exists at build time, and `launcher/gow3.png` otherwise.
-- **Patches:** the same patch file serves the full 01.02 update (`eboot.bin` sha256 `6e72330e…`) and
-  the European title (CUSA01715): the patches and cheats find their sites by signature.
-- **Graphics:** the temporal upscalers (FSR 3.1, FSR 4, TAA, DLSS) are temporarily removed while a
-  better implementation is worked on.
-
-## Requirements
-
-- Windows 10 (1903 or newer) or Windows 11, 64-bit.
-- A 64-bit processor with AVX: Intel Sandy Bridge (2011) or newer, AMD FX or newer. On CPUs without
-  MOVBE, BMI1 or LZCNT (Sandy/Ivy Bridge, AMD FX) the loader rewrites the game's instructions that
-  use them to emulated stubs and logs an `ISA:` line; performance on those CPUs has not been
-  measured yet. Older CPUs stop at start with a `STOP: this CPU lacks` line in the log.
-- A graphics card with Vulkan 1.3 and a current driver.
-- Your copy of the game (the folder with `eboot.bin`, `sce_module` and `sce_sys`). Tested:
-  CUSA01623 and CUSA01715, versions 01.00 and 01.02.
-- The patches and the in-game hooks (cheats, multipliers, health bar) find their sites by
-  signature: the original bytes around each one, wherever a release placed that code
-  (`tools/make_signatures.py`). A site that is not found leaves only that patch or hook off; the
-  game starts without it, and the log and the menu say why.
-- To build from source: [MSYS2](https://www.msys2.org) and [Python 3](https://www.python.org) with Pillow
-  (`pip install pillow`, used for the game's icon and cover art); on a CPU without MOVBE, BMI1 or LZCNT
-  also iced-x86 (`pip install iced-x86`, used for the instruction rewrite).
-
-## Building from source
-
-Development happens on the `gow3` branch; `main` receives tested merges.
-
-1. Install MSYS2 (`winget install MSYS2.MSYS2`) and, in the **MSYS2 CLANG64** shell, the
-   packages listed in [packaging/windows/README.md](packaging/windows/README.md).
-2. Clone the repository with its submodules and build:
-
-   ```bash
-   git clone --recursive https://github.com/FelipePrado0/gow3_pc
-   cd gow3_pc
-   git checkout gow3   # the newest work; skip it to build main
-   bash build.sh
-   ```
-
-3. Start the launcher (in PowerShell, in the project folder):
-
-   ```powershell
-   python launcher/gow3_launcher_win.py
-   ```
-
-4. On **Game**, choose the game folder. Adjust **Display**, **Performance** and **Patches** if
-   you like, then press **PLAY**.
-
-To play with the saved settings without opening the launcher's window (for a shortcut or Steam):
-
-```powershell
-python launcher/gow3_launcher_win.py --play
+```bash
+git clone --recursive --branch killzone-source https://github.com/pearlxcore/KillzoneShadowFall-PC.git
+cd KillzoneShadowFall-PC
+export CXXFLAGS='-include cstdlib -include cstdio -include cwchar -include cmath -include new'
+export CFLAGS="$CXXFLAGS"
+GOW3_LTO=OFF bash build.sh
+cp out/gow3-probe.exe out/gow3-probe-launcher.exe
 ```
 
-Or without the launcher at all:
+The current launcher expects MSYS2 at `C:\msys64`. Other installation paths
+require adjusting its runtime-library path in `launcher/kzsf_local.py`.
+The `gow3` executable names and `GOW3_` settings are inherited internal names.
 
-```powershell
-$env:GOW3_GAME_DIR = 'D:\path\CUSA01623'
-python run.py
+**2. Prepare your game image** — in the same shell, changing the game path:
+
+```bash
+GAME='D:/Games/KillzoneShadowFall'
+python scripts/prepare.py "$GAME" --out out
+python scripts/link_modules.py "$GAME" --out out \
+  --modules libc.prx libSceFios2.prx ../all_programs.prx --dynamic-exports
+python scripts/content_profile.py "$GAME" --out out --sku full
+printf '155664\n' > out/renderer-stability-toggles.txt
 ```
 
-Settings are kept in `gow3.ini` (the game and the in-game menu) and in
-`%APPDATA%\gow3-launcher\settings.json` (the launcher). Saves, the shader cache and
-`last_run.log` go to the project's `user` folder.
+`../all_programs.prx` is relative to the dump's `sce_module` directory: the file
+belongs at the dump root. Dynamic exports are required for native module lookups.
+Preparation writes generated files under `out/` without modifying the dump.
+Do not apply the inherited GOW game patches to Killzone.
 
-On **Performance → GPU data → Stream buffer memory**, choose **System RAM (cached, default)**,
-**System RAM (uncached)** or **GPU memory (previous behavior)**. System RAM can improve frame
-rates on NVIDIA laptops. The choice is saved and applies on the next game launch, including
-when using `Play God of War III.exe` or `--play`. Choose GPU memory to restore the previous
-allocation behavior. For direct launches without the launcher, `GOW3_STREAM_MEMORY` accepts
-`cached`, `host` or `device`; the launcher's saved choice takes precedence when using it.
+**3. Open the launcher** — from the project root:
 
-On **Performance → GPU data → Game multisampling**, **Automatic** lets the game decide by the
-graphics card it runs on: it creates the game's multisampled images with a single sample on
-AMD's and Intel's Windows drivers, where reading the 2-sample depth buffer as a texture
-produced black lines in the lighting (Radeon RX 6600 family, Arc), and keeps them multisampled
-elsewhere (NVIDIA). The label names the card and the decision, for example "Automatic (Intel(R)
-Arc(TM) A750 Graphics: off)", and follows the **Graphics card** choice. The rule covers every
-GPU on those two drivers, integrated ones included; the game's log line `GPU: guest
-multisampling off` or `on` is what was applied. Choose **Off** if the lines appear on another
-card and **On** to keep multisampling anyway. Off and On set `GOW3_NO_MSAA=1` or `0`; Automatic
-passes an inherited `GOW3_NO_MSAA` through. Applies on the next game launch.
+```bash
+python launcher/kzsf_local.py
+```
 
-### Importing shadPS4 saves
+Choose the game folder on **Game**, adjust the options and press **PLAY**.
+Start with **Current build**, **60 FPS**, and temporal upscaler **none**.
+The beta memory-layout profile and temporal options are available for experiments.
 
-Only **shadPS4 saves for God of War III Remastered** are compatible. RPCS3 saves are
-from the PS3 game and will not work. Use the same title ID (this example uses `CUSA01623`).
+`Launch-Killzone.bat` and `Killzone Launcher.vbs` are optional Windows entry points
+when Python is installed at a path recognized by `tools/start-launcher.ps1`.
+The native launcher entry-point source is `launcher/start_kzsf.c`; prebuilt
+launcher executables are not included.
 
-1. Close the game and shadPS4. Back up both save folders.
-2. Find the source in shadPS4's data folder: `user\savedata\1\CUSA01623\` in older
-   versions, or `home\<user-id>\savedata\CUSA01623\` in newer versions.
-3. The destination is **`user\savedata\1\CUSA01623\` next to `God of War III.exe`**.
-   Example: `C:\Games\gow3-windows\user\savedata\1\CUSA01623\`. With a custom
-   **Saves folder** in the launcher, use `<custom folder>\savedata\1\CUSA01623\`.
-4. Copy each slot folder there, keeping its name and game files. Do not nest another
-   `CUSA01623` folder. Exclude the slot's internal `sce_sys` folder from the game data.
-5. Beside each slot, create `<slot name>.sce_sys` if it does not exist. You can copy
-   shadPS4's `sce_sys\icon0.png` there. **Do not rename `param.sfo` to `param.bin`**:
-   the formats differ. Preserve any existing port `param.bin`. Without one, the slot
-   appears by folder name; saving again in the port writes its metadata and refreshes
-   the displayed information.
-6. Start the port and select **Load Game**. Completed saves can be imported too.
+Linux code and packaging are inherited from upstream. A Killzone Linux build
+has not been validated here.
 
-The port's save dialog displays at most **32 entries**. If the imported slot is missing
-from a long list, test it with a separate **Saves folder** containing just that slot
-under `savedata\1\CUSA01623\`, with its sibling metadata folder. Keep the original saves
-and restore the previous Saves folder setting after testing.
+## Saves, settings and logs
 
-### Third-party overlays (Windows)
+Everything stays in the project folder:
 
-The game process is **`bin\gow3-probe.exe`**, not `God of War III.exe` (source builds
-use `out\gow3-probe.exe`). Add that executable to RTSS and enable Afterburner's on-screen
-display. In the ReShade installer, select that same executable and the **Vulkan** API.
-
-If the overlay still does not appear, report the port and overlay versions, the last
-working port version, and attach `user\last_run.log`. These checks do not confirm a fix
-for every overlay configuration.
-
-### Keyboard controls
-
-Defaults; change them in the launcher's **Game** page, **Controls** section.
-
-| Key | Button |
+| File or folder | Contents |
 |---|---|
-| WASD | left stick |
-| Arrows | right stick (camera) |
-| Space | Cross |
-| Left Shift | Circle |
-| E | Square |
-| Q | Triangle |
-| 1 and 3 | L1 and R1 |
-| R and F | L2 and R2 |
-| Z and C | L3 and R3 |
-| I, K, J, L | d-pad |
-| Enter | Options |
-| Tab | left touchpad click (photo mode) |
-| Backspace | right touchpad click (pause menu) |
-| Insert | the port's menu (R3+L2 on the controller) |
+| `user/savedata/1/CUSA00190/` | Save directory; back up the entire folder |
+| `user/savedata/1/CUSA00190/KZ4/` | `checkpointdata.dat` and `profile.dat` |
+| `user/launcher-local.json` | Launcher preferences and mappings |
+| `user/launcher-settings.ini` | Runtime and in-game menu settings |
+| `user/` | Also contains persistent shader/cache data |
+| `out/dialogue-…-modelauncher/` | Session `stdout.log`, `stderr.log` and exit status |
 
-On a controller without a touchpad (Xbox and others), View opens the pause menu (the right
-touchpad click) and L1 + View opens photo mode (the left click). On a DualSense the touchpad
-works as on the PS4, and Share/Create works like View.
-
-**In-game button icons** (off by default) are chosen in the launcher's Game page, Controls section, under
-*In-game button icons*: *Match my controller*, *Xbox* or *Nintendo*. They replace the PlayStation icons in the
-tutorial, move-list and quick-time prompts; the pause-menu controller drawing stays a DualShock 4.
-The launcher writes a patched copy of two game files into the port's data folder and never changes
-your game folder. A new controller is picked up after a restart. Without the launcher, set
-`GOW3_GLYPH_STYLE` to `auto`, `xbox` or `nintendo` before starting `run.py`.
-
-In the menu: L1/R1 or Q/E switch tabs. In the save list: arrows or the d-pad choose, Enter or
-Cross confirm, Esc or Circle cancel.
-
-## Tests
-
-```bash
-python -m unittest discover -s tests
-bash build.sh --test
-ninja -C out/gpu stat-multipliers-test perf-overlay-test warmup-inbox-test graphics-settings-test
-out/gpu/stat-multipliers-test.exe out/eboot.elf
-out/gpu/perf-overlay-test.exe
-out/gpu/warmup-inbox-test.exe
-out/gpu/graphics-settings-test.exe
-```
-
-The C++ tests are targets in [gpu/CMakeLists.txt](gpu/CMakeLists.txt); the ones that check the
-game's code take the prepared executable (`out/eboot.elf`) as their argument.
-
-To check that every system function the game uses is implemented, without starting the game:
-
-```bash
-out/gow3-probe.exe out/boot-linked.bin --app0 <game folder> --check-imports
-```
+Keep `user/` when updating. Use **Advanced → Open latest session logs** when
+reporting a problem. Include the chapter/checkpoint, GPU and driver version,
+selected options, and relevant logs; do not upload your game dump.
 
 ## How it works
 
 | Part | Where | What it does |
 |---|---|---|
-| Preparation | `scripts/` | Reads `eboot.bin`, applies its relocations and links the game's own `libc` and `libSceFios2` into one image |
-| Loader | `src/probe.c` | Loads the image, installs the validated hooks (cheats, multipliers, health bar) and starts the game's original code |
-| Runtime | `src/runtime_*.c` | Reimplements the PS4 system functions: memory, threads, files, audio, video, controller, saves and services |
-| GPU | `gpu/shadps4/` | The shadPS4 video core, translating the PS4 GPU commands and shaders to Vulkan, with cuesta4's God of War III fixes (`eltutz` branch) and this port's speed work (background shader cache, deferred readbacks) |
-| In-game menu | `gpu/shim/gow3_overlay.cpp` | The Dear ImGui menu and performance overlay; settings in `gpu/shim/gow3_settings.cpp` |
-| Patches | `patches/God_of_War_III_Remastered.xml`, `scripts/patches.py` | Applied in memory at start, without changing the game files |
-| Launcher | `launcher/gow3_launcher_win.py` | Settings, patches, mods, controls and the play button |
-
-More documentation: [mods](docs/MODS.md), [frame map and upscaler](docs/upscaler.md),
-[parallel GPU work](docs/parallel_gpu.md) and the [roadmap](docs/gow3/ROADMAP.md).
+| Preparation | `scripts/` | Applies relocations and links bundled modules with dynamic exports |
+| Loader | `src/probe.c` | Loads the image, installs guarded Killzone hooks and starts the original code |
+| Runtime | `src/runtime_*.c` | PS4 memory, threads, files, audio, input, saves and services |
+| Timing and assists | `src/kzsf_*.h`, `src/tsc_patch.c` | Guest clocks, player controls and campaign cheats |
+| GPU | `gpu/shadps4/` | GPU command/shader translation to Vulkan and Killzone rendering fixes |
+| In-game menu | `gpu/shim/gow3_overlay.cpp` | Dear ImGui settings and performance overlay |
+| Launcher | `launcher/kzsf_local.py` | Game validation, controls, graphics, cheats and session launch |
 
 ## Credits
 
-This project is a fork of Supermedo's Windows port, which builds on deadinside28's original:
+This project builds on the work of:
 
-- **deadinside28**: [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), the original
-  native port.
-- **Supermedo** (Mohammed Albarghouthi): [bloodborne_pc for Windows](https://github.com/Supermedo/bloodborne_pc),
-  the fork this project comes from.
-- **cuesta4**: [shadPS4 fork focused on God of War III Remastered](https://github.com/cuesta4/shadPS4/tree/eltutz)
-  (branch `eltutz`). The game's rendering in this port depends on its fixes: the GNM blend
-  rewrite, depth/stencil state and image aliasing. cuesta4 is also a co-author of the
-  resolution, texture fix, 120 FPS and skip videos patches (below). If you play on shadPS4,
-  this is the build to use for God of War III.
-- **shadPS4 team**: the [shadPS4](https://github.com/shadps4-emu/shadPS4) video core, which does
-  all the GPU and shader translation to Vulkan in this port.
+- **Felipe Prado:** [gow3_pc](https://github.com/FelipePrado0/gow3_pc), the direct
+  upstream for the runtime, renderer integration, shader-cache work and launcher/menu foundation.
+- **deadinside28:** [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc),
+  the original native-port foundation.
+- **Supermedo (Mohammed Albarghouthi):**
+  [bloodborne_pc for Windows](https://github.com/Supermedo/bloodborne_pc), in the upstream lineage.
+- **cuesta4:** [shadPS4's GOW-focused `eltutz` branch](https://github.com/cuesta4/shadPS4/tree/eltutz),
+  whose renderer work is part of the inherited foundation.
+- **shadPS4 team:** [shadPS4](https://github.com/shadps4-emu/shadPS4), the GPU and shader translation core.
+- **Celogamez and the GoldHEN cheat community:** published Killzone cheat work
+  used as a starting point for the campaign assists.
 
-Patches: kvicken and cuesta4 (resolution, texture fix, 120 FPS and skip videos, building on the
-PS3 patches by illusion0001), published for shadPS4 in
-[shadps4-emu/ps4_cheats#145](https://github.com/shadps4-emu/ps4_cheats/pull/145) and adapted to
-this executable. The 240 FPS patch was adapted by Felipe Prado from the 120 FPS patch.
-Cheats: adapted from Celogamez's [GoldHEN cheats](https://github.com/GoldHEN/GoldHEN_Cheat_Repository).
-
-Also used: [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9), [FFmpeg](https://ffmpeg.org),
-[SDL3](https://github.com/libsdl-org/SDL), [Dear ImGui](https://github.com/ocornut/imgui),
-[sirit](https://github.com/shadps4-emu/sirit), [magic_enum](https://github.com/Neargye/magic_enum),
-[miniz](https://github.com/richgel999/miniz), [xbyak](https://github.com/herumi/xbyak),
+Also used: [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9),
+[FFmpeg](https://ffmpeg.org), [SDL3](https://github.com/libsdl-org/SDL),
+[Dear ImGui](https://github.com/ocornut/imgui), [sirit](https://github.com/shadps4-emu/sirit),
+[magic_enum](https://github.com/Neargye/magic_enum), [miniz](https://github.com/richgel999/miniz),
+[xbyak](https://github.com/herumi/xbyak),
 [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator),
-[FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK,
+[FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan), the AMD FidelityFX SDK,
 [MSYS2](https://www.msys2.org), [LLVM](https://llvm.org) and [Pillow](https://python-pillow.org).
 
 ## License
