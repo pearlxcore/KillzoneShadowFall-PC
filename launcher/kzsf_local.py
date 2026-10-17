@@ -379,7 +379,7 @@ class Launcher:
         self.label(p,'Click the game to capture the mouse. Left Alt releases it.\nLeft click fires; right click aims. Insert opens the in-game menu.\nMouse look uses the game\'s camera controls and turn-speed limits.',True).pack(fill='x',pady=(0,20))
         self.heading(p,'Sprint turning · Controller and mouse')
         self.choice(p,'Sprint horizontal turn speed (%)','sprint_turn_speed',('100','125','150','175','200','250','300','400','500'))
-        self.label(p,'Sprint speed applies to controller and mouse only while sprinting. 100% is original; try 200%. Walking and vertical look stay unchanged.',True).pack(fill='x',pady=(0,8))
+        self.label(p,'Independent of horizontal turn speed while sprinting, for controller and mouse. 100% is original; try 200%. Input sensitivity still applies.',True).pack(fill='x',pady=(0,8))
         self.heading(p,'Controller')
         self.choice(p,'Horizontal turn speed (%)','controller_turn_speed',gains)
         self.choice(p,'Vertical turn speed (%)','controller_pitch_speed',gains)

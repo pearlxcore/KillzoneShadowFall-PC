@@ -318,7 +318,7 @@ void GameTab() {
     if (BeginRows("##sprint-turn")) {
         ImGui::BeginDisabled(!s.engine_turn_hook.load());
         SliderRow("Sprint horizontal turn speed",s.sprint_turn_speed,100,500,"%d%%",
-                  "Only while the game reports sprinting. 100% is original; try 200%. Walking and vertical look are unchanged. Gameplay testing pending.");
+                  "Independent of general horizontal turn speed while sprinting. 100% is original; try 200%. Controller/mouse input sensitivity still applies.");
         ImGui::EndDisabled();ImGui::EndTable();
     }
     if (ImGui::Button("Reset sprint turn speed")) { s.sprint_turn_speed=100;dirty=true; }

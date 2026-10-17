@@ -55,6 +55,7 @@ static int kzsf_turn_log;
 static int kzsf_player_turn_enabled;
 static unsigned kzsf_player_turn_events;
 static unsigned kzsf_sprint_events;
+static _Thread_local KzsfSprintScope kzsf_sprint_scope;
 static unsigned kzsf_turn_speed_reported;
 /* Gameplay verification for the engine look-rate hooks: per-axis windowed maximum of the
  * engine's own value (before scaling) and of the value actually stored. The local-input
@@ -366,6 +367,8 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         float before,after;
         const int sprinting=(unsigned char)info->ContextRecord->Rax!=0;
         const int percent=gow3gpu_sprint_turn_speed();
+        kzsf_sprint_capture(&kzsf_sprint_scope,info->ContextRecord,(uintptr_t)image,
+            kzsf_cheat_read,NULL);
         if(kzsf_sprint_turn(info->ContextRecord,(uintptr_t)image,percent,
             kzsf_cheat_read,kzsf_turn_write,NULL,&before,&after)) {
             if(sprinting && percent!=100) {
@@ -381,13 +384,14 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled &&
        record->ExceptionAddress==image+KZSF_PLAYER_TURN_SITE) {
         float before[2],after[2];unsigned user;
+        const int sprinting=kzsf_sprint_consume(&kzsf_sprint_scope,info->ContextRecord);
         if(kzsf_player_turn(info->ContextRecord,(uintptr_t)image,
-            gow3gpu_controller_turn_speed(),gow3gpu_controller_pitch_speed(),
+            sprinting?100:gow3gpu_controller_turn_speed(),gow3gpu_controller_pitch_speed(),
             kzsf_cheat_read,kzsf_turn_write,NULL,before,after,&user)) {
             unsigned event=__atomic_add_fetch(&kzsf_player_turn_events,1,__ATOMIC_RELAXED);
             if(event==1 || event%256==0) {
-                fprintf(stderr,"KILLZONE_PLAYER_TURN event=%u user=%u heading_factor %.5f -> %.5f pitch_factor %.5f -> %.5f\n",
-                    event,user,(double)before[0],(double)after[0],(double)before[1],(double)after[1]);
+                fprintf(stderr,"KILLZONE_PLAYER_TURN event=%u user=%u heading_factor %.5f -> %.5f pitch_factor %.5f -> %.5f sprint_independent=%d\n",
+                    event,user,(double)before[0],(double)after[0],(double)before[1],(double)after[1],sprinting);
                 fflush(stderr);
             }
             return EXCEPTION_CONTINUE_EXECUTION;

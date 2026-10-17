@@ -54,13 +54,17 @@ every downstream camera limit.
 - **Activation:** the game's actual `IsSprinting` result is used, rather than
   whether L3 or a keyboard binding is held. Toggle sprint is therefore supported.
 - **Scope:** horizontal turning only. Walking, vertical look, locomotion speed,
-  resource data and simulation timing are unchanged. It combines with the general
-  horizontal player-turn setting; mouse input reaches the same native camera path.
+  resource data and simulation timing are unchanged. It replaces the general
+  horizontal player-turn multiplier during sprinting, so those two settings do
+  not stack. Controller response and mouse sensitivity still affect input.
+  The sprint result is passed to the matching caller frame/controller using
+  thread-local, single-use state; other camera calls cannot reuse it.
 - **Verification:** tests cover all byte-valued query results, original/default
   and invalid settings, unchanged registers/SIMD, TEST flags and both branches,
   non-finite input, the actual guest-image signature, and settings persistence.
   The log marker `KILLZONE_SPRINT_TURN` confirms execution while sprinting at a
-  non-default multiplier. Gameplay feel still needs user testing.
+  non-default multiplier. User confirmed sprint turning works; independence from
+  the general horizontal multiplier has automated coverage and awaits gameplay confirmation.
 
 Gameplay calibration of the new mouse controls is still pending. Motion blur OFF
 and the replacement player-controller turn hook have received user confirmation.

@@ -32,7 +32,8 @@ in the tree; the instructions below are for this Killzone branch.
 - Native 1080p rendering, including fixes for white/striped foliage and purple bark
   in the tested scenes.
 - **Sprint turn speed:** separate horizontal multiplier for controller and mouse,
-  activated by the engine's sprint state. Adjust it live in launcher Controls or
+  activated by the engine's sprint state, independent of the general horizontal
+  turn multiplier. Adjust it live in launcher Controls or
   overlay Game; 100% is original, 200% is a starting point. Gameplay testing pending.
 - **Motion blur switch:** confirmed working in gameplay. Use **Graphics → Motion
   blur** in the launcher or **Image → Motion blur** in the in-game menu. Restart
