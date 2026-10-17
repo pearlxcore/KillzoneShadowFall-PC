@@ -72,6 +72,10 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "motion_blur") { v.motion_blur=i!=0;
     } else if (key == "unlimited_health") { v.unlimited_health=i!=0;
     } else if (key == "infinite_ammo") { v.infinite_ammo=i!=0;
+    } else if (key == "look_curve") { v.look_curve=i>=0 && i<=2?i:0;
+    } else if (key == "look_deadzone") { v.look_deadzone=std::clamp(i,0,30);
+    } else if (key == "look_ramp") { v.look_ramp=i!=0;
+    } else if (key == "look_assist") { v.look_assist=i!=0;
     } else if (key == "sprint_turn_speed") {
         v.sprint_turn_speed = i >= 100 && i <= 500 ? i : 100;
     } else if (key == "controller_turn_speed") {
@@ -205,6 +209,8 @@ void Load() {
         {"KZSF_INFINITE_AMMO", "infinite_ammo"},
         {"GOW3_PAD_TURN_SPEED", "controller_turn_speed"},
         {"KZSF_SPRINT_TURN_SPEED", "sprint_turn_speed"},
+        {"KZSF_LOOK_CURVE", "look_curve"}, {"KZSF_LOOK_DEADZONE", "look_deadzone"},
+        {"KZSF_LOOK_RAMP", "look_ramp"}, {"KZSF_LOOK_ASSIST", "look_assist"},
         {"GOW3_PAD_PITCH_SPEED", "controller_pitch_speed"},
         {"GOW3_PAD_LOOK_GAIN", "controller_look_gain"}, {"GOW3_PAD_AIM_GAIN", "controller_aim_gain"},
         {"GOW3_FSR_SHARPNESS", "sharpness"},        {"GOW3_JITTER", "jitter"},
@@ -348,6 +354,8 @@ void Save() {
                  v.controller_look_gain.load(), v.controller_aim_gain.load());
     std::fprintf(file, "controller_turn_speed=%d\n",v.controller_turn_speed.load());
     std::fprintf(file, "sprint_turn_speed=%d\n",v.sprint_turn_speed.load());
+    std::fprintf(file,"look_curve=%d\nlook_deadzone=%d\nlook_ramp=%d\nlook_assist=%d\n",
+        v.look_curve.load(),v.look_deadzone.load(),int(v.look_ramp.load()),int(v.look_assist.load()));
     std::fprintf(file, "controller_pitch_speed=%d\n",v.controller_pitch_speed.load());
     std::fprintf(file,"mouse_aim=%d\nmouse_invert_y=%d\nmouse_sensitivity=%d\nmouse_ads_sensitivity=%d\n"
                       "mouse_horizontal_speed=%d\nmouse_vertical_speed=%d\nmotion_blur=%d\n"

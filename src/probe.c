@@ -26,6 +26,7 @@
 #include "kzsf_turn_speed_win.h"
 #include "kzsf_player_turn_win.h"
 #include "kzsf_sprint_turn_win.h"
+#include "kzsf_aim_controls_win.h"
 #include <tlhelp32.h>
 #else
 #include <sys/mman.h>
@@ -56,6 +57,7 @@ static int kzsf_player_turn_enabled;
 static unsigned kzsf_player_turn_events;
 static unsigned kzsf_sprint_events;
 static _Thread_local KzsfSprintScope kzsf_sprint_scope;
+static unsigned kzsf_aim_events[3];
 static unsigned kzsf_turn_speed_reported;
 /* Gameplay verification for the engine look-rate hooks: per-axis windowed maximum of the
  * engine's own value (before scaling) and of the value actually stored. The local-input
@@ -362,6 +364,26 @@ static void isa_context_regs(CONTEXT *c, IsaRegs *regs, int to_context) {
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
+    if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled) {
+        CONTEXT *c=info->ContextRecord;int ok=0,changed=0,kind=-1;
+        if(record->ExceptionAddress==image+KZSF_RESPONSE_SITE) {
+            kind=0;ok=kzsf_look_response(c,(uintptr_t)image,gow3gpu_look_curve(),gow3gpu_look_deadzone(),
+                kzsf_cheat_read,kzsf_turn_write,NULL,&changed);
+        } else if(record->ExceptionAddress==image+KZSF_RAMP_SITE) {
+            kind=1;ok=kzsf_look_ramp(c,(uintptr_t)image,gow3gpu_look_ramp(),
+                kzsf_cheat_read,kzsf_turn_write,NULL,&changed);
+        } else if(record->ExceptionAddress==image+KZSF_ASSIST_SITE) {
+            kind=2;ok=kzsf_look_assist(c,(uintptr_t)image,gow3gpu_look_assist(),kzsf_cheat_read,NULL,&changed);
+        }
+        if(kind>=0) {
+            if(ok) {
+                if(changed && __atomic_add_fetch(&kzsf_aim_events[kind],1,__ATOMIC_RELAXED)==1)
+                    fprintf(stderr,"KILLZONE_AIM_CONTROL active=%s\n",kind==0?"custom-response":kind==1?"ramp-off":"slowdown-tracking-off");
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            fprintf(stderr,"Killzone: aiming control memory access failed\n");
+        }
+    }
     if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled &&
        record->ExceptionAddress==image+KZSF_SPRINT_SITE) {
         float before,after;
@@ -1492,6 +1514,16 @@ int main(int argc, char **argv) {
            !kzsf_patch_match(image,size,KZSF_SPRINT_GUARD,kzsf_sprint_signature,sizeof(kzsf_sprint_signature)))
             fail("Killzone sprint turn signature mismatch; refusing to patch");
         image[KZSF_SPRINT_SITE]=0xcc;
+        const struct {size_t site;const unsigned char *sig;size_t length;} aim_guards[]={
+            {KZSF_RESPONSE_SITE,kzsf_response_sig,sizeof(kzsf_response_sig)},
+            {KZSF_RAMP_SITE,kzsf_ramp_sig,sizeof(kzsf_ramp_sig)},
+            {KZSF_ASSIST_SITE,kzsf_assist_sig,sizeof(kzsf_assist_sig)},
+            {0xe4c4c9,kzsf_assist_exit_sig,sizeof(kzsf_assist_exit_sig)}};
+        for(unsigned i=0;i<sizeof(aim_guards)/sizeof(*aim_guards);++i)
+            if(!mapped(segments,ns,aim_guards[i].site,aim_guards[i].length) ||
+               !kzsf_patch_match(image,size,aim_guards[i].site,aim_guards[i].sig,aim_guards[i].length))
+                fail("Killzone aiming control signature mismatch; refusing to patch");
+        image[KZSF_RESPONSE_SITE]=image[KZSF_RAMP_SITE]=image[KZSF_ASSIST_SITE]=0xcc;
         kzsf_player_turn_enabled=1;
         printf("Killzone: experimental SoldierJoystickController turn hook installed; execution unverified until KILLZONE_PLAYER_TURN\n");
     }

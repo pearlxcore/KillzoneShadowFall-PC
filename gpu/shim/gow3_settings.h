@@ -37,6 +37,8 @@ struct Values {
     std::atomic<int> controller_turn_speed{100};
     /// Horizontal camera multiplier only when the engine reports IsSprinting.
     std::atomic<int> sprint_turn_speed{100};
+    std::atomic<int> look_curve{0}, look_deadzone{10}; // 0 original, 1 linear, 2 squared
+    std::atomic<bool> look_ramp{true}, look_assist{true};
     /// Engine vertical look rate (the local-input pitch field), separate from heading.
     std::atomic<int> controller_pitch_speed{100};
     std::atomic<bool> engine_turn_hook{false};

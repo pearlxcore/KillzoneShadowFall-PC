@@ -1,8 +1,16 @@
 # Killzone Shadow Fall PC roadmap
 
-## Next feature: Modern Warfare 2019-style controls
+## Current priority: hidden engine controls
 
-Selected by the user on 18 October 2026. Planned; implementation has not started.
+Finish the input-controls investigation first: look deadzones and response,
+acceleration/ramp behavior, aim assistance and quick turn. Validate new controls
+in gameplay before treating them as confirmed. Then investigate FOV, camera
+shake, depth of field, grain, bloom, exposure, LOD and shadows.
+
+## Later feature: Modern Warfare 2019-style controls
+
+Selected by the user on 18 October 2026; subsequently queued after the hidden
+engine controls above. Implementation has not started.
 
 Adapt the input and aiming feel of **Call of Duty: Modern Warfare (2019)** to
 Killzone's existing gameplay using an original implementation in this port.

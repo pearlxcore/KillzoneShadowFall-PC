@@ -345,6 +345,10 @@ extern "C" int gow3gpu_controller_turn_speed(void) {
 extern "C" int gow3gpu_sprint_turn_speed(void) {
     return Gow3Settings::Get().sprint_turn_speed.load();
 }
+extern "C" int gow3gpu_look_curve(void) { return Gow3Settings::Get().look_curve.load(); }
+extern "C" int gow3gpu_look_deadzone(void) { return Gow3Settings::Get().look_deadzone.load(); }
+extern "C" int gow3gpu_look_ramp(void) { return Gow3Settings::Get().look_ramp.load(); }
+extern "C" int gow3gpu_look_assist(void) { return Gow3Settings::Get().look_assist.load(); }
 extern "C" int gow3gpu_controller_pitch_speed(void) {
     return Gow3Settings::Get().controller_pitch_speed.load();
 }

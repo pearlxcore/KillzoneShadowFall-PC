@@ -322,6 +322,21 @@ void GameTab() {
         ImGui::EndDisabled();ImGui::EndTable();
     }
     if (ImGui::Button("Reset sprint turn speed")) { s.sprint_turn_speed=100;dirty=true; }
+    ImGui::SeparatorText("Aiming response");
+    if(BeginRows("##aim-response")) {
+        ImGui::BeginDisabled(!s.engine_turn_hook.load());
+        constexpr const char* curves[]={"Original","Linear (custom)","Precision (custom)"};
+        ChoiceRow("Look response curve",s.look_curve,curves,nullptr,3,"Custom curves replace the native look deadzone/response. Also affects mouse joystick emulation.");
+        ImGui::BeginDisabled(s.look_curve.load()==0);
+        SliderRow("Look inner deadzone",s.look_deadzone,0,30,"%d%%","Radial right-stick deadzone, active only with a custom curve. Movement stick is unchanged.");
+        ImGui::EndDisabled();
+        CheckRow("Look ramp smoothing",s.look_ramp,"Native DelayCurve rise filter. Off removes this input ramp, not every engine acceleration limit.");
+        CheckRow("Aim slowdown / tracking",s.look_assist,"Target slowdown and tracking correction. Does not disable separate zoom-snap or shoot assistance.");
+        ImGui::EndDisabled();ImGui::EndTable();
+    }
+    if(ImGui::Button("Restore original aiming behavior")) {
+        s.look_curve=0;s.look_deadzone=10;s.look_ramp=true;s.look_assist=true;dirty=true;
+    }
     ImGui::SeparatorText("Player assists");
     if (BeginRows("##killzone-assists")) {
         const auto enabled = [](const char* key) {
