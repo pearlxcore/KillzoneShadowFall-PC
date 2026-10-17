@@ -1,4 +1,4 @@
-/* Windowless entry point for the local Python/Tk launcher. */
+/* Windowless entry point for the Killzone launcher. */
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -17,11 +17,17 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR cmd,int show) {
     wchar_t *slash=wcsrchr(root,L'\\');
     if (!slash) return 1;
     *slash=0;
-    ExpandEnvironmentStringsW(L"%USERPROFILE%\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\pythonw.exe",python,32768);
+    if (swprintf(python,32768,L"%ls\\runtime\\pythonw.exe",root)<0) return 1;
+    if (GetFileAttributesW(python)==INVALID_FILE_ATTRIBUTES) {
+        DWORD found=SearchPathW(NULL,L"pythonw.exe",NULL,32768,python,NULL);
+        if (!found || found>=32768) python[0]=0;
+    }
+    if (GetFileAttributesW(python)==INVALID_FILE_ATTRIBUTES)
+        ExpandEnvironmentStringsW(L"%USERPROFILE%\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\pythonw.exe",python,32768);
     if (GetFileAttributesW(python)==INVALID_FILE_ATTRIBUTES)
         wcscpy(python,L"C:\\msys64\\clang64\\bin\\pythonw.exe");
     if (GetFileAttributesW(python)==INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(NULL,L"Python with Tkinter is required. Install Python or use the configured workspace runtime.",L"Killzone launcher",MB_ICONERROR);
+        MessageBoxW(NULL,L"Python with Tkinter and Pillow is required. Install Python and add it to PATH, then try again.",L"Killzone launcher",MB_ICONERROR);
         return 1;
     }
     if (swprintf(args,32768,L"\"%ls\\launcher\\kzsf_local.py\"",root)<0) return 1;

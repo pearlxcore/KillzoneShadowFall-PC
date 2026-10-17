@@ -191,6 +191,11 @@ endif()
 # linked here, where CMake knows its dependencies (build.sh builds them with ninja).
 if (WIN32)
     enable_language(RC)
+    add_executable(killzone-launcher WIN32 ../launcher/start_kzsf.c
+        ../packaging/windows/killzone-launcher.rc)
+    set_target_properties(killzone-launcher PROPERTIES OUTPUT_NAME "Killzone Launcher")
+    target_link_options(killzone-launcher PRIVATE -municode)
+    target_link_libraries(killzone-launcher PRIVATE shell32 user32)
     file(GLOB GOW3_RUNTIME CONFIGURE_DEPENDS ../src/runtime*.c)
     file(GLOB GOW3_ATRAC9 CONFIGURE_DEPENDS ../third_party/LibAtrac9/C/src/*.c)
     add_library(atrac9 STATIC ${GOW3_ATRAC9})

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local Killzone launcher. Existing saves and prepared game image stay in place."""
+"""Killzone Shadow Fall launcher and independent game-session monitor."""
 from __future__ import annotations
 import json
 import os
@@ -17,8 +17,14 @@ from prepare import read_sfo
 
 PREFS = ROOT / 'user' / 'launcher-local.json'
 CONFIG = ROOT / 'user' / 'launcher-settings.ini'
-BG, PANEL, FIELD, LINE = '#090f13', '#101a21', '#192832', '#293e49'
-TEXT, MUTED, CYAN, GREEN = '#ecf4f7', '#90a8b7', '#36c6df', '#64dca3'
+BG, PANEL, FIELD, LINE = '#111214', '#1a1c1f', '#26292d', '#34373c'
+TEXT, MUTED, CYAN, GREEN = '#f3f0eb', '#a3a5aa', '#f48b55', '#94c7a2'
+OPTION_LABELS = {
+    'profile': {'Current build': 'Standard', 'Beta memory layout (test)': 'Compatibility (experimental)'},
+    'upscaler': {'none': 'Native', 'fsr3': 'FSR 3.1 AA (experimental)', 'taa': 'TAA (experimental)'},
+    'display_mode': {'windowed': 'Windowed', 'borderless': 'Borderless', 'fullscreen': 'Fullscreen'},
+    'frames_queued': {'0': 'Automatic', '1': '1 frame', '2': '2 frames'},
+}
 PROFILES = {'Current build': 'out/gow3-probe-launcher.exe',
             'Beta memory layout (test)': 'out/gow3-probe-launcher.exe'}
 BUTTONS = [('cross','Cross / Jump','Space','a'), ('circle','Circle','Left Shift','b'),
@@ -31,7 +37,12 @@ BUTTONS = [('cross','Cross / Jump','Space','a'), ('circle','Circle','Left Shift'
            ('left','D-pad left','J','dpleft'), ('right','D-pad right','L','dpright')]
 PAD_BUTTONS = ('','a','b','x','y','leftshoulder','rightshoulder','leftstick','rightstick',
                'start','back','dpup','dpdown','dpleft','dpright')
-DEFAULTS = dict(game_dir=r'C:\Users\User\Desktop\OrbisPort\Killzone', profile='Current build',
+PAD_LABELS = {'': 'Default', 'a': 'A / Cross', 'b': 'B / Circle', 'x': 'X / Square',
+              'y': 'Y / Triangle', 'leftshoulder': 'LB / L1', 'rightshoulder': 'RB / R1',
+              'leftstick': 'LS / L3', 'rightstick': 'RS / R3', 'start': 'Start / Options',
+              'back': 'Back / Share', 'dpup': 'D-pad up', 'dpdown': 'D-pad down',
+              'dpleft': 'D-pad left', 'dpright': 'D-pad right'}
+DEFAULTS = dict(game_dir='', profile='Current build',
                 fps='60', window_size='1920x1080', display_mode='windowed', vsync=True,
                 rcas=True, show_fps=True, upscaler='none', async_shaders=False,
                 stale_readback=True, deferred_readback=True, frames_queued='1',
@@ -117,7 +128,7 @@ def launch_spec(values, folder):
         GOW3_WINDOW_FOCUS='1', GOW3_CONFIG=str(CONFIG), GOW3_WINDOW_SIZE=values['window_size'],
         GOW3_USER_DIR=str(ROOT/'user'), GOW3_GPU_USER_DIR=str(ROOT/'user'),
         GOW3_ASYNC_SHADERS=str(int(values['async_shaders'])), GOW3_UPSCALER=values['upscaler'],
-        GOW3_READBACK_LINEAR='1',
+        GOW3_READBACK_LINEAR='1', GOW3_RCAS=str(int(values['rcas'])),
         GOW3_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
         GOW3_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
         GOW3_PAD_TURN_SPEED=str(values.get('controller_turn_speed','100')),
@@ -138,11 +149,13 @@ def launch_spec(values, folder):
     return dict(command=command, env=env, cwd=str(ROOT), folder=str(folder))
 
 def session_window_icon(command, folder):
-    """SDL loads BMP; derive it from the user's dump instead of shipping artwork."""
+    """Provide the launcher artwork to SDL, with the dump icon as a fallback."""
     if '--app0' not in command:
         return None
     from PIL import Image
-    source = Path(command[command.index('--app0') + 1]) / 'sce_sys' / 'icon0.png'
+    source = ROOT / 'launcher' / 'killzone.png'
+    if not source.is_file():
+        source = Path(command[command.index('--app0') + 1]) / 'sce_sys' / 'icon0.png'
     destination = Path(folder) / 'window-icon.bmp'
     with Image.open(source) as original:
         original.convert('RGB').resize((128, 128), Image.Resampling.LANCZOS).save(destination)
@@ -181,100 +194,122 @@ class Launcher:
         self.root, self.values = root, load_preferences()
         self.monitor = None
         self.session = None
-        root.title('Killzone Shadow Fall · PC Launcher')
+        root.title('Killzone Shadow Fall')
         try:
-            self.icon=tk.PhotoImage(file=str(Path(self.values['game_dir'])/'sce_sys/icon0.png'))
-            root.iconphoto(True,self.icon)
+            root.iconbitmap(str(ROOT/'launcher/killzone.ico'))
         except tk.TclError: pass
-        root.geometry('1000x820'); root.minsize(960,780); root.configure(bg=BG)
+        root.geometry('1180x860'); root.minsize(1100,800); root.configure(bg=BG)
         root.option_add('*Font', ('Segoe UI',10))
         self.vars = {k:(tk.BooleanVar(value=v) if isinstance(v,bool) else tk.StringVar(value=v))
                      for k,v in self.values.items() if k not in ('keys','pads')}
         style = ttk.Style(root); style.theme_use('clam')
-        style.configure('TCombobox', fieldbackground=FIELD, background=LINE, foreground=TEXT, arrowcolor=CYAN, padding=5)
+        style.configure('TCombobox', fieldbackground=FIELD, background=LINE, foreground=TEXT,
+                        arrowcolor=CYAN, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE, padding=5)
         style.map('TCombobox', fieldbackground=[('readonly',FIELD)], foreground=[('readonly',TEXT)])
         style.configure('TCheckbutton', background=PANEL, foreground=TEXT, indicatorbackground=FIELD)
         style.map('TCheckbutton', background=[('active',PANEL)])
-        self.banner = tk.Canvas(root,height=170,bg=BG,highlightthickness=0); self.banner.pack(fill='x')
-        self.banner.bind('<Configure>', self.draw_banner)
-        bar = tk.Frame(root,bg=BG); bar.pack(fill='x',padx=28)
+        sidebar=tk.Frame(root,bg=BG,width=214,padx=22,pady=28)
+        sidebar.pack(side='left',fill='y'); sidebar.pack_propagate(False)
+        tk.Label(sidebar,text='KILLZONE',bg=BG,fg=TEXT,font=('Segoe UI',22,'bold'),anchor='w').pack(fill='x')
+        tk.Label(sidebar,text='SHADOW FALL',bg=BG,fg=MUTED,font=('Segoe UI',11),anchor='w').pack(fill='x',pady=(0,8))
+        tk.Label(sidebar,text='PC EDITION',bg=BG,fg=CYAN,font=('Segoe UI',9,'bold'),anchor='w').pack(fill='x')
+        tk.Frame(sidebar,bg=LINE,height=1).pack(fill='x',pady=28)
         self.tab_buttons = {}
-        for name in ('Game','Graphics','Controls','Cheats','Advanced'):
-            b = self.button(bar,name.upper(),lambda n=name:self.show_tab(n)); b.pack(side='left',pady=8,padx=(0,5)); self.tab_buttons[name]=b
-        footer=tk.Frame(root,bg=BG); footer.pack(side='bottom',fill='x',padx=28,pady=16)
-        tk.Label(footer,text='LOCAL BUILD  /  YOUR DUMP · YOUR SAVES',bg=BG,fg=MUTED,font=('Segoe UI',9)).pack(side='left')
-        self.play_button=self.button(footer,'PLAY',self.play,primary=True); self.play_button.pack(side='right',ipadx=35,ipady=8)
-        self.save_button=self.button(footer,'Save settings',self.save); self.save_button.pack(side='right',padx=12)
-        self.body=tk.Frame(root,bg=PANEL,highlightbackground=LINE,highlightthickness=1)
-        self.body.pack(fill='both',expand=True,padx=28)
+        for index,name in enumerate(('Game','Graphics','Controls','Cheats','Advanced'),1):
+            b=self.button(sidebar,f'{index:02}   {name}',lambda n=name:self.show_tab(n))
+            b.configure(anchor='w',pady=13)
+            b.pack(fill='x',pady=4); self.tab_buttons[name]=b
+        tk.Label(sidebar,text='Settings apply when\nyou start the game.',bg=BG,fg=MUTED,
+                 justify='left',anchor='w',font=('Segoe UI',9)).pack(side='bottom',fill='x',pady=12)
+        self.banner=tk.Canvas(sidebar,height=164,bg=BG,highlightthickness=0)
+        self.banner.pack(side='bottom',fill='x',pady=16)
+        self.banner.bind('<Configure>',self.draw_banner)
+        main=tk.Frame(root,bg=PANEL,padx=30,pady=24); main.pack(side='right',fill='both',expand=True)
+        top=tk.Frame(main,bg=PANEL); top.pack(fill='x',pady=(0,20))
+        self.page_eyebrow=self.label(top,'LAUNCHER',True); self.page_eyebrow.configure(fg=CYAN,font=('Segoe UI',9,'bold')); self.page_eyebrow.pack(fill='x')
+        self.page_title=self.label(top,''); self.page_title.configure(font=('Segoe UI',26,'bold')); self.page_title.pack(fill='x',pady=(5,2))
+        self.page_description=self.label(top,'',True); self.page_description.pack(fill='x')
+        footer=tk.Frame(main,bg=PANEL); footer.pack(side='bottom',fill='x',pady=(18,0))
+        tk.Frame(footer,bg=LINE,height=1).pack(fill='x',pady=(0,16))
+        actions=tk.Frame(footer,bg=PANEL); actions.pack(fill='x')
+        self.session_label=self.label(actions,'Ready to play.',True); self.session_label.configure(wraplength=360)
+        self.session_label.pack(side='left',fill='x',expand=True,padx=(0,12))
+        self.play_button=self.button(actions,'PLAY GAME',self.play,primary=True); self.play_button.pack(side='right',ipadx=16,ipady=6)
+        self.save_button=self.button(actions,'Save settings',self.save); self.save_button.pack(side='right',padx=(0,12))
+        self.body=tk.Frame(main,bg=PANEL); self.body.pack(fill='both',expand=True)
         self.pages={}
         for name in self.tab_buttons:
-            page=tk.Frame(self.body,bg=PANEL,padx=26,pady=22); self.pages[name]=page
+            page=tk.Frame(self.body,bg=PANEL,padx=0,pady=8); self.pages[name]=page
         self.build_game(); self.build_graphics(); self.build_controls(); self.build_cheats(); self.build_advanced()
         self.show_tab('Game'); self.refresh_ready(); self.poll()
         root.protocol('WM_DELETE_WINDOW',self.close)
 
     def label(self,parent,text,muted=False):
-        return tk.Label(parent,text=text,bg=PANEL,fg=MUTED if muted else TEXT,anchor='w',justify='left',wraplength=840)
+        return tk.Label(parent,text=text,bg=PANEL,fg=MUTED if muted else TEXT,anchor='w',justify='left',wraplength=730)
     def button(self,parent,text,command,primary=False):
         return tk.Button(parent,text=text,command=command,bg=CYAN if primary else FIELD,fg=BG if primary else TEXT,
-                         activebackground='#58d9ec',activeforeground=BG,relief='flat',bd=0,padx=14,pady=8,cursor='hand2')
+                         activebackground='#ffab7e' if primary else LINE,activeforeground=BG if primary else TEXT,
+                         relief='flat',bd=0,padx=14,pady=8,cursor='hand2')
     def heading(self,parent,text):
         tk.Label(parent,text=text.upper(),bg=PANEL,fg=CYAN,font=('Segoe UI',10,'bold'),anchor='w').pack(fill='x',pady=(0,12))
     def choice(self,parent,label,key,options):
         row=tk.Frame(parent,bg=PANEL); row.pack(fill='x',pady=7)
         self.label(row,label).pack(side='left',fill='x',expand=True)
-        box=ttk.Combobox(row,textvariable=self.vars[key],values=list(options),state='readonly',width=30)
+        labels=OPTION_LABELS.get(key,{str(value):str(value) for value in options})
+        display=tk.StringVar(value=labels.get(self.vars[key].get(),self.vars[key].get()))
+        box=ttk.Combobox(row,textvariable=display,values=[labels[str(value)] for value in options],state='readonly',width=30)
+        reverse={label:value for value,label in labels.items()}
+        box.bind('<<ComboboxSelected>>',lambda event:self.vars[key].set(reverse[display.get()]))
+        self.vars[key].trace_add('write',lambda *args:display.set(labels.get(self.vars[key].get(),self.vars[key].get())))
         box.pack(side='right'); return box
     def check(self,parent,label,key):
         ttk.Checkbutton(parent,text=label,variable=self.vars[key]).pack(anchor='w',pady=8)
     def show_tab(self,name):
         for page in self.pages.values(): page.pack_forget()
         self.pages[name].pack(fill='both',expand=True)
-        for key,b in self.tab_buttons.items(): b.configure(fg=CYAN if key==name else MUTED)
+        for key,b in self.tab_buttons.items(): b.configure(fg=CYAN if key==name else MUTED,bg='#30251f' if key==name else BG)
+        titles={'Game':('Game library','Choose your game and manage your saved games.'),
+                'Graphics':('Graphics','Display, image quality and frame pacing.'),
+                'Controls':('Controls','Tune your controller and customize button mappings.'),
+                'Cheats':('Campaign cheats','Optional assists for your campaign.'),
+                'Advanced':('Advanced','Additional rendering options and session logs.')}
+        title,description=titles[name]
+        self.page_title.configure(text=title); self.page_description.configure(text=description)
 
     def draw_banner(self,event=None):
-        c=self.banner; c.delete('all'); w=max(c.winfo_width(),960)
+        c=self.banner; c.delete('all'); w=max(c.winfo_width(),140)
         try:
             from PIL import Image, ImageOps, ImageTk
-            source=Path(self.vars['game_dir'].get())/'sce_sys'/'pic0.png'
-            if not source.exists(): source=source.with_name('pic1.png')
-            if not source.exists(): source=source.with_name('icon0.png')
-            with Image.open(source) as im: im=ImageOps.fit(im.convert('RGB'),(w,170))
-            shade=Image.new('RGBA',im.size,(3,13,19,155)); im=Image.alpha_composite(im.convert('RGBA'),shade)
-            self.art=ImageTk.PhotoImage(im); c.create_image(0,0,image=self.art,anchor='nw')
+            with Image.open(ROOT/'launcher/killzone.png') as im:
+                im=ImageOps.contain(im.convert('RGBA'),(148,148))
+            self.art=ImageTk.PhotoImage(im); c.create_image(w/2,80,image=self.art,anchor='center')
         except (OSError,ImportError):
-            for x in range(0,w,8): c.create_rectangle(x,0,x+8,170,fill='#0d202b' if x%48 else '#123443',outline='')
-        c.create_text(30,55,text='KILLZONE',anchor='w',fill=TEXT,font=('Segoe UI Black',35,'bold'))
-        c.create_text(33,101,text='S H A D O W   F A L L',anchor='w',fill=TEXT,font=('Segoe UI Light',18))
-        c.create_line(33,130,96,130,fill=CYAN,width=3)
-        c.create_text(109,130,text='PC  /  LOCAL BUILD',anchor='w',fill=CYAN,font=('Segoe UI',9,'bold'))
+            c.create_text(w/2,80,text='KZ',fill=CYAN,font=('Segoe UI',36,'bold'))
 
     def build_game(self):
-        p=self.pages['Game']; self.heading(p,'Game folder')
+        p=self.pages['Game']; self.heading(p,'Game library')
         row=tk.Frame(p,bg=PANEL); row.pack(fill='x')
         entry=tk.Entry(row,textvariable=self.vars['game_dir'],bg=FIELD,fg=TEXT,insertbackground=CYAN,relief='flat')
         entry.pack(side='left',fill='x',expand=True,ipady=9)
         self.button(row,'Browse…',self.browse).pack(side='right',padx=(10,0))
         self.ready=self.label(p,''); self.ready.pack(fill='x',pady=(12,24))
         entry.bind('<FocusOut>',lambda e:self.refresh_ready())
-        self.choice(p,'Game build','profile',PROFILES)
-        self.label(p,'Current build keeps the established memory layout. Beta memory layout tests the imported heap fix.',True).pack(fill='x',pady=(5,28))
+        self.choice(p,'Memory profile','profile',PROFILES)
+        self.label(p,'Standard uses the default memory layout. Compatibility offers an alternative layout for troubleshooting.',True).pack(fill='x',pady=(5,28))
         self.heading(p,'Folders')
         row=tk.Frame(p,bg=PANEL); row.pack(fill='x')
         for name,path in [('Saved games',ROOT/'user/savedata/1/CUSA00190/KZ4'),('Screenshots',ROOT/'user/screenshots'),('Logs',ROOT/'out')]:
             self.button(row,name,lambda f=path:self.open_folder(f)).pack(side='left',padx=(0,9))
-        self.label(p,'Each launch saves a separate log folder. Existing saved games are shared by both builds.',True).pack(fill='x',pady=15)
-        self.session_label=self.label(p,'Ready to launch.'); self.session_label.pack(fill='x',pady=12)
+        self.label(p,'Both memory profiles use the same saved games. A separate log is kept for each session.',True).pack(fill='x',pady=15)
 
     def build_graphics(self):
         p=self.pages['Graphics']; self.heading(p,'Display')
         for label,key,options in [('Display mode','display_mode',('windowed','borderless','fullscreen')),
           ('Window size','window_size',('1280x720','1600x900','1920x1080','2560x1440','3840x2160')),
-          ('Frame rate limit','fps',('30','60','120')),('Temporal upscaler / AA','upscaler',('none','fsr3','taa'))]: self.choice(p,label,key,options)
-        self.label(p,'Window size changes output size. The game renders internally at its configured resolution.',True).pack(fill='x',pady=12)
+          ('Frame rate limit','fps',('30','60','120')),('Anti-aliasing','upscaler',('none','fsr3','taa'))]: self.choice(p,label,key,options)
+        self.label(p,'Window size controls the display output. The game renders internally at 1920 × 1080.',True).pack(fill='x',pady=12)
         self.check(p,'VSync','vsync'); self.check(p,'Sharpening (RCAS)','rcas'); self.check(p,'Show FPS','show_fps')
-        self.label(p,'FPS values are limits; performance depends on the scene. FSR 3 and TAA are experimental. TAA filters native 1080p; it does not increase FPS.',True).pack(fill='x',pady=15)
+        self.label(p,'Frame limits do not guarantee performance. FSR 3.1 AA and TAA use native resolution and may introduce trails on moving objects.',True).pack(fill='x',pady=15)
 
     def build_controls(self):
         page=self.pages['Controls']
@@ -292,12 +327,12 @@ class Launcher:
         self.root.bind('<MouseWheel>',wheel,add='+')
         self.heading(p,'Keyboard and controller')
         gains=('50','75','100','125','150','175','200','250','300')
-        self.choice(p,'Engine turn speed (experimental, %)','controller_turn_speed',gains)
-        self.choice(p,'Engine pitch speed (experimental, %)','controller_pitch_speed',gains)
-        self.choice(p,'Controller look response (%)','controller_look_gain',gains)
-        self.choice(p,'Controller aim response / L2 (%)','controller_aim_gain',gains)
-        self.label(p,'100% = original. Higher values reach full input sooner; maximum turn speed stays unchanged.',True).pack(fill='x',pady=(0,8))
-        self.label(p,'Movement: WASD · Camera: arrow keys · Insert: port menu\nSelect a keyboard field and press a key. Esc cancels. Sticks and controller triggers retain their native bindings.',True).pack(fill='x',pady=(0,16))
+        self.choice(p,'Horizontal turn speed (%)','controller_turn_speed',gains)
+        self.choice(p,'Vertical turn speed (%)','controller_pitch_speed',gains)
+        self.choice(p,'Look sensitivity (%)','controller_look_gain',gains)
+        self.choice(p,'Aim sensitivity / L2 (%)','controller_aim_gain',gains)
+        self.label(p,'100% uses the original controls. Turn speed adjusts camera rotation; sensitivity adjusts how quickly the stick reaches full input.',True).pack(fill='x',pady=(0,8))
+        self.label(p,'Movement: WASD · Camera: arrow keys · Insert: in-game menu\nSelect a keyboard field and press a key. Esc cancels. Sticks and controller triggers retain their native bindings.',True).pack(fill='x',pady=(0,16))
         table=tk.Frame(p,bg=PANEL); table.pack(fill='x')
         self.key_vars={}; self.pad_vars={}
         for index,(key,label,keyboard,pad) in enumerate(BUTTONS):
@@ -308,7 +343,11 @@ class Launcher:
             b.grid(row=row,column=col+1,padx=(0,6)); setattr(b,'key_var',kv)
             kv.trace_add('write',lambda *_,v=kv,button=b:button.configure(text=v.get()))
             pv=tk.StringVar(value=self.values['pads'].get(key,pad)); self.pad_vars[key]=pv
-            box=ttk.Combobox(table,textvariable=pv,values=PAD_BUTTONS,state='readonly',width=13)
+            display=tk.StringVar(value=PAD_LABELS[pv.get()])
+            box=ttk.Combobox(table,textvariable=display,values=list(PAD_LABELS.values()),state='readonly',width=17)
+            reverse={label:value for value,label in PAD_LABELS.items()}
+            box.bind('<<ComboboxSelected>>',lambda event,v=pv,d=display,r=reverse:v.set(r[d.get()]))
+            pv.trace_add('write',lambda *args,v=pv,d=display:d.set(PAD_LABELS[v.get()]))
             box.grid(row=row,column=col+2,padx=(0,20))
             if key in ('l2','r2'): box.configure(state='disabled')
         self.button(p,'Restore control defaults',self.reset_controls).pack(anchor='w',pady=20)
@@ -355,7 +394,7 @@ class Launcher:
         self.check(p,'Unlimited player health','unlimited_health')
         self.label(p,'Protects the player from normal damage, including bullets and explosions.',True).pack(fill='x',pady=(0,12))
         self.check(p,'Infinite ammo / no reload','infinite_ammo')
-        self.label(p,'Uses the existing Killzone ammo patch.',True).pack(fill='x',pady=(0,20))
+        self.label(p,'Keep ammunition available and fire without reloading.',True).pack(fill='x',pady=(0,20))
         self.label(p,'Changes apply on the next launch. Turn a cheat off and relaunch to restore normal play. Scripted deaths may still occur.',True).pack(fill='x',pady=12)
         self.button(p,'Disable all cheats',self.reset_cheats).pack(anchor='w',pady=12)
 
@@ -375,7 +414,7 @@ class Launcher:
         folder=filedialog.askdirectory(initialdir=self.vars['game_dir'].get(),parent=self.root)
         if folder: self.vars['game_dir'].set(folder); self.refresh_ready(); self.draw_banner()
     def refresh_ready(self):
-        ok,text=validate_game(self.vars['game_dir'].get()); self.ready.configure(text=text,fg=GREEN if ok else '#e8b969')
+        ok,text=validate_game(self.vars['game_dir'].get()); self.ready.configure(text=text,fg=GREEN if ok else CYAN)
         self.game_ok=ok
     def open_folder(self,path):
         path.mkdir(parents=True,exist_ok=True); os.startfile(str(path))
@@ -391,7 +430,7 @@ class Launcher:
         values=self.gather()
         exe=ROOT/executable_for(values)
         for path in (exe,ROOT/'out/boot-linked.bin',ROOT/'out/content.bin',ROOT/'out/renderer-stability-toggles.txt'):
-            if not path.is_file(): messagebox.showerror('Missing game build',f'Missing: {path}',parent=self.root); return
+            if not path.is_file(): messagebox.showerror('Setup incomplete','A required game component is missing. Complete the build and game preparation steps in the README before playing.',parent=self.root); return
         try:
             persist(values)
             folder=ROOT/'out'/('dialogue-'+time.strftime('%Y%m%d-%H%M%S')+f'-{time.time_ns()%1000000:06d}-modelauncher')
@@ -409,13 +448,15 @@ class Launcher:
                     log.write(f'{key}={spec["env"][key]}\n')
             self.monitor=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--run-session',str(folder/'session.json')],
                 env=spec['env'],cwd=ROOT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-            self.play_button.configure(text='RUNNING',state='disabled'); self.session_label.configure(text='Game running · '+folder.name,fg=CYAN)
+            self.play_button.configure(text='GAME RUNNING',state='disabled'); self.session_label.configure(text='Game running. Enjoy your session.',fg=CYAN)
         except (OSError,ValueError) as exc: messagebox.showerror('Launch failed',str(exc),parent=self.root)
     def poll(self):
         if self.monitor and self.monitor.poll() is not None:
-            try: result=json.loads((self.session/'status.json').read_text()); text=f'Game exited · code {result.get("exit_code", "unknown")}'
-            except (OSError,ValueError): text='Game session ended · see logs'
-            self.session_label.configure(text=text,fg=MUTED); self.play_button.configure(text='PLAY',state='normal'); self.monitor=None
+            try:
+                result=json.loads((self.session/'status.json').read_text())
+                text='Game closed. Ready to play again.' if result.get('exit_code')==0 else 'Game stopped unexpectedly. See session logs.'
+            except (OSError,ValueError): text='Game session ended. See session logs.'
+            self.session_label.configure(text=text,fg=MUTED); self.play_button.configure(text='PLAY GAME',state='normal'); self.monitor=None
         self.root.after(1000,self.poll)
     def close(self):
         try: persist(self.gather())

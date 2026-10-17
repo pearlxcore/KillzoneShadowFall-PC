@@ -121,13 +121,17 @@ python launcher/kzsf_local.py
 ```
 
 Choose the game folder on **Game**, adjust the options and press **PLAY**.
-Start with **Current build**, **60 FPS**, and temporal upscaler **none**.
+Start with the **Standard** memory profile, **60 FPS**, and anti-aliasing **Native**.
 The beta memory-layout profile and temporal options are available for experiments.
 
-`Launch-Killzone.bat` and `Killzone Launcher.vbs` are optional Windows entry points
-when Python is installed at a path recognized by `tools/start-launcher.ps1`.
-The native launcher entry-point source is `launcher/start_kzsf.c`; prebuilt
-launcher executables are not included.
+The Windows build also creates **Killzone Launcher.exe** at the project root,
+using the supplied Killzone icon. Python with Tkinter and Pillow must be available
+on PATH, in `runtime/`, or at a supported fallback location.
+`Launch-Killzone.bat` and `Killzone Launcher.vbs` are alternative entry points.
+Launcher executables are generated locally and are not stored in Git.
+
+The launcher uses a sidebar for Game, Graphics, Controls, Cheats and Advanced.
+Changing the display names does not reset existing preferences or button mappings.
 
 Linux code and packaging are inherited from upstream. A Killzone Linux build
 has not been validated here.
