@@ -6,12 +6,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #ifdef _WIN32
 #include <windows.h>
 #undef near
 #else
 #include <ucontext.h>
 #include <unistd.h>
+#include <sys/uio.h>
 #endif
 #include <x86intrin.h>
 
@@ -24,6 +26,7 @@ struct Entry {
 constexpr std::size_t Size = 1 << 20;
 std::array<Entry, Size> ring;
 std::atomic<std::uint64_t> head{0};
+std::mutex ring_mutex;
 // Writes that contained the suspicious qword (see Note), with the exact address.
 std::array<Entry, 256> hits;
 std::atomic<std::uint64_t> hits_head{0};
@@ -45,11 +48,11 @@ int Mode() {
 }
 
 bool Enabled() {
-    return Mode() == 1;
+    return Mode() == 1 || Mode() == 3;
 }
 
 void NoteIntent(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
-    if (Mode() == 2) {
+    if (Mode() == 2 || Mode() == 3) {
         Record(address, data, size, source);
     }
 }
@@ -61,6 +64,7 @@ void Note(std::uint64_t address, const void* data, std::uint64_t size, Source so
 }
 
 void Record(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
+    std::lock_guard lock(ring_mutex);
     static thread_local const std::uint32_t tid = static_cast<std::uint32_t>(gettid());
     Entry e{address, size, 0, __rdtsc(), source, tid};
     std::memcpy(&e.first, data, size < 8 ? size : 8);
@@ -102,6 +106,11 @@ extern "C" void gow3gpu_dump_guest_writes(void* ucontext) {
                                   std::uint64_t(g[REG_R14]), std::uint64_t(g[REG_R15])};
 #endif
     const char* names[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r14", "r15"};
+    std::unique_lock lock(ring_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        std::fprintf(stderr, "Write log: busy; skipping fault snapshot\n");
+        return;
+    }
     for (int i = 0; i < 8; ++i) {
         std::fprintf(stderr, "Write log: %s=%#llx\n", names[i], (unsigned long long)regs[i]);
     }
@@ -123,7 +132,17 @@ extern "C" void gow3gpu_dump_guest_writes(void* ucontext) {
     const std::uint64_t block = regs[0];
     for (std::uint64_t at = block - 0x30; at < block + 0x60; at += 8) {
         std::uint64_t value = 0;
-        std::memcpy(&value, reinterpret_cast<const void*>(at), 8);
+#ifdef _WIN32
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(at),
+                               &value, sizeof(value), &got) || got != sizeof(value)) {
+            std::fprintf(stderr, "Write log: [%#llx] unreadable\n", (unsigned long long)at);
+            continue;
+        }
+#else
+        iovec local{&value, sizeof(value)}, remote{reinterpret_cast<void*>(at), sizeof(value)};
+        if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != sizeof(value)) continue;
+#endif
         std::fprintf(stderr, "Write log: [%#llx] = %#llx\n", (unsigned long long)at,
                      (unsigned long long)value);
     }
@@ -161,4 +180,29 @@ extern "C" void gow3gpu_dump_guest_writes(void* ucontext) {
         }
     }
     std::fprintf(stderr, "Write log: %llu writes logged\n", (unsigned long long)n);
+}
+
+extern "C" void gow3gpu_dump_write_range(std::uint64_t address, std::uint64_t size) {
+    using namespace Gow3WriteLog;
+    if (!Mode() || !size) return;
+    std::unique_lock lock(ring_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        std::fprintf(stderr, "Write range: busy; skipping fault snapshot\n");
+        return;
+    }
+    const char* sources[] = {"backing", "WriteData", "fence", "EOP decoded", "WriteData decoded", "EOS decoded"};
+    const auto n = head.load();
+    unsigned matches = 0;
+    for (auto i = n; i-- > (n > Size ? n - Size : 0);) {
+        const auto& e = ring[i % Size];
+        const bool overlaps = e.address >= address ? e.address - address < size : address - e.address < e.size;
+        if (!e.size || !overlaps) continue;
+        if (matches++ < 100)
+            std::fprintf(stderr, "Write range: %s addr=%#llx bytes=%llu first=%#llx tid=%u\n",
+                         e.source < 6 ? sources[e.source] : "?", (unsigned long long)e.address,
+                         (unsigned long long)e.size, (unsigned long long)e.first, e.tid);
+    }
+    std::fprintf(stderr, "Write range: [%#llx,+%llu) matches=%u retained=%llu total=%llu mode=%d\n",
+                 (unsigned long long)address, (unsigned long long)size, matches,
+                 (unsigned long long)(n < Size ? n : Size), (unsigned long long)n, Mode());
 }

@@ -14,14 +14,9 @@
 
 #include <SDL3/SDL.h>
 #include "gow3_settings.h"
-#include "gow3_orbs.h"
-#include "gow3_actors.h"
 #include "gow3_graphics.h"
 #include "gow3_perf_stats.h"
-#include "../../src/actor_hook.h"
 
-extern Gow3ActorSlot gow3_actor_slots[2];
-extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends this process
 #include "common/elf_info.h"
 #include "imgui.h"
 #include "imgui_internal.h" // RegisterUserTexture (save pictures)
@@ -234,27 +229,6 @@ void ChoiceRow(const char* label, std::atomic<int>& target, const char* const* l
     ImGui::PopID();
 }
 
-// A 0.1x to 100x multiplier with a 1x button.
-void MultiplierRow(const char* label, std::atomic<float>& value, const char* help) {
-    Row(label);
-    const ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::SetNextItemWidth(-(ImGui::CalcTextSize("1x").x + style.FramePadding.x * 2 + style.ItemSpacing.x));
-    float v = value;
-    if (ImGui::SliderFloat("##value", &v, 0.1f, 100.0f, "%.2fx",
-                           ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp)) {
-        value = Gow3Orbs::ClampMultiplier(v);
-        dirty = true;
-    }
-    Help(help);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("1x")) {
-        value = 1.0f;
-        dirty = true;
-    }
-    Help(help);
-    ImGui::PopID();
-}
-
 void InfoRow(const char* label, const char* text) {
     Row(label);
     ImGui::TextDisabled("%s", text);
@@ -299,72 +273,43 @@ std::string OverlayText() {
     return P::Format(sample, items, s.overlay_layout == 0);
 }
 
-constexpr const char* Unsupported = "Unavailable: game version or code signature mismatch.";
-
 void GameTab() {
     auto& s = Gow3Settings::Get();
-    ImGui::SeparatorText("Cheats");
-    if (BeginRows("##cheats")) {
-        static const char* const names[] = {"Infinite health", "Infinite magic", "Infinite item meter",
-                                            "Infinite Rage of Sparta", "Max red orbs",
-                                            "Unlock Very Hard", "Infinite Double Jumps"};
-        static const char* const helps[] = {
-            "Health stays full. Only Kratos is protected. Turning it off does not undo past refills.",
-            "Magic stays full.", "The item meter (bow, Helios' head, boots) stays full.",
-            "Rage of Sparta stays full.", "Red orbs stay at the maximum.",
-            "Enable before opening New Game. Does not change an existing save difficulty.",
-            "Repeat air jumps without landing. Turn off for normal movement."};
-        for (unsigned cheat = 0; cheat < GOW3_CHEAT_COUNT; ++cheat) {
-            const bool available = (s.cheats_supported.load() & (1u << cheat)) != 0;
-            ImGui::BeginDisabled(!available);
-            CheckRow(names[cheat], s.cheats[cheat], available ? helps[cheat] : Unsupported);
-            ImGui::EndDisabled();
-        }
+    ImGui::SeparatorText("Controller aiming");
+    if (BeginRows("##controller-aim")) {
+        ImGui::BeginDisabled(!s.engine_turn_hook.load());
+        SliderRow("Engine turn speed (test)", s.controller_turn_speed, 50, 300, "%d%%",
+                  s.engine_turn_hook.load() ? "Experimental engine horizontal look-rate multiplier. 100% is original. Sprint effect needs testing."
+                                           : "Requires the engine turn-speed test build and launcher flag.");
+        SliderRow("Engine pitch speed (test)", s.controller_pitch_speed, 50, 300, "%d%%",
+                  s.engine_turn_hook.load() ? "Experimental engine vertical look-rate multiplier, separate from heading. 100% is original."
+                                           : "Requires the engine turn-speed test build and launcher flag.");
+        ImGui::EndDisabled();
+        SliderRow("Look response", s.controller_look_gain, 50, 300, "%d%%",
+                  "Right-stick response without L2. 100% is original. Does not increase maximum turn speed.");
+        SliderRow("Aim response (L2)", s.controller_aim_gain, 50, 300, "%d%%",
+                  "Right-stick response while aiming. Higher values reach full input sooner; lower values give finer aim.");
         ImGui::EndTable();
     }
-
-    ImGui::SeparatorText("Multipliers");
-    if (ImGui::Button("Reset all to 1x")) {
-        for (auto* m : {&s.red_orb_multiplier, &s.green_orb_multiplier, &s.blue_orb_multiplier,
-                        &s.gold_orb_multiplier, &s.damage_dealt, &s.damage_taken}) {
-            *m = 1.0f;
-        }
+    if (ImGui::Button("Restore original controller response")) {
+        s.controller_look_gain = 100;
+        s.controller_aim_gain = 100;
+        s.controller_turn_speed = 100;
+        s.controller_pitch_speed = 100;
         dirty = true;
     }
-    Help("Every multiplier back to 1x (the game's normal values).");
-    if (BeginRows("##multipliers")) {
-        const bool max_orbs = (s.cheats_supported.load() & (1u << 4)) && s.cheats[4].load();
-        ImGui::BeginDisabled(!s.red_orbs_supported.load() || max_orbs);
-        MultiplierRow("Red orbs", s.red_orb_multiplier,
-                      !s.red_orbs_supported.load() ? Unsupported
-                      : max_orbs ? "Turn off Max red orbs to use the multiplier."
-                                 : "Red orbs gained. Orbs you have and prices stay the same.");
-        ImGui::EndDisabled();
-        ImGui::BeginDisabled(!s.orb_pickup_supported.load());
-        const char* pickup = s.orb_pickup_supported.load() ? nullptr : Unsupported;
-        MultiplierRow("Green orbs (health)", s.green_orb_multiplier,
-                      pickup ? pickup : "Health from each green orb. The bar stays within its maximum.");
-        MultiplierRow("Blue orbs (magic)", s.blue_orb_multiplier,
-                      pickup ? pickup : "Magic from each blue orb. The bar stays within its maximum.");
-        MultiplierRow("Gold orbs (Rage of Sparta)", s.gold_orb_multiplier,
-                      pickup ? pickup : "Rage of Sparta from each gold orb. The bar stays within its maximum.");
-        ImGui::EndDisabled();
-        ImGui::BeginDisabled(!s.damage_supported.load());
-        const char* damage = s.damage_supported.load() ? nullptr : Unsupported;
-        MultiplierRow("Damage dealt", s.damage_dealt, damage ? damage : "Damage Kratos does to enemies.");
-        MultiplierRow("Damage taken", s.damage_taken, damage ? damage : "Damage Kratos takes.");
-        ImGui::EndDisabled();
+    ImGui::SeparatorText("Player assists");
+    if (BeginRows("##killzone-assists")) {
+        const auto enabled = [](const char* key) {
+            const char* value = std::getenv(key);
+            return value && std::strcmp(value, "1") == 0;
+        };
+        InfoRow("Unlimited player health", enabled("KZSF_UNLIMITED_HEALTH") ? "Enabled at launch" : "Off");
+        InfoRow("Infinite ammo", enabled("KZSF_INFINITE_AMMO") ? "Enabled at launch" : "Off");
         ImGui::EndTable();
     }
+    ImGui::TextDisabled("Change player assists in the launcher before starting the game.");
 
-    ImGui::SeparatorText("HUD");
-    if (BeginRows("##hud")) {
-        ImGui::BeginDisabled(!s.actor_watch_supported.load());
-        CheckRow("Enemy health bar", s.enemy_health_bar,
-                 s.actor_watch_supported.load() ? "A thin bar at the top for the last enemy hit." : Unsupported);
-        ImGui::EndDisabled();
-        ImGui::EndTable();
-    }
 }
 
 void ImageTab() {
@@ -410,18 +355,10 @@ void PerformanceTab() {
     auto& s = Gow3Settings::Get();
     ImGui::SeparatorText("Live");
     if (BeginRows("##live")) {
-        static const char* const fps_labels[] = {"30", "60", "120", "240", "Unlimited"};
-        ChoiceRow("Frame rate limit", s.fps_limit, fps_labels, G::FpsLimits.data(), int(G::FpsLimits.size()),
-                  "Caps the frame rate. The engine frame rate (below) is the highest it can go.");
-        const int effective = G::EffectiveFps(s.fps_limit, s.applied_engine_fps);
-        if (s.fps_limit == 0 || effective < s.fps_limit) {
-            char text[48];
-            std::snprintf(text, sizeof(text), "%d FPS (engine frame rate)", effective);
-            InfoRow("Effective limit", text);
-        }
-        if (s.applied_engine_fps < s.startup_engine_fps) {
-            InfoRow("Engine frame rate", "60 FPS: the frame rate patch is not available for this game build");
-        }
+        static const char* const fps_labels[] = {"30", "60", "120"};
+        static const int fps_values[] = {30, 60, 120};
+        ChoiceRow("Frame rate limit", s.fps_limit, fps_labels, fps_values, 3,
+                  "Caps presentation FPS. Actual performance depends on the scene and hardware.");
         static const char* const queued_labels[] = {"1 (lowest latency)", "2", "Unlimited"};
         ChoiceRow("Frames queued", s.frames_queued, queued_labels, G::FramesQueued.data(),
                   int(G::FramesQueued.size()), "More frames queued: steadier FPS, slower response to input.");
@@ -429,20 +366,8 @@ void PerformanceTab() {
                  "Fewer stutters in new areas; an object or effect may appear a moment later.");
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Applied on restart");
-    if (BeginRows("##restart")) {
-        static const char* const resolution_labels[] = {"Native (1080p)", "480p", "720p", "1440p", "1800p", "4K"};
-        ChoiceRow("Render resolution", s.render_resolution, resolution_labels, nullptr, int(G::Resolutions.size()),
-                  "The resolution the game draws at. Higher is sharper and slower.");
-        static const char* const engine_labels[] = {"60 (original)", "120", "240"};
-        ChoiceRow("Engine frame rate", s.engine_fps, engine_labels, G::EngineFps.data(), int(G::EngineFps.size()),
-                  "The highest frame rate the game itself runs at.");
-        CheckRow("Game reads GPU data without waiting", s.stale_readback,
-                 "Big FPS gain. Switch it off if lighting or objects look wrong.");
-        CheckRow("Deferred GPU readbacks", s.deferred_readback,
-                 "Fewer waits for the GPU. Switch it off if textures or shadows look wrong.");
-        ImGui::EndTable();
-    }
+    ImGui::TextDisabled("Readback and shader options are also available in the launcher.");
+
 }
 
 void OverlayTab() {
@@ -501,27 +426,9 @@ void OverlayTab() {
             std::snprintf(text, sizeof(text), "ready");
         }
         InfoRow("Shader cache", text);
-        std::string hooks;
-        const auto add = [&](bool on, const char* name) {
-            if (on) {
-                hooks += hooks.empty() ? name : std::string(", ") + name;
-            }
-        };
-        add(s.cheats_supported.load() != 0, "cheats");
-        add(s.red_orbs_supported.load(), "red orbs");
-        add(s.orb_pickup_supported.load(), "orb pickups");
-        add(s.damage_supported.load(), "damage");
-        add(s.actor_watch_supported.load(), "enemy health");
-        InfoRow("Game hooks", hooks.empty() ? "none" : hooks.c_str());
+        InfoRow("Controller turn-rate hook", s.engine_turn_hook ? "Enabled (experimental)" : "Off");
         ImGui::EndTable();
     }
-}
-
-// Startup options changed since this launch (applied by "Apply and restart").
-int RestartChanges() {
-    const auto& s = Gow3Settings::Get();
-    return (s.render_resolution != s.startup_render_resolution) + (s.engine_fps != s.startup_engine_fps) +
-           (s.deferred_readback != s.startup_deferred_readback) + (s.stale_readback != s.startup_stale_readback);
 }
 
 void Menu() {
@@ -537,7 +444,7 @@ void Menu() {
     // gow3: the game's own title (param.sfo), not a fixed one.
     static const std::string heading = [] {
         const std::string_view title = Common::ElfInfo::Instance().Title();
-        return std::string(title.empty() ? "God of War III" : title) + PadText("  (Insert / R3+L2)", "  (Insert / RS+LT)", "  (Insert / RS+ZL)");
+        return std::string(title.empty() ? "Killzone Shadow Fall" : title) + PadText("  (Insert / R3+L2)", "  (Insert / RS+LT)", "  (Insert / RS+ZL)");
     }();
     if (!ImGui::Begin(heading.c_str(), &keep_open, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
@@ -588,24 +495,9 @@ void Menu() {
 
     ImGui::Separator();
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", footer_help ? footer_help : PadText("L1 / R1 or Q / E: switch tabs. Settings are saved in gow3.ini.", "LB / RB or Q / E: switch tabs. Settings are saved in gow3.ini.", "L / R or Q / E: switch tabs. Settings are saved in gow3.ini."));
+    ImGui::TextDisabled("%s", footer_help ? footer_help : PadText("L1 / R1 or Q / E: switch tabs. Settings are saved for this session configuration.", "LB / RB or Q / E: switch tabs. Settings are saved for this session configuration.", "L / R or Q / E: switch tabs. Settings are saved for this session configuration."));
     ImGui::PopTextWrapPos();
-    if (const int changes = RestartChanges()) {
-        ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%d change%s need%s a restart (unsaved progress is lost).",
-                           changes, changes == 1 ? "" : "s", changes == 1 ? "s" : "");
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!std::getenv("GOW3_RESTART_COMMAND"));
-        if (ImGui::Button("Apply and restart")) {
-            // The new launch confirms the options once the game shows; run.py restores the
-            // previous ones if it never does (restart_unconfirmed).
-            s.restart_unconfirmed = true;
-            Gow3Settings::Save();
-            runtime_restart();
-        }
-        ImGui::EndDisabled();
-    } else {
-        ImGui::NewLine();
-    }
+    ImGui::NewLine();
     const float close_width = ImGui::CalcTextSize("Close").x + ImGui::GetStyle().FramePadding.x * 2;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - close_width);
     if (ImGui::Button("Close")) {
@@ -617,56 +509,7 @@ void Menu() {
     }
 }
 
-// Enemy health bar from the damage hook's records (gow3_actors.cpp).
-// Only the copied values are read, never the game's memory: an actor may be gone by now.
-void HealthDisplay() {
-    struct Seen {
-        uint32_t seq = 0;
-        std::chrono::steady_clock::time_point at{};
-    };
-    static Seen seen[2];
-    const auto& s = Gow3Settings::Get();
-    if (!s.actor_watch_supported.load()) {
-        return;
-    }
-    const auto now = std::chrono::steady_clock::now();
-    Gow3ActorSlot slot[2];
-    for (int i = 0; i < 2; ++i) {
-        std::memcpy(&slot[i], const_cast<const Gow3ActorSlot*>(&gow3_actor_slots[i]), sizeof(slot[i]));
-        if (slot[i].seq != seen[i].seq) {
-            seen[i] = {slot[i].seq, now};
-        }
-    }
-    const auto recent = [&](int i, int seconds) {
-        return seen[i].seq != 0 && now - seen[i].at < std::chrono::seconds(seconds);
-    };
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImDrawList* draw = ImGui::GetForegroundDrawList();
-    const float scale = base_scale;
-    if (s.enemy_health_bar && recent(1, 4) && Gow3Actors::Valid(slot[1].health, slot[1].max_health)) {
-        // Minimal: a thin green bar centered on the screen's top edge; it shrinks toward the center
-        // so it stays symmetric, with the health in numbers below.
-        const ImVec2 display = ImGui::GetIO().DisplaySize;
-        const float width = 260.0f * scale, height = 5.0f * scale, center = display.x * 0.5f;
-        const float top = 36.0f * scale;
-        const float fraction = Gow3Actors::Fraction(slot[1].health, slot[1].max_health);
-        draw->AddRectFilled(ImVec2(center - width * 0.5f - scale, top - scale),
-                            ImVec2(center + width * 0.5f + scale, top + height + scale),
-                            IM_COL32(0, 0, 0, 140), 2 * scale);
-        const float half = width * 0.5f * fraction;
-        draw->AddRectFilled(ImVec2(center - half, top), ImVec2(center + half, top + height),
-                            IM_COL32(70, 190, 80, 220), 2 * scale);
-        char text[48];
-        std::snprintf(text, sizeof(text), "%.0f / %.0f", std::ceil(slot[1].health), slot[1].max_health);
-        const float font = ImGui::GetFontSize() * 0.9f;
-        const ImVec2 size = ImGui::GetFont()->CalcTextSizeA(font, FLT_MAX, 0.0f, text);
-        const ImVec2 at{center - size.x * 0.5f, top + height + 4.0f * scale};
-        draw->AddText(ImGui::GetFont(), font, ImVec2(at.x + scale, at.y + scale), IM_COL32(0, 0, 0, 160), text);
-        draw->AddText(ImGui::GetFont(), font, at, IM_COL32(225, 235, 220, 220), text);
-    }
-}
 
-// The game's text dialog: what is typed, and how to finish (keyboard or controller).
 void TextEntryBox() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
@@ -1164,7 +1007,6 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         FpsCounter();
     }
     if (!loading && !menu_open) {
-        HealthDisplay();
     }
     if (background_total && !loading && !menu_open) {
         BackgroundLoading();

@@ -538,6 +538,7 @@ bool Instance::CreateDevice() {
                 .shaderInt16 = features.shaderInt16,
                 .sparseBinding = features.sparseBinding,
                 .sparseResidencyBuffer = features.sparseResidencyBuffer,
+                .sparseResidencyAliased = features.sparseResidencyAliased,
             },
         },
         vk::PhysicalDeviceVulkan11Features{

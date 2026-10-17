@@ -186,7 +186,8 @@ static ABI int32_t voice_info(uint32_t port,uint32_t *info) {
 /* ---- Common dialogs: nothing is displayed; an opened dialog finishes. ---- */
 typedef struct { const char *name; int initialized, status; uint32_t button; } Dialog;
 static Dialog dialogs[]={{"CommonDialog",0,0,0},{"MsgDialog",0,0,0},{"SaveDataDialog",0,0,0},
-                         {"NpProfileDialog",0,0,0},{"NpCommerceDialog",0,0,0},{"ImeDialog",0,0,0}};
+                         {"NpProfileDialog",0,0,0},{"NpCommerceDialog",0,0,0},{"ImeDialog",0,0,0},
+                         {"ErrorDialog",0,0,0},{"WebBrowserDialog",0,0,0},{"InvitationDialog",0,0,0}};
 #define DIALOG_RUNNING 2
 #define DIALOG_FINISHED 3
 #define DIALOG_NOT_FINISHED ((int32_t)0x80B80005)
@@ -236,17 +237,27 @@ static int32_t dialog_term(int i) {
     static ABI int32_t tag##_open(const void *p) { (void)p; return dialog_open(i); } \
     static ABI int32_t tag##_status(void) { return dialog_status(i); } \
     static ABI int32_t tag##_term(void) { return dialog_term(i); }
-DIALOG(profile,3) DIALOG(commerce,4)
+DIALOG(profile,3) DIALOG(commerce,4) DIALOG(error,6) DIALOG(browser,7) DIALOG(invitation,8)
+static ABI int32_t error_close(void) { return dialog_close(6); }
+static ABI int32_t browser_close(void) { return dialog_close(7); }
+static ABI int32_t invitation_close(void) { return dialog_close(8); }
 /* OrbisMsgDialogParam: BaseParam (48 bytes), size, mode (2 = progress bar).
  * OrbisSaveDataDialogParam: BaseParam, int32 size, mode (5 = progress bar). */
 static int32_t dialog_open_mode(int i, const unsigned char *param, size_t mode_offset, uint32_t progress_mode) {
     if (!param) return DIALOG_ARG_NULL;
     uint32_t mode; memcpy(&mode,param+mode_offset,4);
+    printf("Runtime: %s opened mode=%u\n", dialogs[i].name, mode);
     return mode==progress_mode ? dialog_open_progress(i) : dialog_open(i);
 }
 static ABI int32_t msg_init(void) { return dialog_init(1); }
 static ABI int32_t msg_open(const unsigned char *p) { return dialog_open_mode(1,p,56,2); }
-static ABI int32_t msg_status(void) { return dialog_status(1); }
+static ABI int32_t msg_status(void) {
+    int32_t status=dialog_status(1);
+    static unsigned calls;
+    if (calls<5 || (calls%200000)==0) printf("Runtime: MsgDialog UpdateStatus -> %d (call %u)\n",status,calls);
+    ++calls;
+    return status;
+}
 static ABI int32_t msg_term(void) { return dialog_term(1); }
 static ABI int32_t msg_close(void) { return dialog_close(1); }
 static ABI int32_t msg_progress(uint32_t target, uint32_t value) { (void)value; return dialog_progress(1,target); }
@@ -523,6 +534,34 @@ static ABI int32_t playgo_close(int32_t handle) {
     playgo_handle=0; return 0;
 }
 static ABI int32_t playgo_terminate(void) { playgo_handle=0; return 0; }
+/* Language mask and the remaining entry points: the package is fully installed. */
+static ABI int32_t playgo_language_mask(int32_t handle,uint32_t *mask) {
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!mask) return PLAYGO_BAD_POINTER;
+    *mask=1; return 0; /* English */
+}
+static ABI int32_t playgo_set_language_mask(int32_t handle,uint32_t mask) {
+    (void)mask; return handle==playgo_handle && handle ? 0 : PLAYGO_BAD_HANDLE;
+}
+static ABI int32_t playgo_eta(int32_t handle,const uint16_t *ids,uint32_t count,int64_t *eta) {
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!ids || !eta) return PLAYGO_BAD_POINTER;
+    if (!count) return PLAYGO_BAD_SIZE;
+    for (uint32_t i=0;i<count;++i) if (ids[i]>=playgo_chunks) return PLAYGO_BAD_CHUNK;
+    *eta=0; return 0; /* nothing left to download */
+}
+static ABI int32_t playgo_get_todo(int32_t handle,void *list,uint32_t capacity,uint32_t *out) {
+    (void)list; (void)capacity;
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!out) return PLAYGO_BAD_POINTER;
+    *out=0; return 0; /* everything installed */
+}
+static ABI int32_t playgo_prefetch(int32_t handle,const uint16_t *ids,uint32_t count) {
+    (void)count;
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!ids) return PLAYGO_BAD_POINTER;
+    return 0;
+}
 
 /* ---- DiscMap: the game is fully installed, no disc bitmap exists ---- */
 #define DISC_MAP_NO_BITMAP ((int32_t)0x81100004)
@@ -545,6 +584,17 @@ static ABI int32_t mouse_close(int32_t handle) { (void)handle; return 0; }
 static ABI int32_t audio_in_open(void) { return AUDIO_IN_NOT_OPENED; }
 
 
+/* ---- Remaining libkernel/system entry points the game reaches during init ---- */
+static ABI int32_t open_psid(void *id) {
+    if (!id) return (int32_t)0x80020016;
+    memset(id,0,16);
+    return 0;
+}
+static ABI int32_t commerce_close(void) { return dialog_close(4); }
+static ABI uint64_t net_htonll(uint64_t v) { return ((uint64_t)net_htonl((uint32_t)v)<<32)|net_htonl((uint32_t)(v>>32)); }
+static ABI uint64_t net_ntohll(uint64_t v) { return net_htonll(v); }
+static ABI int32_t net_sock_info(int32_t fd,void *info) { (void)fd; (void)info; return (int32_t)0x80410124; /* ENOTCONN */ }
+
 static const RuntimeExport exports[]={
     {"sceUserServiceInitialize",user_initialize}, {"sceUserServiceTerminate",user_terminate},
     {"sceUserServiceGetInitialUser",user_initial}, {"sceUserServiceGetLoginUserIdList",user_list},
@@ -558,6 +608,9 @@ static const RuntimeExport exports[]={
     {"sceNetEpollCreate",net_epoll_create}, {"sceNetEpollDestroy",net_epoll_destroy},
     {"sceNetResolverCreate",net_resolver_create}, {"sceNetResolverDestroy",net_resolver_destroy},
     {"sceNetHtons",net_htons}, {"sceNetNtohs",net_ntohs}, {"sceNetHtonl",net_htonl}, {"sceNetNtohl",net_ntohl},
+    {"sceNetHtonll",net_htonll}, {"sceNetNtohll",net_ntohll}, {"sceNetGetSockInfo",net_sock_info},
+    {"sceKernelGetOpenPsId",open_psid}, {"sceNpAuthAbortRequest",ok_void},
+    {"sceSystemServiceShowDisplaySafeAreaSettings",ok_void}, {"sceNpCommerceDialogClose",commerce_close},
     {"sceNetInetPton",net_pton}, {"sceNetInetNtop",net_ntop},
     {"sceNetSocket",net_unreachable}, {"sceNetConnect",net_unreachable}, {"sceNetBind",net_unreachable},
     {"sceNetListen",net_unreachable}, {"sceNetAccept",net_unreachable}, {"sceNetSend",net_unreachable},
@@ -567,6 +620,7 @@ static const RuntimeExport exports[]={
     {"sceNetSocketClose",net_unreachable}, {"sceNetSocketAbort",net_unreachable},
     {"sceNetEpollControl",net_unreachable}, {"sceNetEpollWait",net_unreachable}, {"sceNetEpollAbort",net_unreachable},
     {"sceNetResolverStartNtoa",net_unreachable}, {"sceNetResolverStartAton",net_unreachable},
+    {"sceNetCtlInit",ok_void}, {"sceNetCtlTerm",ok_void},
     {"sceNetCtlGetState",netctl_state}, {"sceNetCtlGetInfo",netctl_info},
     {"sceNetCtlRegisterCallback",netctl_register}, {"sceNetCtlCheckCallback",netctl_check},
     {"sceNetCtlUnregisterCallback",netctl_unregister}, {"sceNetCtlGetNatInfo",netctl_nat},
@@ -656,6 +710,14 @@ static const RuntimeExport exports[]={
     {"sceNpCommerceDialogUpdateStatus",commerce_status}, {"sceNpCommerceDialogTerminate",commerce_term},
     {"sceImeDialogInit",ime_init}, {"sceImeDialogGetStatus",ime_status}, {"sceImeDialogGetResult",ime_result},
     {"sceImeDialogTerm",ime_term}, {"sceImeDialogAbort",ime_term},
+    {"sceErrorDialogInitialize",error_init}, {"sceErrorDialogTerminate",error_term},
+    {"sceErrorDialogUpdateStatus",error_status}, {"sceErrorDialogOpen",error_open}, {"sceErrorDialogClose",error_close},
+    {"sceWebBrowserDialogInitialize",browser_init}, {"sceWebBrowserDialogTerminate",browser_term},
+    {"sceWebBrowserDialogUpdateStatus",browser_status}, {"sceWebBrowserDialogOpen",browser_open},
+    {"sceWebBrowserDialogClose",browser_close},
+    {"sceInvitationDialogInitialize",invitation_init}, {"sceInvitationDialogTerminate",invitation_term},
+    {"sceInvitationDialogUpdateStatus",invitation_status}, {"sceInvitationDialogOpen",invitation_open},
+    {"sceInvitationDialogClose",invitation_close},
     {"sceNpTrophyCreateContext",trophy_context}, {"sceNpTrophyCreateHandle",trophy_handle},
     {"sceNpTrophyRegisterContext",trophy_register}, {"sceNpTrophyUnlockTrophy",trophy_unlock},
     {"sceNpTrophyGetGameInfo",trophy_game_info}, {"sceNpTrophyGetTrophyInfo",trophy_info},
@@ -665,6 +727,8 @@ static const RuntimeExport exports[]={
     {"scePlayGoGetLocus",playgo_locus}, {"scePlayGoSetInstallSpeed",playgo_speed},
     {"scePlayGoGetInstallSpeed",playgo_get_speed}, {"scePlayGoGetProgress",playgo_progress},
     {"scePlayGoSetToDoList",playgo_todo}, {"scePlayGoClose",playgo_close}, {"scePlayGoTerminate",playgo_terminate},
+    {"scePlayGoGetLanguageMask",playgo_language_mask}, {"scePlayGoSetLanguageMask",playgo_set_language_mask},
+    {"scePlayGoGetEta",playgo_eta}, {"scePlayGoGetToDoList",playgo_get_todo}, {"scePlayGoPrefetch",playgo_prefetch},
     {"sceMouseInit",ok_void}, {"sceMouseOpen",mouse_open}, {"sceMouseRead",mouse_read}, {"sceMouseClose",mouse_close},
     {"sceAudioInOpen",audio_in_open},
     {"sceDiscMapIsRequestOnHDD",discmap_on_hdd}, {"sceDiscMap_8A828CAEE7EDD5E9",discmap_8a82},

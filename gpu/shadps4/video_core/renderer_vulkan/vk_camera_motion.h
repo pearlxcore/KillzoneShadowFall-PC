@@ -48,7 +48,7 @@ public:
 
     /// Both cameras and the scene depth of the current frame are known.
     [[nodiscard]] bool Ready() const noexcept {
-        return current.valid && previous.valid && depth_id;
+        return current.valid && previous.valid && depth_id && (!killzone_native || frame_has_camera);
     }
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
         return depth_id;
@@ -71,6 +71,9 @@ public:
 
     /// A bound constant buffer of 864 bytes: checks the scene constant signature.
     void OnConstants(const float* data);
+    void OnKillzoneConstants(const float* data);
+    [[nodiscard]] bool KillzoneNative() const noexcept { return killzone_native; }
+    [[nodiscard]] float Far() const noexcept { return killzone_native ? world_far : 3000.f; }
 
     /// The G-buffer pass (5+ color targets): its depth is the scene depth.
     void OnGBufferPass(VideoCore::ImageId depth);
@@ -95,6 +98,8 @@ private:
     Runtime& runtime;
     bool debug_overlay = false;
     bool for_upscaler = false;
+    bool killzone_native = false;
+    float world_far = 3000.f;
     vk::UniqueDescriptorSetLayout motion_desc_layout;
     vk::UniquePipelineLayout motion_pipeline_layout;
     vk::UniquePipeline motion_pipeline;

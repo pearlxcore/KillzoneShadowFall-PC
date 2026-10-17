@@ -31,12 +31,13 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
+#include "video_core/renderer_vulkan/vk_cached_binding_check.h"
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 7u; // gow3: interpolated integer fix (Pascal)
-static constexpr u32 ShaderMetaVersion = 7u; // gow3: ImageResource::needs_native
-static constexpr u32 PipelineKeyVersion = 5u; // gow3: Info layout (ImageResource::needs_native)
+static constexpr u32 ShaderMetaVersion = 8u; // Logical Info fields; growable sampler variants.
+static constexpr u32 PipelineKeyVersion = 6u; // Reject previous raw InfoPersistent layout.
 } // namespace Serialization
 
 namespace Vulkan {
@@ -687,6 +688,11 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    sel.infos.fill(nullptr);
+    sel.modules.fill(nullptr);
+    sel.runtime_infos = {};
+    sel.fetch_shader.reset();
+    for(auto& spv:preloaded_spv) spv.clear();
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -705,6 +711,7 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
         return false;
     }
 
+    if(!ValidatePreloadedBindings()) return false;
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     ASSERT(is_new);
 
@@ -768,6 +775,12 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    // A rejected/partial cache record must not leak a stage into the next one.
+    sel.infos.fill(nullptr);
+    sel.modules.fill(nullptr);
+    sel.runtime_infos = {};
+    sel.fetch_shader.reset();
+    for(auto& spv:preloaded_spv) spv.clear();
     sel.graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};
@@ -793,6 +806,7 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
         }
     }
 
+    if(!ValidatePreloadedBindings()) return false;
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
     ASSERT(is_new);
 
@@ -865,11 +879,40 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             module = CompileSPV(spv, instance.GetDevice());
         }
     }
+    sel.runtime_infos[stage] = spec.runtime_info;
+    // If this program hash was already loaded, `program` above is a temporary;
+    // retained permutations must refer to the persistent program instead.
+    spec.info = &it_pgm.value()->info;
     it_pgm.value()->InsertPermut(module, std::move(spec), perm_idx);
 
     sel.infos[stage] = &it_pgm.value()->info;
     sel.modules[stage] = module;
+    preloaded_spv[stage] = std::move(spv);
 
+    return true;
+}
+
+bool PipelineCache::ValidatePreloadedBindings() const {
+    u32 binding=0;
+    for(size_t stage_idx=0;stage_idx<sel.infos.size();++stage_idx) {
+        const auto* info=sel.infos[stage_idx];
+        if(!info) continue;
+        std::vector<u32> allowed;
+        for(size_t i=0;i<info->buffers.size();++i) allowed.push_back(binding++);
+        for(const auto& image:info->images) {
+            allowed.push_back(binding); binding+=image.NumBindings(*info);
+        }
+        for(size_t i=0;i<info->samplers.size();++i) allowed.push_back(binding++);
+        if(!CachedBindingsMatch(preloaded_spv[stage_idx],allowed)) {
+            static unsigned reports=0;
+            if(reports++<8) {
+                std::printf("Pipeline warm-up: skipped incompatible descriptor layout, stage %zu shader %llx\n",
+                    stage_idx,(unsigned long long)info->pgm_hash);
+                std::fflush(stdout);
+            }
+            return false;
+        }
+    }
     return true;
 }
 
@@ -1375,7 +1418,7 @@ namespace Shader {
 void Info::Serialize(Serialization::Archive& ar) const {
     Serialization::Writer info{ar};
 
-    info.Write(this, sizeof(InfoPersistent));
+    InfoPersistent::PersistentFields(*this, [&](const auto& field) { info.Write(field); });
     info.Write(flattened_ud_buf);
     srt_info.Serialize(ar);
 }
@@ -1383,7 +1426,8 @@ void Info::Serialize(Serialization::Archive& ar) const {
 bool Info::Deserialize(Serialization::Archive& ar) {
     Serialization::Reader info{ar};
 
-    info.Read(this, sizeof(Shader::InfoPersistent));
+    buffers.clear(); images.clear(); samplers.clear(); fmasks.clear();
+    InfoPersistent::PersistentFields(*this, [&](auto& field) { info.Read(field); });
     info.Read(flattened_ud_buf);
 
     return srt_info.Deserialize(ar);

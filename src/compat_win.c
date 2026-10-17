@@ -65,26 +65,39 @@ static ssize_t positioned(int fd, void *buffer, size_t size, int64_t offset, int
     if (offset < 0) { errno = EINVAL; return -1; }
     LARGE_INTEGER zero = {0}, saved;
     if (!SetFilePointerEx(h, zero, &saved, FILE_CURRENT)) { errno = compat_errno_from_win32(GetLastError()); return -1; }
+    /* GPU tracking can protect the guest destination between a pre-touch and
+     * ReadFile. Kernel writes cannot invoke our user-mode fault handler. Read
+     * into ordinary host memory, then copy through that handler instead. */
+    size_t capacity = size < 1048576 ? size : 1048576;
+    unsigned char *staging = !write && capacity ? malloc(capacity) : NULL;
+    if (!write && capacity && !staging) { errno = ENOMEM; return -1; }
     size_t done = 0;
     while (done < size) {
-        DWORD chunk = size - done > 0x40000000u ? 0x40000000u : (DWORD)(size - done), n = 0;
+        size_t limit = write ? 0x40000000u : capacity;
+        DWORD chunk = size - done > limit ? (DWORD)limit : (DWORD)(size - done), n = 0;
         OVERLAPPED at = {0};
         uint64_t position = (uint64_t)offset + done;
         at.Offset = (DWORD)position; at.OffsetHigh = (DWORD)(position >> 32);
         BOOL ok = write ? WriteFile(h, (const char *)buffer + done, chunk, &n, &at)
-                        : ReadFile(h, (char *)buffer + done, chunk, &n, &at);
+                        : ReadFile(h, staging, chunk, &n, &at);
         if (!ok) {
             DWORD e = GetLastError();
             if (e == ERROR_HANDLE_EOF) break;
+            fprintf(stderr,"File I/O: %s failed: win32=%lu offset=%llu bytes=%lu\n",
+                    write ? "WriteFile" : "ReadFile",(unsigned long)e,
+                    (unsigned long long)position,(unsigned long)chunk);
             SetFilePointerEx(h, saved, NULL, FILE_BEGIN);
+            free(staging);
             if (done) return (ssize_t)done;
             errno = compat_errno_from_win32(e);
             return -1;
         }
+        if (!write && n) memcpy((char *)buffer + done,staging,n);
         done += n;
         if (n < chunk) break;
     }
     SetFilePointerEx(h, saved, NULL, FILE_BEGIN);
+    free(staging);
     return (ssize_t)done;
 }
 ssize_t compat_pread(int fd, void *buffer, size_t size, int64_t offset) { return positioned(fd, buffer, size, offset, 0); }

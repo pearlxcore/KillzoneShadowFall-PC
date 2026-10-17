@@ -4,6 +4,8 @@
 #include "gnm_error.h"
 #include "gnmdriver.h"
 
+
+
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/elf_info.h"
@@ -2173,6 +2175,11 @@ static inline s32 PatchFlipRequest(u32* cmdbuf, u32 size, u32 vo_handle, u32 buf
 
 static inline s32 PerformSubmit(u32 count, const u32* dcb_gpu_addrs[], u32* dcb_sizes_in_bytes,
                                 const u32* ccb_gpu_addrs[], u32* ccb_sizes_in_bytes) {
+    /* The GPU can be torn down by an unrelated runtime stop while guest threads keep
+     * submitting; skip rather than dereference a null Liverpool. */
+    if (!liverpool) {
+        return ORBIS_OK;
+    }
     if (DebugState.ShouldPauseInSubmit()) {
         DebugState.PauseGuestThreads();
     }
@@ -2920,6 +2927,7 @@ int PS4_SYSV_ABI Func_F916890425496553() {
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     LOG_INFO(Lib_GnmDriver, "Initializing presenter");
     liverpool = std::make_unique<AmdGpu::Liverpool>();
+
     presenter = std::make_unique<Vulkan::Presenter>(*g_window, liverpool.get());
 
     const s32 result = sceKernelGetCompiledSdkVersion(&sdk_version);

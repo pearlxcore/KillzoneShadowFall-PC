@@ -57,6 +57,11 @@ public:
     u64 GetMaxBufferSize() const {
         return vk13_props.maxBufferSize;
     }
+    bool SupportsSparseAliasing() const { return features.sparseResidencyAliased; }
+
+    u32 GetMaxFragmentInputComponents() const {
+        return properties.limits.maxFragmentInputComponents;
+    }
 
     vk::PhysicalDevice GetPhysicalDevice() const {
         return physical_device;

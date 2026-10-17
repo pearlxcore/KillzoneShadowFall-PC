@@ -49,8 +49,10 @@ def module(path):
             table[key] = identity
     def identity(name):
         parts = name.split('#')
-        if len(parts) != 3:
-            raise ValueError(f'unsupported symbol encoding {name!r}')
+        # Killzone: some libc symbols are plain names (no NID#lib#mod encoding); they are not
+        # cross-module imports/exports, so they carry no identity.
+        if len(parts) != 3 or parts[1] not in libraries or parts[2] not in modules:
+            return None
         n, lib, mod = parts
         return (n, libraries[lib], modules[mod])
     symbols = []
@@ -107,7 +109,8 @@ def link(game, out):
     main_libraries = {identity:key for key,identity in main['libraries'].items()}
     main_modules = {identity:key for key,identity in main['modules'].items()}
     def imported(symbol):
-        key = symbol['identity']
+        # Killzone: an undefined symbol with a plain (non-encoded) name resolves by name.
+        key = symbol['identity'] if symbol['identity'] is not None else ('?', symbol['name'], '')
         if key not in identities:
             n,lib,mod = key
             name = (f'{n}#{main_libraries[lib]}#{main_modules[mod]}'

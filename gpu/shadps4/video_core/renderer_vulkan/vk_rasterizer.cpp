@@ -22,6 +22,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
+#include "video_core/renderer_vulkan/kzsf_cpu_profile.h"
 #include "gow3_threads.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -267,6 +268,12 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     // gow3: the G-buffer pass (5+ color targets) holds the scene depth, and its constants the
     // main camera (shadow passes bind the same layout with the light's camera).
     gbuffer_draw = camera_motion->Enabled() && std::popcount(key.mrt_mask) >= 5 && db_desc.first;
+    if(camera_motion->KillzoneNative() && db_desc.first) {
+        const auto& candidate=texture_cache.GetImage(db_desc.first);
+        if(candidate.info.pixel_format==vk::Format::eD32SfloatS8Uint &&
+           candidate.info.size.width==1920 && candidate.info.size.height==1080)
+            camera_motion->OnGBufferPass(db_desc.first);
+    }
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
     }
@@ -913,6 +920,7 @@ bool Rasterizer::FilterDrawPasses() const {
 }
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
+    CpuRenderProfile::Span cpu{CpuRenderProfile::Filter};
     RENDERER_TRACE;
     Gow3Stats::draws.fetch_add(1, std::memory_order_relaxed);
 
@@ -932,6 +940,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* pre
             return;
         }
     }
+    cpu.Step(CpuRenderProfile::Pipeline);
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline({}, prepared);
     const PreparedDraw* used_prepared = pipeline_cache.UsedPrepared();
     if (prepared) {
@@ -946,6 +955,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* pre
         PostDraw(pipeline, used_prepared, is_indexed, index_offset);
         return;
     }
+    cpu.Finish(); // DrawRecord has its own non-overlapping stages.
     DrawRecord(pipeline, used_prepared, is_indexed, index_offset);
 }
 
@@ -981,6 +991,7 @@ void Rasterizer::DiagPassBoundary(bool force) {
 
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
+    CpuRenderProfile::Span cpu{CpuRenderProfile::Targets};
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
@@ -989,7 +1000,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const auto& regs = Regs();
     // gow3: the pass copying a finished frame to a display buffer; the previous draw's
     // target is that frame.
-    if (camera_motion->Enabled() && regs.color_buffers[0] &&
+    if ((camera_motion->Enabled() || GpuProfiler::Get()) && regs.color_buffers[0] &&
         FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address())) {
         scene_started = false;
         camera_motion->OnDisplayPass(cb_descs[0].first);
@@ -1009,6 +1020,13 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     motion_geometry = 0;
 
     PrepareRenderState(pipeline);
+    if(camera_motion->KillzoneNative() && std::popcount(pipeline->GetGraphicsKey().mrt_mask)==2) {
+        const auto* pixel=pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        const auto& viewport=regs.viewports[0];
+        if(pixel) upscaler->OnKillzonePost(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
+            pixel->pgm_hash,cb_descs[0].first,cb_descs[1].first,bool(db_desc.first),
+            UiComposition::NativeViewport(viewport.xscale*2,viewport.yscale*2));
+    }
     if (upscaler->Enabled() && std::popcount(pipeline->GetGraphicsKey().mrt_mask) == 1) {
         const auto& viewport = Regs().viewports[0];
         upscaler->OnDraw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
@@ -1019,6 +1037,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // gow3: vertex and index buffers are resolved while the helper binds textures (their
     // commands are recorded after BeginRendering, as before).
     draw_inputs = {pipeline, draw_prepared, index_offset, is_indexed, true, false};
+    cpu.Step(CpuRenderProfile::Resources);
     const bool bound = BindResources(pipeline);
     bind_prepared = nullptr; // indirect draws and dispatches bind without prepared sharps
     const bool inputs_resolved = draw_inputs.resolved;
@@ -1026,7 +1045,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if (!bound) {
         return;
     }
+    cpu.Step(CpuRenderProfile::RenderState);
     const auto state = BeginRendering(pipeline);
+    cpu.Step(CpuRenderProfile::Geometry);
 
     if (!inputs_resolved) {
         ResolveVertexBuffers(pipeline, draw_prepared);
@@ -1130,6 +1151,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
+    cpu.Step(CpuRenderProfile::Commands);
     pipeline->BindResources(set_writes, push_data);
     // gow3: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
@@ -1313,6 +1335,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
 }
 
 void Rasterizer::DispatchDirect() {
+    CpuRenderProfile::Span cpu{CpuRenderProfile::ComputePipeline};
     RENDERER_TRACE;
     Gow3Stats::dispatches.fetch_add(1, std::memory_order_relaxed);
     // gow3: like draws, handed to the draw recording thread after the pipeline selection.
@@ -1328,10 +1351,12 @@ void Rasterizer::DispatchDirect() {
         PostDraw(pipeline, nullptr, false, 0, &CsRegs());
         return;
     }
+    cpu.Finish();
     DispatchRecord(pipeline);
 }
 
 void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
+    CpuRenderProfile::Span cpu{CpuRenderProfile::ComputeSetup};
     FrameCapture::Poll();
     gbuffer_draw = false;
 
@@ -1357,10 +1382,12 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         return;
     }
 
+    cpu.Step(CpuRenderProfile::ComputeResources);
     if (!BindResources(pipeline)) {
         return;
     }
 
+    cpu.Step(CpuRenderProfile::ComputeCommands);
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
@@ -2118,6 +2145,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                                      constant_ring->Data(ring->offset), ring->size);
             }
             if (!desc.IsSpecial()) {
+                if(ring->size==640 && camera_motion->KillzoneNative())
+                    camera_motion->OnKillzoneConstants(reinterpret_cast<const float*>(constant_ring->Data(ring->offset)));
                 if (ring->size == 864 && gbuffer_draw &&
                     memory->IsValidGpuMapping(ring->address, 0)) {
                     camera_motion->OnConstants(reinterpret_cast<const float*>(ring->address));
@@ -2179,6 +2208,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         } else {
             const auto vsharp =
                 prepared ? prepared->buffer_sharps[buffer_index] : desc.GetSharp(stage);
+            if(vsharp.GetSize()==640 && camera_motion->KillzoneNative() &&
+               memory->IsValidGpuMapping(vsharp.base_address,640))
+                camera_motion->OnKillzoneConstants(reinterpret_cast<const float*>(vsharp.base_address));
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
@@ -2481,11 +2513,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                     continue;
                 }
             }
-            // The image is either bound as storage in a separate descriptor or bound as render
-            // target in feedback loop. Depth images are excluded because they can't be bound as
-            // storage and feedback loop doesn't make sense for them
-            if ((binding.force_general || binding.is_target) && !image.info.props.is_depth) {
-                if (instance.IsAttachmentFeedbackLoopLayoutSupported() && image.binding.is_target) {
+            // Sampling an attachment requires the descriptor and attachment to agree
+            // on the layout, including depth attachments sampled by this draw.
+            if (binding.force_general || binding.is_target) {
+                if (instance.IsAttachmentFeedbackLoopLayoutSupported() && image.binding.is_target &&
+                    !image.info.props.is_depth) {
                     barrier |= runtime.Transit(
                         &image, vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT,
                         vk::PipelineStageFlagBits2::eAllGraphics, vk::AccessFlagBits2::eShaderRead);
@@ -2612,7 +2644,11 @@ Rasterizer::BeginSignature Rasterizer::MakeBeginSignature(const GraphicsPipeline
 bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedStage* prepared,
                                      u32 first_image_idx, bool& barrier, TextureSet*& slot) {
     const u32 count = static_cast<u32>(stage.images.size());
-    if (!prepared || count == 0 || count > TextureSet::MaxImages ||
+    static const bool direct_memo=[] {
+        const char* value=std::getenv("KZSF_DIRECT_TEXTURE_MEMO");
+        return value && value[0]=='1';
+    }();
+    if ((!prepared && !direct_memo) || count == 0 || count > TextureSet::MaxImages ||
         Gow3Toggle::Disabled(Gow3Toggle::TextureSetMemo) || FrameCapture::Active()) {
         return false;
     }
@@ -2621,7 +2657,15 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
             return false;
         }
     }
-    u64 key = XXH3_64bits_withSeed(prepared->image_hashes, count * sizeof(u64),
+    // The stable direct path has no PreparedStage. Read fresh descriptors here;
+    // reuse only the resolved views, under the same lifetime/freshness checks.
+    std::array<u64,TextureSet::MaxImages> direct_hashes{};
+    const u64* hashes=prepared ? prepared->image_hashes : direct_hashes.data();
+    if(!prepared) for(u32 i=0;i<count;++i) {
+        const auto& resource=stage.images[i];
+        direct_hashes[i]=ImageDescHash(resource.GetSharp(stage),resource);
+    }
+    u64 key = XXH3_64bits_withSeed(hashes, count * sizeof(u64),
                                    reinterpret_cast<u64>(&stage));
     key |= 1; // 0 marks an empty slot
     auto& set = texture_sets[key % texture_sets.size()];
@@ -2631,7 +2675,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
                        set.generation == generation &&
                        set.scene_generation == scene_targets->Generation() &&
                        std::equal(set.hashes.begin(), set.hashes.begin() + count,
-                                  prepared->image_hashes);
+                                  hashes);
     if (!match) {
         ++texture_set_why[set.key != key ? 0 : set.generation != generation ? 1 : 3];
         ++texture_set_misses;
@@ -2639,7 +2683,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
         set.stage = &stage;
         set.count = 0;
         set.generation = ~0ull;
-        std::copy_n(prepared->image_hashes, count, set.hashes.begin());
+        std::copy_n(hashes, count, set.hashes.begin());
         return false;
     }
     // Every image still has the backing its view belongs to and needs no refresh.
@@ -2697,7 +2741,8 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
     // gow3: RenderStateMemo (see BeginMemo).
-    const bool memo_on = !Gow3Toggle::Disabled(Gow3Toggle::RenderStateMemo) && !FrameCapture::Active();
+    const bool memo_on = !Gow3Toggle::Disabled(Gow3Toggle::RenderStateMemo) &&
+                         !FrameCapture::Active() && !scene_debug_frame;
     if (Gow3Stats::enabled && ((begin_memo_hits + begin_memo_misses) & 0x3FFFF) == 0x3FFFF) {
         std::printf("Render state memo: %llu hits, %llu misses; texture sets: %llu hits, %llu "
                     "misses\n",
@@ -2768,6 +2813,18 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     std::pair<vk::ImageView, vk::ImageLayout> original_color{};
     const auto& regs = Regs();
     const auto& key = pipeline->GetGraphicsKey();
+    // Killzone's full-size depth prepass precedes its six-MRT G-buffer. Starting
+    // reduction at the G-buffer would import depth rasterized at native pixel
+    // centers, which cannot reproduce depth/coverage at reduced pixel centers.
+    // Keep both passes on the same grid. The separate Killzone Quality opt-in
+    // is the only Killzone mode with RasterScaling() enabled.
+    if (camera_motion->KillzoneNative() && upscaler->RasterScaling() &&
+        db_desc.first && db_desc.first == camera_motion->Depth() &&
+        scene_targets->EligibleScene(texture_cache.GetImage(db_desc.first))) {
+        const auto& viewport = regs.viewports[0];
+        if (UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2))
+            scene_started = true;
+    }
     if (std::popcount(key.mrt_mask & 0x7f) >= 5 && db_desc.first &&
         scene_targets->EligibleScene(texture_cache.GetImage(db_desc.first))) scene_started = true;
     // A proxy attachment cannot represent MSAA or a feedback loop that reads the
@@ -2778,11 +2835,13 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     const bool debug_pass = scene_debug_frame && scene_started;
     std::string why;
     if (debug_pass) {
-        why = fmt::format("pass vs {:08x} ps {:08x} mrt {:#x} samples {} raster_scaling {}:",
+        why = fmt::format("pass vs {:08x} ps {:08x} mrt {:#x} samples {} raster_scaling {} ztest {} zwrite {} zfunc {}:",
                           pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
                           key.mrt_mask ? pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash
                                        : 0,
-                          key.mrt_mask, u32(key.num_samples), upscaler->RasterScaling());
+                          key.mrt_mask, u32(key.num_samples), upscaler->RasterScaling(),
+                          u32(regs.depth_control.depth_enable),u32(regs.depth_control.depth_write_enable),
+                          u32(regs.depth_control.depth_func));
     }
     // Only this pass's attachments: slots past the mask's width keep earlier passes' targets,
     // often the G-buffer images the lighting passes sample (bound), which kept those native.
@@ -2933,7 +2992,9 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         // Stencil writes can be enabled while depth writes are off.
         const bool stencil_write =
             has_stencil && regs.depth_control.stencil_enable && !desc.view_info.is_storage;
-        const auto new_layout = desc.view_info.is_storage
+        const auto new_layout = image.binding.is_bound
+                                    ? vk::ImageLayout::eGeneral
+                                : desc.view_info.is_storage
                                     ? has_stencil ? vk::ImageLayout::eDepthStencilAttachmentOptimal
                                                   : vk::ImageLayout::eDepthAttachmentOptimal
                                 : stencil_write
@@ -2954,9 +3015,13 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         }
         if (!reduced) needs_barrier |= runtime.Transit(&image, new_layout,
                                          vk::PipelineStageFlagBits2::eEarlyFragmentTests |
-                                             vk::PipelineStageFlagBits2::eLateFragmentTests,
+                                             vk::PipelineStageFlagBits2::eLateFragmentTests |
+                                             (image.binding.is_bound ? vk::PipelineStageFlagBits2::eAllGraphics
+                                                                     : vk::PipelineStageFlags2{}),
                                          vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
-                                             vk::AccessFlagBits2::eDepthStencilAttachmentRead,
+                                             vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                                             (image.binding.is_bound ? vk::AccessFlagBits2::eShaderRead
+                                                                     : vk::AccessFlags2{}),
                                          desc.view_info.range);
 
         state.width = std::min<u32>(state.width, image.info.size.width);

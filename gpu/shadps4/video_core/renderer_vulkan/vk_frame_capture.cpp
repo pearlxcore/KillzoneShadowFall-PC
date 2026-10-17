@@ -118,6 +118,7 @@ void Write(VAddr presented) {
         return;
     }
     std::fprintf(f, "presented buffer %#llx\n", static_cast<unsigned long long>(presented));
+    std::fprintf(f, "capture schema 2 float_digits 9\n");
     u32 index = 0;
     for (const auto& e : entries) {
         if (e.compute) {
@@ -152,6 +153,7 @@ void Write(VAddr presented) {
     std::fclose(f);
     std::printf("Frame capture: %zu passes written to %s\n", entries.size(), path.c_str());
     SetResult(std::format("Frame captured ({} passes): {}", entries.size(), path));
+    std::fflush(stdout);
 }
 
 } // namespace
@@ -304,7 +306,9 @@ void FrameCapture::Buffer(u64 stage_hash, u32 slot, VAddr address, const void* d
         if (i % 8 == 0) {
             out += std::format("\n    [{:3}]", i);
         }
-        out += std::format(" {:12.6g}", words[i]);
+        // Nine significant digits round-trip a float. Six rounded far-plane projection
+        // terms to -1, hiding the difference between finite and infinite scene depth.
+        out += std::format(" {:15.9g}", words[i]);
     }
     pending_buffers.push_back(std::move(out));
 }

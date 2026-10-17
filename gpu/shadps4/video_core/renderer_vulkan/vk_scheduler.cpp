@@ -269,6 +269,11 @@ void Scheduler::KickRecording(bool force) {
     }
     // Callers kick where nobody holds the raw command buffer: deferral resumes.
     direct_mode = false;
+    // A kick on another thread may be between handing its chunk to the queue and re-acquiring
+    // a replacement; the dereferences below must not see that null pointer.
+    if (!record_chunk) {
+        record_chunk = AcquireChunk();
+    }
     // Batches of tens of KiB keep the queue handoff cheap relative to the work it carries.
     if (!force && full_chunks.empty() && record_chunk->Size() < 32 * 1024) {
         return;
@@ -474,10 +479,14 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
 
-    static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks = {
-        vk::PipelineStageFlagBits::eAllCommands,
-        vk::PipelineStageFlagBits::eColorAttachmentOutput,
-    };
+    // A wait can protect transfer reads (the presenter blits the completed game
+    // frame), not just color attachment writes. Cover every supported semaphore
+    // slot and every stage consuming its protected resources.
+    static constexpr auto wait_stage_masks = [] {
+        std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(SubmitInfo::wait_semas)>> masks;
+        masks.fill(vk::PipelineStageFlagBits::eAllCommands);
+        return masks;
+    }();
 
     const vk::TimelineSemaphoreSubmitInfo timeline_si = {
         .waitSemaphoreValueCount = info.num_wait_semas,
@@ -498,6 +507,16 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     ImGui::Core::TextureManager::Submit();
+    if (std::getenv("GOW3_PRESENT_TRACE") && info.num_wait_semas) {
+        std::fprintf(stderr,"WSI submit: cmd=%p waits=%u signals=%u\n",
+                     (void*)(VkCommandBuffer)current_cmdbuf,info.num_wait_semas,info.num_signal_semas);
+        for (u32 i=0;i<info.num_wait_semas;++i)
+            std::fprintf(stderr,"  wait %p tick=%llu\n",(void*)(VkSemaphore)info.wait_semas[i],
+                         (unsigned long long)info.wait_ticks[i]);
+        for (u32 i=0;i<info.num_signal_semas;++i)
+            std::fprintf(stderr,"  signal %p tick=%llu\n",(void*)(VkSemaphore)info.signal_semas[i],
+                         (unsigned long long)info.signal_ticks[i]);
+    }
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 

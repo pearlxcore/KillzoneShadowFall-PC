@@ -59,6 +59,10 @@ StagingBufferPool::~StagingBufferPool() = default;
 
 StagingBufferRef StagingBufferPool::Request(u64 size, MemoryType type, u64 alignment,
                                             bool deferred) {
+    // Image transfers using 128-bit texels require 16-byte buffer offsets.
+    // Consecutive allocations can otherwise leave an 8-byte-aligned offset,
+    // even when the buffer itself starts aligned. Keep stronger caller alignment.
+    alignment = std::max(alignment, u64{16});
     Ring& ring = rings[u32(type)];
     if (deferred || size > BLOCK_SIZE) {
         return RequestLarge(size, type, deferred);

@@ -79,6 +79,18 @@ struct InfoPersistent {
     InfoPersistent() = default;
     InfoPersistent(HwStage hw_stage_, SwStage sw_stage_, u64 pgm_hash_)
         : hw_stage{hw_stage_}, sw_stage{sw_stage_}, pgm_hash{pgm_hash_} {}
+
+    // Serialize logical contents, never small_vector's process-local pointers.
+    // Constness follows Self, so the same field order is used for reading/writing.
+    template <typename Self, typename Visit>
+    static void PersistentFields(Self& self, Visit&& visit) {
+        visit(self.buffers); visit(self.images); visit(self.samplers); visit(self.fmasks);
+        visit(self.ud_mask); visit(self.fetch_shader_sgpr_base);
+        visit(self.shared_memory_scratch_size); visit(self.pgm_hash);
+        visit(self.tess_consts_dword_offset); visit(self.tess_consts_ptr_base);
+        visit(self.hw_stage); visit(self.sw_stage); visit(self.mrt_mask);
+        visit(self.has_fetch_shader); visit(self.has_bitwise_xor); visit(self.uses_dma);
+    }
 };
 
 struct Info : InfoPersistent {

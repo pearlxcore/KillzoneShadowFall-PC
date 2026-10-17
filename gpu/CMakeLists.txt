@@ -197,12 +197,13 @@ if (WIN32)
     target_compile_options(atrac9 PRIVATE -w)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
     add_executable(gow3-probe ../src/probe.c ${GOW3_RUNTIME} ../src/compat_win.c ../src/cpu_check.c ../src/vulkan_smoke.c
-        ../src/isa_rewrite.c ../src/isa_emulate.c
+        ../src/isa_rewrite.c ../src/isa_emulate.c ../src/tsc_patch.c ../src/allocation_trace.cpp
         ../packaging/windows/gow3-probe.rc)
     set_target_properties(gow3-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(gow3-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
     target_include_directories(gow3-probe PRIVATE .. ../src)
-    target_link_libraries(gow3-probe PRIVATE gow3gpu atrac9 onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(gow3-probe PRIVATE gow3gpu atrac9 Zydis::Zydis onecore bcrypt ws2_32 -pthread)
+    target_link_options(gow3-probe PRIVATE -Wl,--wrap=__cxa_throw)
     # The PS4 range (64 GiB - 1 TiB) must stay free: no high-entropy ASLR for heaps and stacks.
     # The guest main thread runs on the process stack: 16 MiB, committed (no stack probes).
     target_link_options(gow3-probe PRIVATE -Wl,--disable-high-entropy-va "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")

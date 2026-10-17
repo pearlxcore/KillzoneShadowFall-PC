@@ -19,8 +19,40 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     }
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED);
+    // Normal launch: a focusable window centred on the primary display. GOW3_MONITOR=<index>
+    // optionally places it on another monitor (0 = first display; SDL display IDs are opaque, so
+    // the value is an index into SDL_GetDisplays()). GOW3_WINDOW_FOCUS=0 makes the window
+    // non-focusable so it will not steal the foreground from a game on another display.
+    const char* monitor_env = std::getenv("GOW3_MONITOR");
+    SDL_Rect display{};
+    bool placed = false;
+    if (monitor_env) {
+        int display_count = 0;
+        SDL_DisplayID* displays = SDL_GetDisplays(&display_count);
+        const int index = std::atoi(monitor_env);
+        if (displays && index >= 0 && index < display_count) {
+            placed = SDL_GetDisplayBounds(displays[index], &display);
+            if (placed) {
+                std::printf("Window: GOW3_MONITOR=%s -> display %d at %d,%d %dx%d (of %d)\n",
+                            monitor_env, index, display.x, display.y, display.w, display.h, display_count);
+            }
+        }
+        if (!placed) {
+            LOG_WARNING(Frontend, "GOW3_MONITOR={} is out of range ({} display(s))", monitor_env, display_count);
+        }
+        SDL_free(displays);
+    }
+    const char* focus_env = std::getenv("GOW3_WINDOW_FOCUS");
+    if (focus_env && focus_env[0] == '0') {
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
+    }
+    if (placed) {
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, display.x + (display.w - width_) / 2);
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, display.y + (display.h - height_) / 2);
+    } else {
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);
+        SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED);
+    }
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width_);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);

@@ -6,18 +6,25 @@
 #include <string.h>
 #include <inttypes.h>
 #include "runtime.h"
+#include "kzsf_timing.h"
 #include "cpu_check.h"
 #include "isa_rewrite.h"
 #include "orb_hook.h"
 #include "cheat_hook.h"
 #include "actor_hook.h"
 #include "damage_hook.h"
+#include "kzsf_cheats.h"
+#include "tsc_patch.h"
 #include "gpu/gow3gpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include "kzsf_cheats_win.h"
+#include "kzsf_turn_speed_win.h"
+#include "kzsf_player_turn_win.h"
+#include <tlhelp32.h>
 #else
 #include <sys/mman.h>
 #include <malloc.h>
@@ -36,16 +43,159 @@ typedef struct { uint64_t target, kind, value, addend; } Reloc;
 static char (*names)[128];
 static uint64_t import_count;
 static unsigned char *image;
+#ifdef _WIN32
+static unsigned char *kzsf_health_trace_site;
+static unsigned kzsf_health_trace_count;
+static int kzsf_player_protection;
+static unsigned kzsf_player_protection_reported;
+static int kzsf_turn_speed_enabled;
+static int kzsf_turn_log;
+static int kzsf_player_turn_enabled;
+static unsigned kzsf_player_turn_events;
+static unsigned kzsf_turn_speed_reported;
+/* Gameplay verification for the engine look-rate hooks: per-axis windowed maximum of the
+ * engine's own value (before scaling) and of the value actually stored. The local-input
+ * store runs once per frame while the stick is deflected, so a walk-versus-sprint
+ * comparison shows whether the engine itself lowers the rate while sprinting. */
+static volatile uint32_t kzsf_rate_in[2], kzsf_rate_out[2], kzsf_rate_events;
+static void kzsf_rate_max(volatile uint32_t *slot,float magnitude) {
+    if(!isfinite(magnitude) || magnitude<0.0f) return;
+    uint32_t bits,current;
+    memcpy(&bits,&magnitude,sizeof(bits));
+    current=__atomic_load_n(slot,__ATOMIC_RELAXED);
+    for(;;) {
+        float have;
+        memcpy(&have,&current,sizeof(have));
+        if(have>=magnitude) return;
+        if(__atomic_compare_exchange_n(slot,&current,bits,0,__ATOMIC_RELAXED,__ATOMIC_RELAXED)) return;
+    }
+}
+static float kzsf_rate_take(volatile uint32_t *slot) {
+    uint32_t bits=__atomic_exchange_n(slot,(uint32_t)0,__ATOMIC_RELAXED);
+    float value;
+    memcpy(&value,&bits,sizeof(value));
+    return value;
+}
+static void kzsf_rate_log(int pitch,float in,float out,unsigned user) {
+    kzsf_rate_max(&kzsf_rate_in[pitch],in);
+    kzsf_rate_max(&kzsf_rate_out[pitch],out);
+    if(__atomic_add_fetch(&kzsf_rate_events,1,__ATOMIC_RELAXED)&0xff) return;
+    fprintf(stderr,"KILLZONE_RATE window: heading engine %.5f stored %.5f | pitch engine %.5f stored %.5f rad/s (user %u)\n",
+            (double)kzsf_rate_take(&kzsf_rate_in[0]),(double)kzsf_rate_take(&kzsf_rate_out[0]),
+            (double)kzsf_rate_take(&kzsf_rate_in[1]),(double)kzsf_rate_take(&kzsf_rate_out[1]),user);
+    fflush(stderr);
+}
+static int kzsf_turn_write(void *opaque,uintptr_t address,const void *data,size_t size) {
+    (void)opaque; SIZE_T written=0;
+    return WriteProcessMemory(GetCurrentProcess(),(void *)address,data,size,&written) && written==size;
+}
+static int kzsf_cheat_read(void *opaque,uintptr_t address,void *out,size_t size) {
+    (void)opaque; SIZE_T got=0;
+    return ReadProcessMemory(GetCurrentProcess(),(void *)address,out,size,&got) && got==size;
+}
+static int handle_kzsf_player_damage(CONTEXT *c) {
+    int result=kzsf_handle_player_damage(c,(uintptr_t)image,kzsf_cheat_read,NULL);
+    if(result==2) {
+        if(!__atomic_exchange_n(&kzsf_player_protection_reported,1,__ATOMIC_RELAXED)) {
+            fprintf(stderr,"Killzone: blocked player damage using engine IsPlayer (component=%p)\n",(void *)c->Rdi);
+            fflush(stderr);
+        }
+    }
+    return result!=0;
+}
+static void trace_kzsf_health(const CONTEXT *c) {
+    unsigned event=__atomic_fetch_add(&kzsf_health_trace_count,1,__ATOMIC_RELAXED);
+    if(event>=64) return;
+    unsigned char entry[144]={0}, resource[128]={0};
+    uintptr_t resource_address=0; SIZE_T got=0;
+    ReadProcessMemory(GetCurrentProcess(),(void *)c->Rax,entry,sizeof(entry),&got);
+    ReadProcessMemory(GetCurrentProcess(),(void *)(c->Rbp-0x258),&resource_address,sizeof(resource_address),&got);
+    ReadProcessMemory(GetCurrentProcess(),(void *)resource_address,resource,sizeof(resource),&got);
+    fprintf(stderr,"HEALTH_TRACE #%u r10=%016llx hp_address=%016llx manager=%016llx resource=%016llx\n",
+            event,c->R10,c->Rax,c->R14,(unsigned long long)resource_address);
+    float hp,damage; memcpy(&hp,&c->Xmm2,4); memcpy(&damage,&c->Xmm0,4);
+    fprintf(stderr,"  values: current=%g incoming=%g r12=%016llx r13=%016llx\n",(double)hp,(double)damage,c->R12,c->R13);
+    fprintf(stderr,"  health entry:"); for(unsigned i=0;i<sizeof(entry);++i) fprintf(stderr,"%s%02x",i%16==0?"\n    ":" ",entry[i]);
+    fprintf(stderr,"\n  target resource:"); for(unsigned i=0;i<sizeof(resource);++i) fprintf(stderr,"%s%02x",i%16==0?"\n    ":" ",resource[i]);
+    fprintf(stderr,"\n  callers:");
+    uintptr_t frame=(uintptr_t)c->Rbp;
+    for(unsigned depth=0;depth<8 && frame;++depth) {
+        uintptr_t words[2];
+        if(!ReadProcessMemory(GetCurrentProcess(),(void *)frame,words,sizeof(words),&got) || got!=sizeof(words)) break;
+        fprintf(stderr," %016llx",(unsigned long long)words[1]);
+        if(words[0]<=frame) break;
+        frame=words[0];
+    }
+    fprintf(stderr,"\n"); fflush(stderr);
+}
+static const uint32_t virtual_tsc_sites[]={
+#include "kzsf_rdtsc_sites.inc"
+};
+static int virtual_tsc_enabled;
+static int virtual_tsc_site(uintptr_t address) {
+    if (!virtual_tsc_enabled || address<(uintptr_t)image) return 0;
+    uintptr_t offset=address-(uintptr_t)image;
+    size_t lo=0,hi=sizeof(virtual_tsc_sites)/sizeof(*virtual_tsc_sites);
+    while (lo<hi) {
+        size_t mid=lo+(hi-lo)/2;
+        if (virtual_tsc_sites[mid]<offset) lo=mid+1; else hi=mid;
+    }
+    return lo<sizeof(virtual_tsc_sites)/sizeof(*virtual_tsc_sites) && virtual_tsc_sites[lo]==offset;
+}
+#endif
 static size_t page_size;
 typedef struct { uint64_t base, size, init, tls_address, tls_memsz, tls_filesz, tls_module; } LinkedModule;
 static LinkedModule modules[16];
 static uint64_t module_count;
+static char native_module_names[16][128];
+static RuntimeNativeExport *native_exports;
+static uint64_t native_export_count;
 static int entered_game;
 static int gpu_enabled;
 static unsigned cpu_missing_sets; /* CPU_SET_* the host lacks; the guest code needs them rewritten */
 static IsaTable *isa_table; /* rewritten sites (--isa-rewrite); the fault handlers and the report read it */
 static void isa_report_hook(void) { isa_rewrite_report(isa_table, stdout); }
 int vulkan_smoke(void);
+static int trace_imports;
+#define TRACE_STUB_CAP 65536
+static unsigned char trace_stub_store[128*TRACE_STUB_CAP]; /* in the module: RIP-relative stores fit */
+static unsigned char *trace_pool;
+volatile uint32_t gow3_hle_last;
+/* Shared call-order ring: the tracer trampoline records the import index in call order,
+ * so a stall watchdog can name the most recent HLE calls. */
+static volatile uint32_t hle_seq;
+static uint32_t hle_ring[4096];
+/* Trampoline: record the import index, then jump to the resolved host function.
+ * Store-only (no register or stack state touched), so it cannot perturb a call. */
+static void build_trace_stub(unsigned char *o, uint32_t index, uintptr_t target) {
+#ifdef _WIN32
+    /* push rax; push rcx; lea rcx,[hle_ring]; eax=hle_seq++; and eax,4095;
+     * mov [rcx+rax*4],index; pop rcx; pop rax; jmp target */
+    uintptr_t ring=(uintptr_t)hle_ring, seq=(uintptr_t)&hle_seq;
+    int32_t d_lea=(int32_t)(ring-((uintptr_t)o+9));
+    int32_t d_seq1=(int32_t)(seq-((uintptr_t)o+15));
+    int32_t d_seq2=(int32_t)(seq-((uintptr_t)o+21));
+    size_t p=0;
+    o[p++]=0x50; o[p++]=0x51;
+    o[p++]=0x48; o[p++]=0x8D; o[p++]=0x0D; memcpy(o+p,&d_lea,4); p+=4;
+    o[p++]=0x8B; o[p++]=0x05; memcpy(o+p,&d_seq1,4); p+=4;
+    o[p++]=0xFF; o[p++]=0x05; memcpy(o+p,&d_seq2,4); p+=4;
+    o[p++]=0x25; { uint32_t m=4095; memcpy(o+p,&m,4); p+=4; }
+    o[p++]=0xC7; o[p++]=0x04; o[p++]=0x81; memcpy(o+p,&index,4); p+=4;
+    /* Per-thread last import for the watchdog/crash dumps: mov dword gs:[trace_off], index+1.
+     * Stored value is index+1 so 0 (untouched TlsSlot) reads as "no import traced yet". */
+    { uint32_t trace_off=runtime_thread_trace_offset(), plus=index+1;
+      o[p++]=0x65; o[p++]=0xC7; o[p++]=0x04; o[p++]=0x25; memcpy(o+p,&trace_off,4); p+=4; memcpy(o+p,&plus,4); p+=4; }
+    o[p++]=0x59; o[p++]=0x58;
+    int32_t rel=(int32_t)(target-((uintptr_t)o+p+5));
+    o[p++]=0xE9; memcpy(o+p,&rel,4); p+=4;
+#else
+    int32_t disp=(int32_t)((uintptr_t)&gow3_hle_last-((uintptr_t)o+10));
+    o[0]=0xC7; o[1]=0x05; memcpy(o+2,&disp,4); memcpy(o+6,&index,4); /* mov [gow3_hle_last], index */
+    int32_t rel=(int32_t)(target-((uintptr_t)o+15));
+    o[10]=0xE9; memcpy(o+11,&rel,4);                                /* jmp target */
+#endif
+}
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
 static uint64_t read64(FILE *f) {
@@ -83,8 +233,12 @@ static void protect(void *p, size_t size, unsigned flags) {
 }
 static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argument) {
     if (id >= import_count) fail("bad import trap index");
-    printf("STOP: first unsupported PS4 import: %s (index %u)\n", names[id], id);
-    printf("API: %s\n", runtime_import_name(names[id]));
+    /* One atomic write: guest threads print concurrently and would interleave it. */
+    char stop_line[256];
+    int stop_len=snprintf(stop_line,sizeof(stop_line),"STOP: first unsupported PS4 import: %s (index %u) API: %s\n",
+                          names[id],id,runtime_import_name(names[id]));
+    if (stop_len>0) fwrite(stop_line,1,(size_t)stop_len,stderr);
+    fflush(NULL);
     printf("Caller return offset: 0x%" PRIxPTR "; first argument: 0x%" PRIxPTR "\n",
            (uintptr_t)__builtin_return_address(0) - (uintptr_t)image, argument);
     uintptr_t caller=(uintptr_t)__builtin_return_address(0)-(uintptr_t)image;
@@ -126,6 +280,26 @@ static void describe_address(char *out, size_t size, uintptr_t address) {
     snprintf(out,size,"%p",(void *)address);
 }
 static int fatal_reported;
+/* KZSF 01.81: the pool assertion compares a type-gated node value, not
+ * necessarily a GPU fence. Use the fault registers, avoiding a guessed global chain. */
+static void dump_kzsf_pool(const CONTEXT *c) {
+    static const unsigned char signature[]={0x49,0x23,0x47,0x08,0x4c,0x39,0xe0,0x73,0x09,0xcd,0x41};
+    if (!image || c->Rip-(uintptr_t)image!=0x2e42da ||
+        memcmp(image+0x2e42d1,signature,sizeof(signature))) return;
+    unsigned char node[0x40]; SIZE_T got=0;
+    fprintf(stderr,"KZSF pool: manager=%016llx node=%016llx required=%llu compared=%llu\n",
+            c->R14,c->R15,c->R12,c->Rax);
+    if (!ReadProcessMemory(GetCurrentProcess(),(void *)(uintptr_t)c->R15,node,sizeof(node),&got) || got!=sizeof(node)) {
+        fprintf(stderr,"KZSF pool: node unreadable\n"); return;
+    }
+    uint64_t raw, start, prev, next; uint32_t lock;
+    memcpy(&raw,node+8,8); memcpy(&start,node+0x10,8);
+    memcpy(&prev,node+0x18,8); memcpy(&next,node+0x20,8); memcpy(&lock,node+0x30,4);
+    fprintf(stderr,"KZSF pool: type=%u raw=%016" PRIx64 " low60=%" PRIu64
+            " start=%016" PRIx64 " prev=%016" PRIx64 " next=%016" PRIx64 " lock=%u\n",
+            node[2]&3,raw,raw&UINT64_C(0x0fffffffffffffff),start,prev,next,lock);
+    if (gpu_enabled) gow3gpu_dump_write_range(c->R15,sizeof(node));
+}
 static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     if (__atomic_exchange_n(&fatal_reported,1,__ATOMIC_ACQ_REL)) { Sleep(INFINITE); }
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
@@ -140,6 +314,24 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
         fprintf(stderr,"Fault: exception 0x%08lx at %s (thread %lu)\n",record->ExceptionCode,where,GetCurrentThreadId());
     fprintf(stderr,"  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax,c->Rbx,c->Rcx,c->Rdx,c->Rsi,c->Rdi,c->Rbp,c->Rsp);
+#ifdef _WIN32
+    uint32_t hle_last=runtime_thread_trace_get();
+#else
+    uint32_t hle_last=gow3_hle_last;
+#endif
+    if (trace_imports && hle_last && hle_last-1 < import_count)
+        fprintf(stderr,"  last HLE import: %s (index %u)\n",names[hle_last-1],hle_last-1);
+    if (trace_imports && hle_seq) {
+        fprintf(stderr,"  recent HLE calls (oldest first):\n");
+        uint32_t total=hle_seq, first=total>4095 ? total-4095 : 0; unsigned shown=0;
+        for (uint32_t s=first;s<total && shown<40;++s) {
+            uint32_t index=hle_ring[s&4095];
+            if (index>=import_count) continue;
+            if (!strncmp(names[index],"T72hz6ffq08",11)) continue; /* yield */
+            fprintf(stderr,"    %s\n",names[index]); ++shown;
+        }
+    }
+    dump_kzsf_pool(c);
     if (gpu_enabled) gow3gpu_dump_guest_writes(info);
     /* rbp chain (guest and host code keep frame pointers). */
     uintptr_t rbp=(uintptr_t)c->Rbp;
@@ -166,6 +358,61 @@ static void isa_context_regs(CONTEXT *c, IsaRegs *regs, int to_context) {
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
+    if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled &&
+       record->ExceptionAddress==image+KZSF_PLAYER_TURN_SITE) {
+        float before[2],after[2];unsigned user;
+        if(kzsf_player_turn(info->ContextRecord,(uintptr_t)image,
+            gow3gpu_controller_turn_speed(),gow3gpu_controller_pitch_speed(),
+            kzsf_cheat_read,kzsf_turn_write,NULL,before,after,&user)) {
+            unsigned event=__atomic_add_fetch(&kzsf_player_turn_events,1,__ATOMIC_RELAXED);
+            if(event==1 || event%256==0) {
+                fprintf(stderr,"KILLZONE_PLAYER_TURN event=%u user=%u heading_factor %.5f -> %.5f pitch_factor %.5f -> %.5f\n",
+                    event,user,(double)before[0],(double)after[0],(double)before[1],(double)after[1]);
+                fflush(stderr);
+            }
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        fprintf(stderr,"Killzone: player turn hook memory access failed\n");fflush(stderr);
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_turn_speed_enabled &&
+       (record->ExceptionAddress==image+KZSF_TURN_SITE ||
+        record->ExceptionAddress==image+KZSF_PITCH_SITE)) {
+        const int pitch=record->ExceptionAddress==image+KZSF_PITCH_SITE;
+        float engine_rate;
+        memcpy(&engine_rate,&info->ContextRecord->Xmm0,sizeof(engine_rate));
+        float applied=0.0f;
+        int percent=pitch ? gow3gpu_controller_pitch_speed() : gow3gpu_controller_turn_speed();
+        if(kzsf_engine_rate_store(info->ContextRecord,(uintptr_t)image,pitch,percent,
+                                  kzsf_turn_write,NULL,&applied)) {
+            if(kzsf_turn_log)
+                kzsf_rate_log(pitch,engine_rate,applied,(unsigned)info->ContextRecord->R14);
+            if(!__atomic_exchange_n(&kzsf_turn_speed_reported,1,__ATOMIC_RELAXED)) {
+                fprintf(stderr,"Killzone: engine %s-rate hook reached for local user %llu\n",
+                        pitch ? "pitch" : "heading",
+                        (unsigned long long)info->ContextRecord->R14);
+                fflush(stderr);
+            }
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        fprintf(stderr,"Killzone: engine %s-rate store failed\n",pitch ? "pitch" : "heading");
+        fflush(stderr);
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_player_protection &&
+       record->ExceptionAddress==image+KZSF_DAMAGE_SITE && handle_kzsf_player_damage(info->ContextRecord))
+        return EXCEPTION_CONTINUE_EXECUTION;
+    if (code==EXCEPTION_BREAKPOINT && kzsf_health_trace_site &&
+            record->ExceptionAddress==kzsf_health_trace_site) {
+        trace_kzsf_health(info->ContextRecord);
+        info->ContextRecord->Rip=(DWORD64)(uintptr_t)kzsf_health_trace_site+1;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (code==EXCEPTION_BREAKPOINT && virtual_tsc_site((uintptr_t)record->ExceptionAddress)) {
+        uint64_t ticks=runtime_read_tsc();
+        info->ContextRecord->Rax=(uint32_t)ticks;
+        info->ContextRecord->Rdx=(uint32_t)(ticks>>32);
+        info->ContextRecord->Rip=(DWORD64)(uintptr_t)record->ExceptionAddress+2;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     if (code==EXCEPTION_BREAKPOINT && isa_table) {
         /* An int3 ISA site: emulated here; any other breakpoint goes on to the report below. */
         IsaRegs regs;
@@ -209,9 +456,204 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }
+/* Stall watchdog: after GOW3_STALL_SECONDS, dump every thread's RIP so a hang can be
+ * located (guest offsets when the RIP is inside the image). */
+/* Print every process thread's RIP (guest offsets when inside the image) and, with
+ * GOW3_TRACE_IMPORTS=1, the last HLE import that thread called (read from its TEB slot). */
+/* NtQueryInformationThread(ThreadBasicInformation) requires exactly the native struct size
+ * (48 bytes on x64: AffinityMask/Priority/BasePriority included) or fails STATUS_INFO_LENGTH_MISMATCH. */
+typedef struct { LONG ExitStatus; ULONG Pad; void *TebBaseAddress; void *UniqueProcess; void *UniqueThread;
+                 uintptr_t AffinityMask; LONG Priority; LONG BasePriority; } ThreadBasicInfo;
+static LONG (NTAPI *query_thread_info)(HANDLE, LONG, PVOID, ULONG, PULONG);
+static void dump_thread_rips(void) {
+    char where[MAX_PATH+64];
+    uint32_t trace_off=runtime_thread_trace_offset();
+    if (!query_thread_info)
+        query_thread_info=(LONG (NTAPI *)(HANDLE,LONG,PVOID,ULONG,PULONG))(void *)GetProcAddress(GetModuleHandleA("ntdll.dll"),"NtQueryInformationThread");
+    HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
+    THREADENTRY32 entry; entry.dwSize=sizeof(entry);
+    if (snapshot!=INVALID_HANDLE_VALUE && Thread32First(snapshot,&entry)) {
+        do {
+            if (entry.th32OwnerProcessID!=GetCurrentProcessId()) continue;
+            if (entry.th32ThreadID==GetCurrentThreadId()) continue; /* never suspend ourselves */
+            HANDLE thread=OpenThread(THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,entry.th32ThreadID);
+            if (!thread) continue;
+            SuspendThread(thread);
+            CONTEXT context; memset(&context,0,sizeof(context));
+            context.ContextFlags=CONTEXT_CONTROL|CONTEXT_INTEGER;
+            if (GetThreadContext(thread,&context)) {
+                describe_address(where,sizeof(where),(uintptr_t)context.Rip);
+                uint32_t last=0;
+                ThreadBasicInfo tbi; memset(&tbi,0,sizeof(tbi));
+                if (query_thread_info && query_thread_info(thread,0,&tbi,sizeof(tbi),NULL)==0 && tbi.TebBaseAddress)
+                    last=*(volatile uint32_t *)((char *)tbi.TebBaseAddress+trace_off);
+                /* The tracer stores index+1; 0 means the thread never entered a traced import. */
+                char lastbuf[160]="(none)";
+                if (last && last-1<import_count)
+                    snprintf(lastbuf,sizeof(lastbuf),"%s (%s)",names[last-1],runtime_import_name(names[last-1]));
+                fprintf(stderr,"  tid=%lu rip=%s rsp=%p rax=%p rdi=%p last=%s\n",
+                        (unsigned long)entry.th32ThreadID,where,(void *)context.Rsp,
+                        (void *)context.Rax,(void *)context.Rdi,lastbuf);
+            }
+            ResumeThread(thread);
+            CloseHandle(thread);
+        } while (Thread32Next(snapshot,&entry));
+        CloseHandle(snapshot);
+    }
+}
+/* Freeze watchdog: if no frame is presented for GOW3_FREEZE_SECONDS, dump the thread RIPs
+ * (and exit when GOW3_FREEZE_EXIT=1), so a hang reports itself instead of waiting. */
+extern unsigned long long gow3gpu_flip_count(void);
+/* GPU-side equeue state (registered events, blocked waiters, recent activity). */
+extern void gow3gpu_equeue_dump(void);
+static DWORD WINAPI freeze_watchdog(LPVOID argument) {
+    DWORD seconds=(DWORD)(uintptr_t)argument;
+    unsigned long long last=gow3gpu_flip_count();
+    unsigned stalled=0;
+    for (;;) {
+        Sleep(1000);
+        unsigned long long now=gow3gpu_flip_count();
+        if (now!=last) { last=now; stalled=0; continue; }
+        if (++stalled<seconds) continue;
+        fprintf(stderr,"STOP: no frame presented for %lu s (frozen); hle_seq=%u; thread RIPs:\n",
+                (unsigned long)seconds,(unsigned)hle_seq);
+        dump_thread_rips();
+        runtime_sema_dump(); /* blocked waiters + the semaphore activity just before the stall */
+        if (gpu_enabled) gow3gpu_equeue_dump(); /* GPU/kernel event-queue waiters and last events */
+        runtime_report(); /* includes files opened/reads: tells a stalled load from a stalled dialog */
+        if (trace_imports && hle_seq) {
+            fprintf(stderr,"  recent HLE calls (oldest first):\n");
+            uint32_t total=hle_seq, first=total>4095 ? total-4095 : 0; unsigned shown=0;
+            for (uint32_t s=first;s<total && shown<40;++s) {
+                uint32_t index=hle_ring[s&4095];
+                if (index>=import_count) continue;
+                if (!strncmp(names[index],"T72hz6ffq08",11)) continue; /* yield */
+                fprintf(stderr,"    %s\n",names[index]); ++shown;
+            }
+        }
+        fflush(NULL);
+        stalled=0;
+        if (getenv("GOW3_FREEZE_EXIT")) TerminateProcess(GetCurrentProcess(),4);
+    }
+}
+/* Reports every GOW3_STALL_SECONDS (repeat), so a hang that starts after the first interval is
+ * still captured. GOW3_STALL_ONCE=1 restores the old single report. Set GOW3_STALL_SECONDS=0 to
+ * disable. Frames are still presented during a loading hang, so the freeze watchdog never fires. */
+static DWORD WINAPI stall_watchdog(LPVOID argument) {
+    DWORD seconds=(DWORD)(uintptr_t)argument;
+    if (!seconds) return 0;
+    unsigned reports=0;
+    for (;;) {
+        Sleep(seconds*1000);
+        ++reports;
+        fprintf(stderr,"STOP: stall watchdog report %u after %lu s; hle_seq=%u trace_imports=%d; pad reads=%u gamepad=%s; thread RIPs:\n",
+                reports,(unsigned long)seconds,(unsigned)hle_seq,trace_imports,runtime_pad_reads(),runtime_pad_name());
+        dump_thread_rips();
+        runtime_sema_dump();
+        if (gpu_enabled) gow3gpu_equeue_dump();
+        runtime_report();
+        uint32_t total=hle_seq;
+        if (total) {
+            fprintf(stderr,"  recent HLE calls (excluding yield, oldest first):\n");
+            uint32_t first=total>4095 ? total-4095 : 0;
+            unsigned shown=0;
+            for (uint32_t s=first;s<total && shown<160;++s) {
+                uint32_t index=hle_ring[s&4095];
+                if (index>=import_count) continue;
+                if (!strncmp(names[index],"T72hz6ffq08",11)) continue; /* scePthreadYield */
+                fprintf(stderr,"    %s\n",names[index]);
+                ++shown;
+            }
+        }
+        fflush(NULL);
+        if (getenv("GOW3_STALL_ONCE")) return 0;
+    }
+}
 /* Guest code reads its TCB with `mov rax, gs:[0]` (link_*.py rewrote fs:[0]); on Windows
  * the displacement becomes the TEB TLS slot that holds the guest TCB (runtime_thread.c). */
 uint32_t runtime_thread_tcb_offset(void);
+/* The guest converts its inline rdtsc to seconds with a constant baked for the retail PS4 TSC
+ * (~1.594 GHz). The guest runs natively, so rdtsc is this host's TSC (typically 3-5 GHz) and any
+ * time-derived gameplay runs too fast. Rewrite that constant to 1/host-TSC. Only the known value
+ * is touched; GOW3_TSC_HZ overrides the measured frequency. */
+#define GOW3_PS4_TSC_SECONDS 6.273525587907613e-10
+static uint64_t patch_guest_clock(unsigned char *img, uint64_t size, Segment *segments, uint64_t ns) {
+    const char *disabled=getenv("KZSF_ORIGINAL_CLOCK");
+    if (disabled && !strcmp(disabled,"1")) {
+        printf("Guest clock: original constants retained (recovery baseline)\n");
+        return 0;
+    }
+    uint64_t hz=0;
+    const char *env=getenv("GOW3_TSC_HZ");
+    if (env) hz=strtoull(env,NULL,10);
+    if (hz<100000000ull || hz>20000000000ull) {
+        uint64_t t0=__builtin_ia32_rdtsc(), n0=runtime_process_time_counter();
+#ifdef _WIN32
+        Sleep(25);
+#else
+        usleep(25000);
+#endif
+        uint64_t t1=__builtin_ia32_rdtsc(), n1=runtime_process_time_counter();
+        if (n1>n0) hz=(uint64_t)((double)(t1-t0)*1e9/(double)(n1-n0));
+    }
+    if (hz<100000000ull || hz>20000000000ull) {
+        printf("Guest clock: host TSC frequency not measurable; left unchanged\n");
+        return 0;
+    }
+    const char *virtual_clock=getenv("KZSF_VIRTUAL_TSC");
+    if (virtual_clock && !strcmp(virtual_clock,"1")) {
+        size_t count=sizeof(virtual_tsc_sites)/sizeof(*virtual_tsc_sites);
+        /* All guards pass before the image or clock state is changed. */
+        for (size_t i=0;i<count;++i) {
+            uint64_t at=virtual_tsc_sites[i];
+            if (at+2>size || img[at]!=0x0f || img[at+1]!=0x31)
+                fail("virtual clock instruction signature mismatch");
+        }
+        runtime_set_virtual_tsc(hz);
+        const char *direct=getenv("KZSF_DIRECT_TSC");
+        if(direct && direct[0]=='1') {
+            unsigned char *area=allocate(TSC_PATCH_AREA); size_t used=0;
+            unsigned moved=0,windows=0;
+            for(uint64_t s=0;s<ns;++s) if(segments[s].flags&1) {
+                TscReport r=tsc_patch_segment(img,segments[s].address,segments[s].size,
+                    area,&used,runtime_tsc_multiplier(),virtual_tsc_sites,count);
+                moved+=r.moved+r.windows; windows+=r.windows;
+            }
+            protect(area,TSC_PATCH_AREA,5);
+            size_t fallback=0;
+            for(size_t i=0;i<count;++i) {
+                uint64_t at=virtual_tsc_sites[i];
+                if(img[at]==0x0f && img[at+1]==0x31) { img[at]=0xcc; img[at+1]=0x90; ++fallback; }
+            }
+            printf("Guest clock: direct PS4 TSC: %u sites in %u windows, %zu exception fallbacks, %zu stub bytes; shared multiplier %llu\n",
+                moved,windows,fallback,used,(unsigned long long)*runtime_tsc_multiplier());
+        } else {
+            for (size_t i=0;i<count;++i) { img[virtual_tsc_sites[i]]=0xcc; img[virtual_tsc_sites[i]+1]=0x90; }
+        }
+        virtual_tsc_enabled=1;
+        printf("Guest clock: virtual PS4 TSC at 1594000000 Hz; %zu instruction sites; original constants retained\n",count);
+        return count;
+    }
+    double want=1.0/(double)hz, from=GOW3_PS4_TSC_SECONDS;
+    const char *unified=getenv("KZSF_UNIFIED_TSC");
+    if (unified && !strcmp(unified,"1")) {
+        runtime_set_native_tsc(hz);
+        printf("Guest clock: kernel TSC and inline RDTSC share native counter at %llu Hz\n",
+               (unsigned long long)hz);
+    }
+    const char *deadline_fix=getenv("KZSF_DIALOG_TIMING");
+    if (deadline_fix && !strcmp(deadline_fix,"1")) {
+        int count=kzsf_timing_deadlines(img,(size_t)size,(double)hz);
+        printf("KZSF dialogue timing experiment: corrected %d deadline/microsecond constants%s\n",
+               count,count ? "" : " (signature mismatch; skipped)");
+    }
+    uint64_t patched=0;
+    for (uint64_t at=0; at+sizeof(double)<=size; ++at)
+        if (!memcmp(img+at,&from,sizeof(double))) { memcpy(img+at,&want,sizeof(double)); ++patched; }
+    printf("Guest clock: host TSC %llu Hz; patched %llu TSC->seconds constant(s)\n",
+           (unsigned long long)hz,(unsigned long long)patched);
+    return patched;
+}
 static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
     static const unsigned char load[]={0x65,0x48,0x8b,0x04,0x25,0,0,0,0};
     uint32_t displacement=runtime_thread_tcb_offset();
@@ -497,6 +939,49 @@ static int install_jump(uint64_t at, unsigned length, unsigned char *stub) {
 
 /* Damage dealt/taken and green/blue/gold orb multipliers (src/damage_hook.h, src/orb_hook.h):
  * the stubs read the menu's floats directly, so changes apply on the next hit or pickup. */
+static void install_kzsf_cheats(Segment *segments, uint64_t count, uint64_t size) {
+    const char *health=getenv("KZSF_UNLIMITED_HEALTH"), *ammo=getenv("KZSF_INFINITE_AMMO");
+    if (health && health[0]=='1') {
+#ifdef _WIN32
+        const char *capture=getenv("KZSF_HEALTH_TRACE");
+        if(!capture || capture[0]!='1') {
+            if(!mapped(segments,count,KZSF_DAMAGE_SITE,sizeof(kzsf_damage_original)) ||
+               !kzsf_patch_match(image,size,KZSF_DAMAGE_SITE,kzsf_damage_original,sizeof(kzsf_damage_original)))
+                fail("Killzone player damage signature mismatch; refusing to patch this build");
+            kzsf_player_protection=1;
+            image[KZSF_DAMAGE_SITE]=0xcc;
+            printf("Killzone: player invulnerability enabled (engine IsPlayer, damage-handler v2)\n");
+        } else {
+#endif
+        if (!mapped(segments,count,KZSF_HEALTH_SITE,sizeof(kzsf_health_original)) ||
+            !kzsf_patch_match(image,size,KZSF_HEALTH_SITE,kzsf_health_original,sizeof(kzsf_health_original)))
+            fail("Killzone health patch signature mismatch; refusing to patch this build");
+        unsigned char *stub=allocate(page_size);
+        size_t prefix=0;
+#ifdef _WIN32
+        const char *trace=getenv("KZSF_HEALTH_TRACE");
+        if(trace && trace[0]=='1') { prefix=1; stub[0]=0xcc; kzsf_health_trace_site=stub; }
+#endif
+        if (!kzsf_health_stub(stub+prefix,page_size-prefix,(uintptr_t)(image+KZSF_HEALTH_SITE+8)))
+            fail("Killzone health hook outside jump range");
+        protect(stub,page_size,5);
+        if (!install_jump(KZSF_HEALTH_SITE,8,stub)) fail("Killzone health hook outside jump range");
+        printf("Killzone: unlimited player health enabled (validated 01.81 hook)\n");
+#ifdef _WIN32
+        }
+#endif
+    }
+    if (ammo && ammo[0]=='1') {
+        if (!mapped(segments,count,KZSF_RESERVE_SITE,sizeof(kzsf_reserve_original)) ||
+            !mapped(segments,count,KZSF_MAGAZINE_SITE,sizeof(kzsf_magazine_original)) ||
+            !kzsf_patch_match(image,size,KZSF_RESERVE_SITE,kzsf_reserve_original,sizeof(kzsf_reserve_original)) ||
+            !kzsf_patch_match(image,size,KZSF_MAGAZINE_SITE,kzsf_magazine_original,sizeof(kzsf_magazine_original)))
+            fail("Killzone ammo patch signature mismatch; refusing to patch this build");
+        memset(image+KZSF_RESERVE_SITE,0x90,4);
+        memset(image+KZSF_MAGAZINE_SITE,0x90,4);
+        printf("Killzone: infinite ammo / no reload enabled (validated 01.81 sites)\n");
+    }
+}
 static void install_stat_multipliers(Segment *segments, uint64_t count, uint64_t size) {
     const uint64_t damage_at = gow3_signature_find(image, size, &gow3_damage_site);
     const uint64_t pickup_at = gow3_signature_find(image, size, &gow3_orb_pickup_site);
@@ -711,6 +1196,16 @@ int main(int argc, char **argv) {
     SYSTEM_INFO system_info; GetSystemInfo(&system_info); page_size = system_info.dwPageSize;
     AddVectoredExceptionHandler(1, vectored_fault);
     SetUnhandledExceptionFilter(unhandled_fault);
+    const char *stall=getenv("GOW3_STALL_SECONDS");
+    if (stall) {
+        int seconds=atoi(stall);
+        if (seconds>0) CreateThread(NULL,0,stall_watchdog,(LPVOID)(uintptr_t)seconds,0,NULL);
+    }
+    const char *freeze=getenv("GOW3_FREEZE_SECONDS");
+    if (freeze) {
+        int seconds=atoi(freeze);
+        if (seconds>0) CreateThread(NULL,0,freeze_watchdog,(LPVOID)(uintptr_t)seconds,0,NULL);
+    }
     if (getenv("GOW3_STRICT_HANDLES")) {
         PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY strict={0};
         strict.RaiseExceptionOnInvalidHandleReference=1;
@@ -736,7 +1231,7 @@ int main(int argc, char **argv) {
     FILE *f = fopen(argv[1], "rb");
     if (!f) fail("cannot open boot file; run prepare.py first");
     char magic[8];
-    if (fread(magic, 1, 8, f) != 8 || (memcmp(magic, "G3PROBE1", 8) && memcmp(magic, "G3PROBE2", 8) && memcmp(magic,"G3PROBE3",8) && memcmp(magic,"G3PROBE4",8) && memcmp(magic,"G3PROBE5",8))) fail("bad boot file signature");
+    if (fread(magic, 1, 8, f) != 8 || (memcmp(magic, "G3PROBE1", 8) && memcmp(magic, "G3PROBE2", 8) && memcmp(magic,"G3PROBE3",8) && memcmp(magic,"G3PROBE4",8) && memcmp(magic,"G3PROBE5",8) && memcmp(magic,"G3PROBE6",8))) fail("bad boot file signature");
     uint64_t size = read64(f), entry = read64(f), ns = read64(f), nr = read64(f);
     import_count = read64(f);
     uint64_t capabilities = memcmp(magic, "G3PROBE1", 8) ? read64(f) : 0;
@@ -744,7 +1239,8 @@ int main(int argc, char **argv) {
     runtime_start(strict_imports ? 0 : capabilities);
     if (!size || size > 512*1024*1024 || entry >= size || !ns || ns > 64 || nr > 1000000 || import_count > 100000)
         fail("boot file limits exceeded");
-    int multi=!memcmp(magic,"G3PROBE5",8);
+    int dynamic_exports=!memcmp(magic,"G3PROBE6",8);
+    int multi=!memcmp(magic,"G3PROBE5",8) || dynamic_exports;
     int linked=!memcmp(magic,"G3PROBE3",8) || !memcmp(magic,"G3PROBE4",8) || multi;
     int native_libc=linked && !strict_imports && (capabilities&1);
     uint64_t main_tls[4]={0};
@@ -762,6 +1258,10 @@ int main(int argc, char **argv) {
             LinkedModule *x=&modules[m];
             x->base=read64(f); x->size=read64(f); x->init=read64(f); x->tls_address=read64(f);
             x->tls_memsz=read64(f); x->tls_filesz=read64(f); x->tls_module=read64(f);
+            if (dynamic_exports &&
+                (fread(native_module_names[m],1,128,f)!=128 ||
+                 !native_module_names[m][0] || !memchr(native_module_names[m],0,128)))
+                fail("invalid native module name");
         }
         nb=read64(f);
     } else if (linked) {
@@ -793,6 +1293,20 @@ int main(int argc, char **argv) {
             bindings[index]=address; binding_kinds[index]=kind;
         }
     }
+    if (dynamic_exports) {
+        native_export_count=read64(f);
+        if (native_export_count>100000) fail("native export count exceeded");
+        native_exports=calloc(native_export_count ? native_export_count : 1,sizeof(*native_exports));
+        if (!native_exports) fail("allocation failed");
+        for (uint64_t i=0;i<native_export_count;++i) {
+            RuntimeNativeExport *s=&native_exports[i];
+            s->module=read64(f); s->offset=read64(f); s->kind=read64(f);
+            if (fread(s->nid,1,16,f)!=16 || !memchr(s->nid,0,16) || strlen(s->nid)!=11 ||
+                s->module>=module_count || (s->kind!=1 && s->kind!=2)) fail("invalid native export");
+            LinkedModule *m=&modules[s->module];
+            if (s->offset<m->base || s->offset-m->base>=m->size) fail("native export outside module");
+        }
+    }
     Segment *segments = calloc(ns, sizeof(*segments));
     Reloc *relocs = calloc(nr ? nr : 1, sizeof(*relocs));
     names = calloc(import_count ? import_count : 1, sizeof(*names));
@@ -803,6 +1317,14 @@ int main(int argc, char **argv) {
         segments[i].flags = read64(f);
         if (segments[i].address > size || segments[i].size > size - segments[i].address ||
             segments[i].address % page_size || segments[i].flags > 7) fail("bad segment");
+    }
+    for (uint64_t i=0;i<native_export_count;++i) {
+        RuntimeNativeExport *s=&native_exports[i];
+        int valid=0;
+        for (uint64_t j=0;j<ns;++j)
+            if (s->offset>=segments[j].address && s->offset-segments[j].address<segments[j].size &&
+                (s->kind!=1 || (segments[j].flags&1))) valid=1;
+        if (!valid) fail("native export outside appropriate segment");
     }
     if (fread(names, 128, import_count, f) != import_count) fail("truncated import names");
     for (uint64_t i = 0; i < import_count; ++i)
@@ -870,13 +1392,32 @@ int main(int argc, char **argv) {
         t[8] = 0x48; t[9] = 0xb8; memcpy(t + 10, &handler, 8);
         t[18] = 0xff; t[19] = 0xe0;
     }
+    if (getenv("GOW3_TRACE_IMPORTS")) {
+        trace_imports=1;
+        if (import_count > TRACE_STUB_CAP) fail("too many imports to trace");
+        trace_pool=trace_stub_store;
+        /* The trampolines are executed by guest code; the heap is not executable. */
+#ifdef _WIN32
+        DWORD trace_old=0;
+        if (!VirtualProtect(trace_pool,(SIZE_T)128*(import_count ? import_count : 1),PAGE_EXECUTE_READWRITE,&trace_old))
+            fail("VirtualProtect(trace_pool) failed");
+#else
+        if (mprotect(trace_pool,128*(import_count ? import_count : 1),PROT_READ|PROT_WRITE|PROT_EXEC))
+            fail("mprotect(trace_pool) failed");
+#endif
+    }
     for (uint64_t i = 0; i < nr; ++i) {
         uintptr_t value = relocs[i].kind == 2 ? (uintptr_t)(data_traps + page_size * relocs[i].value + relocs[i].addend)
                         : relocs[i].kind == 1 ? (uintptr_t)(traps + 32 * relocs[i].value)
                         : (uintptr_t)image + relocs[i].value;
         if (relocs[i].kind) {
             uintptr_t resolved = runtime_resolve(names[relocs[i].value], relocs[i].kind == 2);
-            if (resolved) value = resolved + relocs[i].addend;
+            /* Do not trampoline scePthreadYield: a spinning thread would flood the ring. */
+            if (resolved && trace_imports && strncmp(names[relocs[i].value],"T72hz6ffq08",11)!=0) {
+                unsigned char *stub=trace_pool + 128u*relocs[i].value;
+                build_trace_stub(stub, (uint32_t)relocs[i].value, resolved);
+                value=(uintptr_t)stub;
+            } else if (resolved) value = resolved + relocs[i].addend;
             else if (native_libc && bindings[relocs[i].value]) {
                 uint64_t address=bindings[relocs[i].value];
                 if (binding_kinds[relocs[i].value]!=relocs[i].kind || !mapped(segments,ns,address,relocs[i].addend+1)) fail("native export kind/range mismatch");
@@ -908,8 +1449,33 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_cheats(segments, ns, size);
     if (gpu_enabled) install_actor_watch(segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(segments, ns, size);
+    if (gpu_enabled) install_kzsf_cheats(segments, ns, size);
 #ifdef _WIN32
+    if(gpu_enabled && getenv("KZSF_PLAYER_TURN") && getenv("KZSF_PLAYER_TURN")[0]=='1') {
+        if(!mapped(segments,ns,KZSF_PLAYER_TURN_GUARD,sizeof(kzsf_player_turn_signature)) ||
+           !kzsf_patch_match(image,size,KZSF_PLAYER_TURN_GUARD,kzsf_player_turn_signature,sizeof(kzsf_player_turn_signature)))
+            fail("Killzone player turn signature mismatch; refusing to patch");
+        image[KZSF_PLAYER_TURN_SITE]=0xcc;
+        kzsf_player_turn_enabled=1;
+        printf("Killzone: experimental SoldierJoystickController turn hook installed; execution unverified until KILLZONE_PLAYER_TURN\n");
+    }
+    if(gpu_enabled && getenv("KZSF_ENGINE_TURN") && getenv("KZSF_ENGINE_TURN")[0]=='1') {
+        const size_t start=KZSF_TURN_SITE-8;
+        if(!mapped(segments,ns,start,sizeof(kzsf_turn_signature)) ||
+           !kzsf_patch_match(image,size,start,kzsf_turn_signature,sizeof(kzsf_turn_signature)))
+            fail("Killzone engine look-rate signature mismatch; refusing to patch");
+        image[KZSF_TURN_SITE]=0xcc;
+        image[KZSF_PITCH_SITE]=0xcc;
+        kzsf_turn_speed_enabled=1;
+        {
+            const char *log=getenv("KZSF_TURN_LOG");
+            kzsf_turn_log=log && log[0]=='1';
+        }
+        printf("Killzone: experimental engine look-rate hook enabled (01.81); heading+pitch%s\n",
+               kzsf_turn_log ? " with rate logging" : "");
+    }
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
+      patch_guest_clock(image, size, segments, ns);
 #endif
     if (isa_table) {
         IsaReport r = isa_rewrite_apply(isa_table, image, stubs, isa_sets);
@@ -935,6 +1501,8 @@ int main(int argc, char **argv) {
     if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     if (native_libc) {
+        if (dynamic_exports)
+            runtime_native_modules(native_module_names,module_count,native_exports,native_export_count,image);
         for (uint64_t m=0;m<module_count;++m) {
             int init_executable=0;
             for (uint64_t i=0;i<ns;++i)

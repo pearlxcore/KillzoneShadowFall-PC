@@ -154,6 +154,9 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
                MemoryType mem_type_, std::string_view debug_name)
     : cpu_addr{cpu_addr_}, size_bytes{size_bytes_}, mem_type{mem_type_},
       buffer{instance.GetDevice(), instance.GetAllocator()} {
+    ASSERT_MSG(size_bytes <= instance.GetMaxBufferSize(),
+               "Buffer size {} exceeds driver maximum {} (type {}, guest address {:#x})",
+               size_bytes, instance.GetMaxBufferSize(), BufferTypeName(mem_type), cpu_addr);
 
     vk::BufferCreateInfo buffer_ci = {
         .size = size_bytes,
@@ -161,6 +164,8 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         .sharingMode = vk::SharingMode::eExclusive,
     };
     VmaAllocationInfo alloc_info{};
+    if (mem_type == MemoryType::Sparse && instance.SupportsSparseAliasing())
+        buffer_ci.flags |= vk::BufferCreateFlagBits::eSparseAliased;
     buffer.Create(buffer_ci, mem_type, &alloc_info);
 
     const auto device = instance.GetDevice();

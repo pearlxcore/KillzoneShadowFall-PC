@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -109,6 +110,12 @@ bool Swapchain::AcquireNextImage() {
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
                                    image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
+    if (std::getenv("GOW3_PRESENT_TRACE")) {
+        std::fprintf(stderr,"WSI acquire: swap=%p slot=%u image=%u acquired=%p ready=%p result=%d\n",
+                     (void*)(VkSwapchainKHR)swapchain,frame_index,image_index,
+                     (void*)(VkSemaphore)image_acquired[frame_index],
+                     (void*)(VkSemaphore)present_ready[image_index],int(result));
+    }
 
     switch (result) {
     case vk::Result::eSuccess:
@@ -130,6 +137,11 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present() {
+    if (std::getenv("GOW3_PRESENT_TRACE")) {
+        std::fprintf(stderr,"WSI present: swap=%p slot=%u image=%u wait=%p\n",
+                     (void*)(VkSwapchainKHR)swapchain,frame_index,image_index,
+                     (void*)(VkSemaphore)present_ready[image_index]);
+    }
     const vk::PresentInfoKHR present_info = {
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],

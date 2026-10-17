@@ -185,6 +185,8 @@ private:
     void FinishCompilations();
     void SeedWorkerCaches();
     bool CheckCacheProfile();
+    std::array<std::vector<u32>, MaxShaderStages> preloaded_spv;
+    bool ValidatePreloadedBindings() const;
     struct BackgroundWarmup;
     struct WarmStage;
     void ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data);

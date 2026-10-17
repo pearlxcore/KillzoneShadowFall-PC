@@ -12,6 +12,8 @@ typedef struct Holder {
     pthread_t thread;
     unsigned readers, writer, pending;
     struct Holder *next;
+    uintptr_t first_read_site, last_read_site, wait_site;
+    void *guest_slot;
 } Holder;
 typedef struct Rwlock {
     pthread_rwlock_t native;
@@ -66,7 +68,7 @@ static void prune_locked(Rwlock *r, Holder *h) {
     *link=h->next; free(h);
 }
 enum Operation { READ, WRITE, TRY_READ, TRY_WRITE, TIMED_READ, TIMED_WRITE };
-static int32_t acquire(Rwlock **handle, enum Operation op, const GuestTime *time) {
+static int32_t acquire(Rwlock **handle, enum Operation op, const GuestTime *time, uintptr_t site) {
     if (!handle) return error(EINVAL);
     int writer=op==WRITE || op==TRY_WRITE || op==TIMED_WRITE;
     int attempt=op==TRY_READ || op==TRY_WRITE;
@@ -88,6 +90,7 @@ static int32_t acquire(Rwlock **handle, enum Operation op, const GuestTime *time
         h->thread=pthread_self(); h->next=r->holders; r->holders=h;
     }
     ++r->inflight; ++h->pending;
+    h->wait_site=site; h->guest_slot=handle;
     pthread_mutex_unlock(&registry_lock);
     /* Timed operations first try the lock, matching POSIX timeout validation. */
     if (attempt || timed) e=writer ? pthread_rwlock_trywrlock(&r->native) : pthread_rwlock_tryrdlock(&r->native);
@@ -103,17 +106,21 @@ static int32_t acquire(Rwlock **handle, enum Operation op, const GuestTime *time
     --r->inflight; --h->pending;
     if (!e) {
         if (writer) { h->writer=1; ++writes; }
-        else { ++h->readers; ++reads; }
+        else {
+            if (!h->readers) h->first_read_site=site;
+            h->last_read_site=site;
+            ++h->readers; ++reads;
+        }
     }
     prune_locked(r,h);
     pthread_mutex_unlock(&registry_lock); return error(e);
 }
-static ABI int32_t rw_read(Rwlock **r) { return acquire(r,READ,NULL); }
-static ABI int32_t rw_write(Rwlock **r) { return acquire(r,WRITE,NULL); }
-static ABI int32_t rw_tryread(Rwlock **r) { return acquire(r,TRY_READ,NULL); }
-static ABI int32_t rw_trywrite(Rwlock **r) { return acquire(r,TRY_WRITE,NULL); }
-static ABI int32_t rw_timedread(Rwlock **r,const GuestTime *t) { return acquire(r,TIMED_READ,t); }
-static ABI int32_t rw_timedwrite(Rwlock **r,const GuestTime *t) { return acquire(r,TIMED_WRITE,t); }
+static ABI int32_t rw_read(Rwlock **r) { return acquire(r,READ,NULL,(uintptr_t)__builtin_return_address(0)); }
+static ABI int32_t rw_write(Rwlock **r) { return acquire(r,WRITE,NULL,(uintptr_t)__builtin_return_address(0)); }
+static ABI int32_t rw_tryread(Rwlock **r) { return acquire(r,TRY_READ,NULL,(uintptr_t)__builtin_return_address(0)); }
+static ABI int32_t rw_trywrite(Rwlock **r) { return acquire(r,TRY_WRITE,NULL,(uintptr_t)__builtin_return_address(0)); }
+static ABI int32_t rw_timedread(Rwlock **r,const GuestTime *t) { return acquire(r,TIMED_READ,t,(uintptr_t)__builtin_return_address(0)); }
+static ABI int32_t rw_timedwrite(Rwlock **r,const GuestTime *t) { return acquire(r,TIMED_WRITE,t,(uintptr_t)__builtin_return_address(0)); }
 static ABI int32_t rw_unlock(Rwlock **handle) {
     if (!handle) return error(EINVAL);
     pthread_mutex_lock(&registry_lock);
@@ -121,6 +128,21 @@ static ABI int32_t rw_unlock(Rwlock **handle) {
     if (!r) { pthread_mutex_unlock(&registry_lock); return error(EINVAL); }
     Holder *h=r->holders;
     while (h && !pthread_equal(h->thread,pthread_self())) h=h->next;
+    if (!h || (!h->readers && !h->writer)) {
+        /* KZSF transfers shared-lock lifetime to worker jobs: acquisition at
+           guest 0x8bf96e, release in job destructors 0x8d95dd/0x8d964d.
+           Read locks therefore cannot require release on the acquiring thread.
+           Exclusive locks still require their owner. Consume one tracked shared
+           acquisition only after the native unlock succeeds below. */
+        Holder *reader=NULL;
+        for (Holder *candidate=r->holders; candidate; candidate=candidate->next) {
+            if (candidate->writer) {
+                pthread_mutex_unlock(&registry_lock); return error(EPERM);
+            }
+            if (candidate->readers && !reader) reader=candidate;
+        }
+        h=reader;
+    }
     if (!h || (!h->readers && !h->writer)) { pthread_mutex_unlock(&registry_lock); return error(EPERM); }
     int e=pthread_rwlock_unlock(&r->native);
     if (!e) { if (h->writer) h->writer=0; else --h->readers; ++unlocks; }
@@ -157,6 +179,15 @@ uintptr_t runtime_rwlock_resolve(const char *name) {
 void runtime_rwlock_report(void) {
     pthread_mutex_lock(&registry_lock);
     printf("Runtime: rwlocks created=%zu, reads=%zu, writes=%zu, unlocks=%zu\n",created,reads,writes,unlocks);
+    if (getenv("KZSF_RWLOCK_TRACE")) {
+        for (Rwlock *r=registry; r; r=r->next) {
+            for (Holder *h=r->holders; h; h=h->next) {
+                fprintf(stderr,"  rwlock=%p slot=%p thread=%llu readers=%u writer=%u pending=%u first_read=%p last_read=%p wait_site=%p\n",
+                        (void*)r,h->guest_slot,(unsigned long long)h->thread,h->readers,h->writer,h->pending,
+                        (void*)h->first_read_site,(void*)h->last_read_site,(void*)h->wait_site);
+            }
+        }
+    }
     pthread_mutex_unlock(&registry_lock);
 }
 

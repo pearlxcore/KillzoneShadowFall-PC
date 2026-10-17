@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 #include <chrono>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <time.h>
@@ -300,7 +301,14 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
     return 0;
 }
 
+namespace {
+std::atomic<unsigned long long> g_flip_total{0};
+}
+/* Diagnostic: total presented flips, so the runtime can notice a stall quickly. */
+extern "C" unsigned long long gow3gpu_flip_count(void) { return g_flip_total.load(std::memory_order_relaxed); }
+
 void VideoOutDriver::Flip(const Request& req) {
+    g_flip_total.fetch_add(1, std::memory_order_relaxed);
     // Update HDR status before presenting, then present the frame (gow3: on the swap thread).
     RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr] {
         presenter->SetHDR(hdr);

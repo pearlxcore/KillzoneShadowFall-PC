@@ -159,8 +159,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
                               EmulatorSettings.IsPipelineCacheEnabled();
     const bool capture_only = EmulatorSettingsImpl::Flag("GOW3_PIPELINE_BINARY_ISOLATED", false) &&
                               EmulatorSettingsImpl::Flag("GOW3_PIPELINE_CAPTURE_ONLY", false);
+    const bool precompile = EmulatorSettingsImpl::Flag("GOW3_PRECOMPILE", false);
     if (UseOnDemandPipelines(binary_cache, instance.GetPipelineBinaryGlobalKey().keySize != 0,
-                            capture_only)) {
+                            capture_only, precompile)) {
         rasterizer->GetPipelineCache().StartOnDemand();
         return;
     }
@@ -169,9 +170,13 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     // progress). Otherwise rebuilding them takes up to minutes before the first game frame:
     // show what is happening instead of a black window.
     const char* background_warmup = std::getenv("GOW3_BACKGROUND_WARMUP");
-    if ((!background_warmup || *background_warmup != '0') &&
+    if (!precompile && (!background_warmup || *background_warmup != '0') &&
         rasterizer->GetPipelineCache().StartBackgroundWarmUp()) {
         return;
+    }
+    if (precompile) {
+        std::printf("Pipeline startup: precompile recorded cache before gameplay; pipeline binary cache retained\n");
+        std::fflush(stdout);
     }
     Gow3Overlay::SetLoading(true, 0, 0);
     PresentLoadingFrame();
@@ -481,6 +486,17 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     fsr_settings.enable = graphics.fsr1;
     fsr_settings.use_rcas = graphics.rcas;
     fsr_settings.rcas_attenuation = Gow3Graphics::RcasAttenuation(graphics.rcas_strength);
+    if (const char* diagnostic_env = std::getenv("GOW3_UPSCALER_DIAGNOSTICS");
+        diagnostic_env && diagnostic_env[0] == '1') {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            std::printf("Spatial FSR diagnostics: enabled=%d input=%ux%u output=%ux%u RCAS=%d\n",
+                        int(fsr_settings.enable), image_size.width, image_size.height,
+                        frame->width, frame->height, int(fsr_settings.use_rcas));
+            std::fflush(stdout);
+        }
+    }
     Gow3Settings::Get().image_width = int(image_size.width);
     Gow3Settings::Get().image_height = int(image_size.height);
     Gow3Settings::Get().window_width = int(frame->width);

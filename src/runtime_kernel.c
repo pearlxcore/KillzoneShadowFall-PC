@@ -86,8 +86,28 @@ static ABI uint64_t process_time_counter(void) {
 static ABI uint64_t process_time_frequency(void) { return 1000000000; }
 /* The guest's TSC is the process clock in nanoseconds. The raw rdtsc differs per core on some
  * hosts (3.9 s apart on a Xeon E5-2680 v4, #42), so a thread moving cores made the game jump. */
-static ABI uint64_t read_tsc(void) { return process_time_counter(); }
-static ABI uint64_t tsc_frequency(void) { return 1000000000; }
+static uint64_t native_tsc_frequency;
+static uint64_t virtual_tsc_source;
+static uint64_t virtual_tsc_multiplier;
+const uint64_t *runtime_tsc_multiplier(void) { return &virtual_tsc_multiplier; }
+void runtime_set_native_tsc(uint64_t frequency) { virtual_tsc_source=0; virtual_tsc_multiplier=0; native_tsc_frequency=frequency; }
+void runtime_set_virtual_tsc(uint64_t source_frequency) {
+    virtual_tsc_source=source_frequency;
+    native_tsc_frequency=1594000000;
+    const char *direct=getenv("KZSF_DIRECT_TSC");
+    virtual_tsc_multiplier=source_frequency && direct && direct[0]=='1'
+        ? (uint64_t)(((__uint128_t)1594000000<<32)/source_frequency) : 0;
+}
+static ABI uint64_t read_tsc(void) {
+    if (virtual_tsc_multiplier)
+        return (uint64_t)(((__uint128_t)__builtin_ia32_rdtsc()*virtual_tsc_multiplier)>>32);
+    if (virtual_tsc_source)
+        return (uint64_t)(((__uint128_t)__builtin_ia32_rdtsc()*1594000000)/virtual_tsc_source);
+    return native_tsc_frequency ? __builtin_ia32_rdtsc() : process_time_counter();
+}
+static ABI uint64_t tsc_frequency(void) {
+    return native_tsc_frequency ? native_tsc_frequency : 1000000000;
+}
 /* Shared with the GPU library so flip/label timestamps use the guest's clock. */
 uint64_t runtime_process_time_us(void) { return process_time(); }
 uint64_t runtime_process_time_counter(void) { return process_time_counter(); }
@@ -159,6 +179,21 @@ static const char *guest_argv[]={"eboot.bin",NULL};
 static ABI int32_t get_argc(void) { return 1; }
 static ABI const char **get_argv(void) { return guest_argv; }
 /* Only the game and its bundled modules exist; nothing was loaded at run time. */
+/* Killzone: the game loads its system modules at run time. They are host-provided here, so the
+ * request is satisfied with a host handle. The requested path is logged, never silently ignored. */
+static ABI int32_t load_start_module(const char *path,uint64_t args,const void *argp,uint32_t flags,
+                                     const void *opt,int32_t *result) {
+    (void)args; (void)argp; (void)flags; (void)opt;
+    int32_t native=runtime_native_module_handle(path);
+    if (native) {
+        printf("Runtime: sceKernelLoadStartModule(\"%s\") -> prelinked handle %d\n",path,native);
+        if (result) *result=0;
+        return native;
+    }
+    printf("Runtime: sceKernelLoadStartModule(\"%s\") -> host-provided\n", path ? path : "(null)");
+    if (result) *result=0;
+    return 7; /* nonzero handle: the module is provided by the runtime */
+}
 static ABI int32_t stop_unload_module(int32_t handle,uint64_t args,const void *argp,uint32_t flags,const void *opt,int32_t *result) {
     (void)args; (void)argp; (void)flags; (void)opt; (void)result;
     printf("Runtime: sceKernelStopUnloadModule(%d): no such module\n",handle);
@@ -171,6 +206,63 @@ static ABI int32_t module_info_from_addr(uint64_t address,int32_t flags,void *in
     return ERR(3); /* ESRCH: the runtime keeps no module records */
 }
 static ABI int32_t kernel_mlock(const void *address,uint64_t size) { (void)address; (void)size; return 0; }
+/* sceKernelDlsym: resolve a symbol in a host-provided module. Every library this eboot
+ * imports is provided by the runtime, so resolution is a name lookup. */
+static ABI int32_t dlsym_noop(void) { return 0; }
+static ABI int32_t kernel_dlsym(int32_t handle,const char *symbol,void **address) {
+    if (!symbol || !address) return ERR(22);
+    if (runtime_native_module_valid(handle)) {
+        uintptr_t native=runtime_native_symbol(handle,symbol);
+        *address=(void *)native;
+        if (!native) {
+            fprintf(stderr,"Runtime: native Dlsym missing handle=%d symbol=%s\n",handle,symbol);
+            return ERR(3);
+        }
+        if (strncmp(symbol,"graph_",6))
+            printf("Runtime: native Dlsym %s -> %p\n",symbol,(void *)native);
+        return 0;
+    }
+    uintptr_t p=runtime_resolve(symbol,0);
+    if (!p) {
+        static const char *const libraries[]={"#libkernel","#libc","#libScePosix","#libSceGnmDriver",
+            "#libSceVideoOut","#libSceAudioOut","#libScePad","#libSceSysmodule","#libSceUserService",NULL};
+        char scoped[160];
+        for (size_t i=0; libraries[i] && !p; ++i) {
+            snprintf(scoped,sizeof(scoped),"%s%s",symbol,libraries[i]);
+            p=runtime_resolve(scoped,0);
+        }
+    }
+    if (!p) {
+        static unsigned unresolved_logged;
+        if (!strncmp(symbol,"graph_",6)) {
+            /* The game resolves its own "graph_<id>_<id>_<idx>" nodes through Dlsym; they are
+             * not module exports we can see, so return a no-op stub and say so once. */
+            if (!unresolved_logged++)
+                puts("Runtime: sceKernelDlsym: \"graph_...\" node lookups are unsupported; using a no-op stub");
+        } else {
+            printf("Runtime: sceKernelDlsym unresolved \"%s\" -> no-op stub\n",symbol);
+        }
+        *address=(void *)dlsym_noop;
+        return 0;
+    }
+    *address=(void *)p;
+    return 0;
+}
+/* libkernel utilities the guest expects to exist. */
+static ABI int32_t kernel_uuid_create(unsigned char *uuid) {
+    if (!uuid) return ERR(14);
+    static uint32_t seed=0x9e3779b9u;
+    for (int i=0;i<16;++i) { seed=seed*1664525u+1013904223u; uuid[i]=(unsigned char)(seed>>24); }
+    uuid[6]=(unsigned char)((uuid[6]&0x0f)|0x40); /* version 4 */
+    uuid[8]=(unsigned char)((uuid[8]&0x3f)|0x80); /* variant */
+    return 0;
+}
+static ABI int32_t kernel_utimes(const char *path,const void *times) { (void)path; (void)times; return 0; }
+static ABI int32_t kernel_chmod(const char *path,uint32_t mode) { (void)path; (void)mode; return 0; }
+static ABI int32_t kernel_getdents(int32_t fd,void *buffer,uint64_t nbytes) {
+    (void)fd; (void)buffer; (void)nbytes; return ERR(20); /* ENOTDIR: no directories are exposed */
+}
+static ABI int32_t kernel_munlock(const void *address,uint64_t size) { (void)address; (void)size; return 0; }
 /* libc's C++ exception unwinder. The game does not throw (no __cxa_throw import): unwinding
  * finds no frame data, and resuming a context is a stop, never a silent success. */
 static ABI int32_t elf_phdr_match_addr(void *info,uint64_t address) { (void)info; (void)address; return 0; }
@@ -324,8 +416,12 @@ static const RuntimeExport exports[]={
     {"sceKernelDebugRaiseException",raise_exception},
     {"sceKernelDebugRaiseExceptionOnReleaseMode",raise_exception},
     {"sceKernelPrintBacktraceWithModuleInfo",print_backtrace},
-    {"getargc",get_argc}, {"getargv",get_argv}, {"sceKernelStopUnloadModule",stop_unload_module},
+    {"getargc",get_argc}, {"getargv",get_argv}, {"sceKernelLoadStartModule",load_start_module},
+    {"sceKernelStopUnloadModule",stop_unload_module},
     {"sceKernelGetModuleInfoFromAddr",module_info_from_addr}, {"sceKernelMlock",kernel_mlock},
+    {"sceKernelDlsym",kernel_dlsym}, {"sceKernelUuidCreate",kernel_uuid_create},
+    {"sceKernelUtimes",kernel_utimes}, {"sceKernelChmod",kernel_chmod},
+    {"sceKernelGetdents",kernel_getdents}, {"sceKernelMunlock",kernel_munlock},
     {"__elf_phdr_match_addr",elf_phdr_match_addr}, {"_is_signal_return",is_signal_return},
     {"__pthread_cxa_finalize",pthread_cxa_finalize}, {"sigreturn",unwind_resume},
     {"__Ux86_64_setcontext",unwind_resume},

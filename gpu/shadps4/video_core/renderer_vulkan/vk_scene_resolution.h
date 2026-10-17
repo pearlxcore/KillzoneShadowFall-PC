@@ -52,6 +52,8 @@ public:
     /// Whether SampleProxy would return the proxy of `image` for these levels.
     [[nodiscard]] bool ProxyCurrent(const VideoCore::Image& image, u32 level = 0,
                                     u32 levels = 1) const;
+    /// Logical content validity, including depth (which SampleProxy deliberately excludes).
+    [[nodiscard]] bool ContentsCurrent(const VideoCore::Image& image, u32 level = 0) const;
     /// SampleProxy for a view obtained before (valid while Generation() is unchanged): the
     /// layout to sample it in.
     vk::ImageLayout PrepareSample(const VideoCore::Image& image, u32 level = 0);

@@ -28,6 +28,12 @@ inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
 
 struct Values {
+    std::atomic<int> controller_look_gain{100};
+    std::atomic<int> controller_aim_gain{100};
+    std::atomic<int> controller_turn_speed{100};
+    /// Engine vertical look rate (the local-input pitch field), separate from heading.
+    std::atomic<int> controller_pitch_speed{100};
+    std::atomic<bool> engine_turn_hook{false};
     std::atomic<int> upscaler{UpscalerFsr3};
     std::atomic<int> preset{NativeAA};
     std::atomic<bool> sharpen{true};

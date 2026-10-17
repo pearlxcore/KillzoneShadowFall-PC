@@ -28,6 +28,9 @@
 #include <mach-o/dyld.h>
 #endif
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace Vulkan {
 
 static const char* const VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation";
@@ -56,6 +59,17 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
     LOG_GENERIC(Common::Log::Class::Render_Vulkan, level, "{}: {}",
                 callback_data->pMessageIdName ? callback_data->pMessageIdName : "<null>",
                 callback_data->pMessage ? callback_data->pMessage : "<null>");
+
+    // Diagnostic mode: retain the first invalid Vulkan command instead of
+    // continuing into the driver with a known-invalid recording.
+    const char* stop = std::getenv("GOW3_VK_STOP_ON_ERROR");
+    if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError && stop && stop[0] == '1') {
+        std::fprintf(stderr, "STOP: Vulkan validation error: %s\n%s\n",
+                     callback_data->pMessageIdName ? callback_data->pMessageIdName : "<null>",
+                     callback_data->pMessage ? callback_data->pMessage : "<null>");
+        std::fflush(stderr);
+        std::_Exit(24);
+    }
 
     return VK_FALSE;
 }

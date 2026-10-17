@@ -63,7 +63,15 @@ void Set(Values& v, const std::string& key, const std::string& value) {
             return;
         }
     }
-    if (key == "upscaler") {
+    if (key == "controller_turn_speed") {
+        v.controller_turn_speed = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "controller_pitch_speed") {
+        v.controller_pitch_speed = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "controller_look_gain") {
+        v.controller_look_gain = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "controller_aim_gain") {
+        v.controller_aim_gain = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "upscaler") {
         for (int u = 0; u < UpscalerCount; ++u) {
             if (value == UpscalerName(u)) {
                 v.upscaler = u;
@@ -100,9 +108,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "async_shaders") {
         v.async_shaders = i != 0;
     } else if (key == "fsr1") {
-        // FSR 1 left the launcher and the in-game menu: a value saved by an older version has no
-        // control left to turn it off, so it stays off.
-        v.fsr1 = false;
+        // Killzone's spatial presentation path; independent of temporal scene hooks.
+        v.fsr1 = i != 0;
     } else if (key == "rcas") {
         v.rcas = i != 0;
     } else if (key == "rcas_strength") {
@@ -179,6 +186,9 @@ void Load() {
         }
     }
     const std::pair<const char*, const char*> env_keys[] = {
+        {"GOW3_PAD_TURN_SPEED", "controller_turn_speed"},
+        {"GOW3_PAD_PITCH_SPEED", "controller_pitch_speed"},
+        {"GOW3_PAD_LOOK_GAIN", "controller_look_gain"}, {"GOW3_PAD_AIM_GAIN", "controller_aim_gain"},
         {"GOW3_FSR_SHARPNESS", "sharpness"},        {"GOW3_JITTER", "jitter"},
         {"GOW3_REACTIVE", "reactive"},              {"GOW3_REACTIVE_SCALE", "reactive_scale"},
         {"GOW3_REACTIVE_THRESHOLD", "reactive_threshold"}, {"GOW3_REACTIVE_MAX", "reactive_max"},
@@ -193,6 +203,10 @@ void Load() {
         }
     }
     v.startup_preset = v.preset;
+    const char* turn_hook=std::getenv("KZSF_ENGINE_TURN");
+    v.engine_turn_hook=turn_hook && turn_hook[0]=='1';
+    const char *player_turn_hook=std::getenv("KZSF_PLAYER_TURN");
+    v.engine_turn_hook=v.engine_turn_hook.load() || (player_turn_hook && player_turn_hook[0]=='1');
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;
     v.startup_output_res = v.output_res;
@@ -311,6 +325,10 @@ void Save() {
                  Gow3Graphics::Resolutions[std::clamp(v.render_resolution.load(), 0, 5)].data(),
                  v.engine_fps.load(), int(v.deferred_readback.load()), int(v.stale_readback.load()),
                  int(v.restart_unconfirmed.load()));
+    std::fprintf(file, "controller_look_gain=%d\ncontroller_aim_gain=%d\n",
+                 v.controller_look_gain.load(), v.controller_aim_gain.load());
+    std::fprintf(file, "controller_turn_speed=%d\n",v.controller_turn_speed.load());
+    std::fprintf(file, "controller_pitch_speed=%d\n",v.controller_pitch_speed.load());
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");

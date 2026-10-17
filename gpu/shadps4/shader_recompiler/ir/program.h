@@ -22,6 +22,7 @@ struct Program {
     Info& info;
 };
 
-void DumpProgram(const Program& program, const Info& info, const std::string& type = "");
+void DumpProgram(const Program& program, const Info& info, const std::string& type = "",
+                 bool force = false);
 
 } // namespace Shader::IR

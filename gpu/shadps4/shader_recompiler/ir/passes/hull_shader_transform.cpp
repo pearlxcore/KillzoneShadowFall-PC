@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
+#include <optional>
 #include <unordered_map>
 #include "common/assert.h"
 #include "shader_recompiler/info.h"
@@ -299,6 +301,52 @@ static AttributeRegion GetAttributeRegionKind(IR::Inst* ring_access, const Shade
     }
 }
 
+// Patch constants are per-patch, so this pass models patch-constant LDS accesses as
+// invocation-invariant (see the "we treat invocation ID as 0 for all threads" note at the
+// end of HullShaderTransform). Some shaders nevertheless build the LDS offset from the
+// invocation ID while staging per-invocation data in the same area, e.g. games that write
+// per-invocation scratch to the patch-constant region and then let invocation 0 consolidate
+// the real patch constants at constant offsets. For those, re-evaluate the offset with
+// InvocationId = 0 instead of failing to translate the shader.
+static std::optional<u32> TryFoldInvocationIdZero(IR::Value value, u32 depth = 0) {
+    if (depth > 8) {
+        return std::nullopt;
+    }
+    if (value.IsImmediate()) {
+        return value.U32();
+    }
+    IR::Inst* inst = value.TryInst();
+    if (inst == nullptr) {
+        return std::nullopt;
+    }
+    if (inst->GetOpcode() == IR::Opcode::GetAttributeU32) {
+        const auto attr = static_cast<IR::Attribute>(inst->Arg(0).U32());
+        return attr == IR::Attribute::InvocationId ? std::optional<u32>{0u} : std::nullopt;
+    }
+    const auto lhs = TryFoldInvocationIdZero(inst->Arg(0), depth + 1);
+    if (!lhs) {
+        return std::nullopt;
+    }
+    const auto rhs = TryFoldInvocationIdZero(inst->Arg(1), depth + 1);
+    if (!rhs) {
+        return std::nullopt;
+    }
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::ShiftLeftLogical32:
+        return *rhs < 32 ? std::optional<u32>{*lhs << *rhs} : std::nullopt;
+    case IR::Opcode::ShiftRightLogical32:
+        return *rhs < 32 ? std::optional<u32>{*lhs >> *rhs} : std::nullopt;
+    case IR::Opcode::IAdd32:
+        return *lhs + *rhs;
+    case IR::Opcode::IMul32:
+        return *lhs * *rhs;
+    case IR::Opcode::BitwiseAnd32:
+        return *lhs & *rhs;
+    default:
+        return std::nullopt;
+    }
+}
+
 static bool IsDivisibleByStride(IR::Value term, u32 stride) {
     IR::Value a, b;
     if (MatchU32(stride).Match(term)) {
@@ -388,13 +436,34 @@ void HullShaderTransform(IR::Program& program, const RuntimeInfo& runtime_info) 
                 const auto info = inst.Flags<IR::BufferInstInfo>();
                 IR::IREmitter ir{*block, IR::Block::InstructionList::s_iterator_to(inst)};
 
-                IR::Value voffset;
-                bool success =
-                    M_COMPOSITECONSTRUCTU32X3(MatchU32(0), MatchImm(voffset), MatchIgnore())
-                        .Match(inst.Arg(IR::StoreBufferArgs::Address));
-                ASSERT_MSG(success, "unhandled pattern in tess factor store");
-
-                const u32 gcn_factor_idx = (info.inst_offset.Value() + voffset.U32()) >> 2;
+                const u32 gcn_factor_idx = [&]() -> u32 {
+                    IR::Value voffset;
+                    if (M_COMPOSITECONSTRUCTU32X3(MatchU32(0), MatchImm(voffset), MatchIgnore())
+                            .Match(inst.Arg(IR::StoreBufferArgs::Address))) {
+                        return (info.inst_offset.Value() + voffset.U32()) >> 2;
+                    }
+                    // The dword offset inside the tess factor buffer may be computed from the
+                    // invocation ID (per-invocation staging, same construct as the patch constant
+                    // writes). Evaluate it with InvocationId = 0, matching the pass's
+                    // invocation-invariant model of tessellation state.
+                    IR::Value dynamic_offset;
+                    if (M_COMPOSITECONSTRUCTU32X3(MatchU32(0), MatchValue(dynamic_offset),
+                                                  MatchIgnore())
+                            .Match(inst.Arg(IR::StoreBufferArgs::Address))) {
+                        if (const auto folded = TryFoldInvocationIdZero(dynamic_offset)) {
+                            std::fprintf(stderr,
+                                         "GPU: tess factor store offset folded at InvocationId=0: "
+                                         "%u -> factor idx %u (shader %016llx)\n",
+                                         *folded,
+                                         (info.inst_offset.Value() + *folded) >> 2,
+                                         (unsigned long long)program.info.pgm_hash);
+                            return (info.inst_offset.Value() + *folded) >> 2;
+                        }
+                    }
+                    IR::DumpProgram(program, program.info, "hull-failure.", true);
+                    UNREACHABLE_MSG("unhandled pattern in tess factor store, shader {:#x}",
+                                    program.info.pgm_hash);
+                }();
                 const IR::Value data = inst.Arg(IR::StoreBufferArgs::Data);
 
                 const u32 num_dwords = u32(opcode) - u32(IR::Opcode::StoreBufferU32) + 1;
@@ -475,8 +544,22 @@ void HullShaderTransform(IR::Program& program, const RuntimeInfo& runtime_info) 
                         ir.SetTcsGenericAttribute(data_component, attr_index, comp_index);
                     } else {
                         ASSERT(output_kind == AttributeRegion::PatchConst);
-                        ASSERT_MSG(addr.IsImmediate(), "patch addr non imm, inst {}",
-                                   fmt::ptr(addr.Inst()));
+                        if (!addr.IsImmediate()) {
+                            const auto folded = TryFoldInvocationIdZero(IR::Value{addr});
+                            if (!folded) {
+                                // Capture the failing expression, including its cross-block
+                                // inputs, without enabling expensive dumps for every shader.
+                                IR::DumpProgram(program, info, "hull-failure.", true);
+                                UNREACHABLE_MSG("patch addr non imm, inst {}, shader {:#x}",
+                                                fmt::ptr(addr.Inst()), info.pgm_hash);
+                            }
+                            std::fprintf(stderr,
+                                         "GPU: patch-const LDS write offset folded at "
+                                         "InvocationId=0: %u -> patch %u (shader %016llx)\n",
+                                         folded.value(), (folded.value() >> 2) + off_dw,
+                                         (unsigned long long)info.pgm_hash);
+                            addr = ir.Imm32(folded.value());
+                        }
                         ir.SetPatch(IR::PatchGeneric((addr.U32() >> 2) + off_dw), data_component);
                     }
                 };
@@ -581,10 +664,23 @@ void DomainShaderTransform(const IR::Program& program, const RuntimeInfo& runtim
                     if (region == AttributeRegion::OutputCP) {
                         return ReadTessControlPointAttribute(
                             addr, runtime_info.sw.tcs.hs_output_cp_stride, ir, off_dw, false);
-                    } else {
-                        ASSERT(region == AttributeRegion::PatchConst);
-                        return ir.GetPatch(IR::PatchGeneric((addr.U32() >> 2) + off_dw));
                     }
+                    ASSERT(region == AttributeRegion::PatchConst);
+                    if (!addr.IsImmediate()) {
+                        const auto folded = TryFoldInvocationIdZero(IR::Value{addr});
+                        if (!folded) {
+                            IR::DumpProgram(program, info, "hull-failure.", true);
+                            UNREACHABLE_MSG("patch const read addr non imm, inst {}, shader {:#x}",
+                                            fmt::ptr(addr.Inst()), info.pgm_hash);
+                        }
+                        std::fprintf(stderr,
+                                     "GPU: patch-const LDS read offset folded at InvocationId=0: "
+                                     "%u -> patch %u (shader %016llx)\n",
+                                     folded.value(), (folded.value() >> 2) + off_dw,
+                                     (unsigned long long)info.pgm_hash);
+                        addr = ir.Imm32(folded.value());
+                    }
+                    return ir.GetPatch(IR::PatchGeneric((addr.U32() >> 2) + off_dw));
                 };
                 IR::Value attr_read;
                 if (num_dwords == 1) {

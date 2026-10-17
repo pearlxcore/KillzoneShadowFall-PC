@@ -23,6 +23,17 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+/* Opt-in Killzone layout from lesca-191204/killzone-shadowfall-pc (GPL-2.0),
+ * commit 2194e4984f7053500c60af3fae845c053bb3ea81. Keep the established layout
+ * available for comparison until campaign testing confirms the new one. */
+static int kzsf_memory_layout(void) {
+    static int value = -1;
+    if (value < 0) {
+        const char *env = getenv("KZSF_BETA_MEMORY_LAYOUT");
+        value = env && env[0] == '1';
+    }
+    return value;
+}
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. GOW3_DMEM_MB raises it (the resolution
  * patches above 1080p need about 4 GiB more; run.sh sets it). */
 static uint64_t pool_size_bytes(void) {
@@ -30,7 +41,10 @@ static uint64_t pool_size_bytes(void) {
     if (!size) {
         const char *env = getenv("GOW3_DMEM_MB");
         uint64_t mb = env ? strtoull(env, NULL, 10) : 0;
-        if (mb < 5056 || mb > 16384) mb = 5056;
+        /* Killzone sizes its remaining heap in 32 bits. The beta uses 4608 MiB
+         * to avoid truncation when the remaining free pool exceeds 4 GiB. */
+        uint64_t minimum = kzsf_memory_layout() ? 4096 : 5056;
+        if (mb < minimum || mb > 16384) mb = kzsf_memory_layout() ? 4608 : 5056;
         size = mb * 1024 * 1024;
     }
     return size;
@@ -40,6 +54,11 @@ static uint64_t pool_size_bytes(void) {
 #define PAGE UINT64_C(16384)
 #define USER_MIN UINT64_C(0x1000000000)
 #define USER_MAX UINT64_C(0xfc00000000)
+/* System-managed guest mappings must not collide with the fixed direct pool
+ * at USER_MIN or the host low allocator beginning at 32 GiB. */
+#define MANAGED_MIN UINT64_C(0x200000000)
+#define MANAGED_MAX UINT64_C(0x800000000)
+#define FREE_MIN UINT64_C(0x2000000000)
 #define LIMIT 4096
 #define INVALID ((int32_t)UINT32_C(0x80020016))
 #define NO_MEMORY ((int32_t)UINT32_C(0x8002000c))
@@ -138,9 +157,24 @@ static void region_erase(size_t at, size_t n) {
 /* The guest range is reserved before anything else can be placed there (runtime_start). */
 void runtime_memory_reserve(void) {
     if (region_count) return;
+    if (kzsf_memory_layout()) {
+        if (!VirtualAlloc2(NULL,(void *)MANAGED_MIN,MANAGED_MAX-MANAGED_MIN,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
+            win_fail("reserving the PS4 system-managed range",MANAGED_MIN,MANAGED_MAX-MANAGED_MIN);
+        region_insert(0,(HostRegion){MANAGED_MIN,MANAGED_MAX,0,0});
+    }
     if (!VirtualAlloc2(NULL,(void *)USER_MIN,USER_MAX-USER_MIN,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
         win_fail("reserving the PS4 address range (link with --disable-high-entropy-va)",USER_MIN,USER_MAX-USER_MIN);
-    region_insert(0,(HostRegion){USER_MIN,USER_MAX,0,0});
+    region_insert(region_count,(HostRegion){USER_MIN,USER_MAX,0,0});
+    if (kzsf_memory_layout()) return;
+    /* Killzone: the guest maps memory just below LOW_MIN (0x800000000, e.g. 0x7f0000000).
+     * Reserve the range it uses for low mappings as its own placeholder so views can replace it.
+     * It is disjoint from the host low allocator, which starts at LOW_MIN. */
+    if (VirtualAlloc2(NULL,(void *)UINT64_C(0x400000000),UINT64_C(0x400000000),
+                      MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
+        region_insert(0,(HostRegion){UINT64_C(0x400000000),UINT64_C(0x800000000),0,0});
+    else
+        fprintf(stderr,"Runtime: low guest range 0x400000000..0x800000000 not reserved (error %lu)\n",
+                GetLastError());
 }
 static void view_map(const HostRegion *r, DWORD protect) {
     DWORD initial=protect==PAGE_NOACCESS ? PAGE_READWRITE : protect, old;
@@ -347,13 +381,21 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
     return 0;
 }
 /* First-fit search in the PS4 user range, starting from the hint. */
-static uintptr_t find_free(uintptr_t hint, uint64_t size, uint64_t alignment) {
-    uintptr_t at=align_up(hint<USER_MIN ? USER_MIN : hint, alignment);
-    for (size_t i=vma_index(at); at+size<=USER_MAX; ++i) {
+static uintptr_t find_in(uintptr_t at, uintptr_t limit, uint64_t size, uint64_t alignment) {
+    at=align_up(at,alignment);
+    for (size_t i=vma_index(at); at<=limit && size<=limit-at; ++i) {
         if (i==vma_count || vmas[i].start>=at+size) return at;
         at=align_up(vmas[i].end,alignment);
     }
     return 0;
+}
+static uintptr_t find_free(uintptr_t hint, uint64_t size, uint64_t alignment) {
+    if (kzsf_memory_layout()) {
+        if (hint>=USER_MIN) return find_in(hint,USER_MAX,size,alignment);
+        uintptr_t at=find_in(hint>MANAGED_MIN ? hint : MANAGED_MIN,MANAGED_MAX,size,alignment);
+        return at ? at : find_in(FREE_MIN,USER_MAX,size,alignment);
+    }
+    return find_in(hint<USER_MIN ? USER_MIN : hint,USER_MAX,size,alignment);
 }
 static void drop_range(uintptr_t start, uintptr_t end) {
     int error; size_t i=carve(start,end,&error), n=0;
@@ -374,7 +416,11 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
         if (!address || address%PAGE) return INVALID;
         if ((flags & MAP_NO_OVERWRITE) && overlaps(address,address+size,1)) return NO_MEMORY;
     } else {
-        address=find_free(address,size,alignment);
+        /* The guest maps its direct-memory pool with MAP_FIXED at the window base
+         * (0x1000000000). Float other mappings above the whole window so a non-fixed
+         * allocation can never take the address the pool will later request. */
+        uintptr_t window_end=UINT64_C(0x1000000000)+POOL_SIZE;
+        address=find_free(kzsf_memory_layout() ? address : (address<window_end ? window_end : address),size,alignment);
         if (!address) return NO_MEMORY;
     }
     if (host_map(address,size,host_prot(prot),kind==KIND_RESERVED,phys)) return NO_MEMORY;

@@ -196,6 +196,7 @@ def prepare(game, out):
         name, info, other, shndx, value, sz = unpack('<IBBHQQ', syms, pos)
         symbols.append(dict(name=string(name), type=info & 15, section=shndx, value=value, size=sz))
     relocs, counts, imports = [], collections.Counter(), {}
+    skipped = collections.Counter()
     for offset_tag, size_tag in ((0x61000029, 0x6100002d), (0x6100002f, 0x61000031)):
         table = span(blob, tags[offset_tag], tags[size_tag])
         if len(table) % 24:
@@ -223,7 +224,9 @@ def prepare(game, out):
                         raise ValueError('unsupported import addend')
                     relocs.append((target, kind, imports[sym], addend))
             else:
-                raise ValueError(f'unsupported relocation {kind}')
+                # Killzone: TLS and other kinds the base loader does not model yet. Recorded,
+                # not fatal, so the loader can still reach the guest entry (M1).
+                skipped[kind] += 1
     names = [symbols[i]['name'] for i in imports]
     candidates = ('_init_env', 'atexit', 'exit', '_exit', '__cxa_atexit', '__cxa_finalize',
                   '__cxa_guard_acquire', '__cxa_guard_release', '__cxa_guard_abort',
@@ -280,6 +283,8 @@ def prepare(game, out):
     write_report(out / 'analysis.json', report)
     print(f"{report['sfo'].get('TITLE')} | entry={header[4]:#x} | image={size:,} bytes")
     print(f"{len(names)} imported symbols; {sum(counts.values()):,} relocations; {len(report['needed'])} required modules")
+    if skipped:
+        print(f"Skipped relocation kinds: {dict(skipped)}")
     print(f"Unavailable non-loadable metadata headers: {missing}; not a byte-exact ELF reconstruction")
     print(f"Output: {out.resolve()}")
     print(f"libc _init_env verified RET: {libc_evidence['init_env_is_ret']}")
