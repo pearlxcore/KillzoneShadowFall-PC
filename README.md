@@ -168,6 +168,9 @@ selected options, and relevant logs; do not upload your game dump.
 
 ## How it works
 
+See the [engine-controls investigation](docs/KILLZONE-ENGINE-CONTROLS.md) for
+hidden-setting candidates, implemented controls and the current sprint-turn limitations.
+
 | Part | Where | What it does |
 |---|---|---|
 | Preparation | `scripts/` | Applies relocations and links bundled modules with dynamic exports |
