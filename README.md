@@ -31,6 +31,9 @@ in the tree; the instructions below are for this Killzone branch.
 - Chapter transitions and the previously reproducible Chapter 9 allocation crash.
 - Native 1080p rendering, including fixes for white/striped foliage and purple bark
   in the tested scenes.
+- **Motion blur switch (experimental):** Graphics → Motion blur selects the
+  game's native enabled/disabled path on the next launch. Startup and patch checks
+  pass; gameplay appearance is awaiting confirmation. Depth of field is separate.
 - **30, 60 and 120 FPS limits.** These are caps, not guaranteed frame rates.
 - Controller and keyboard input, button remapping, separate controller look/aim
   gains, and heading/pitch turn-speed controls.

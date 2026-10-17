@@ -50,6 +50,7 @@ DEFAULTS = dict(game_dir='', profile='Current build',
                 controller_look_gain='100', controller_aim_gain='100', controller_turn_speed='100',
                 controller_pitch_speed='100', keys={}, pads={})
 DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_ads_sensitivity='100',mouse_invert_y=False)
+DEFAULTS.update(motion_blur=True)
 
 def load_preferences():
     try:
@@ -124,6 +125,7 @@ def launch_spec(values, folder):
         KZSF_VIRTUAL_TSC='1', KZSF_BETA_MEMORY_LAYOUT='1' if beta else '0',
         KZSF_UNLIMITED_HEALTH=str(int(values.get('unlimited_health',False))),
         KZSF_INFINITE_AMMO=str(int(values.get('infinite_ammo',False))),
+        KZSF_DISABLE_MOTION_BLUR=str(int(not values.get('motion_blur',True))),
         GOW3_DMEM_MB='4608' if beta else '6144', GOW3_FPS_LIMIT=values['fps'], GOW3_VBLANK_HZ='60',
         GOW3_VK_VALIDATION='0', GOW3_VK_VALIDATION_SYNC='0', GOW3_VK_STOP_ON_ERROR='0',
         VK_LOADER_LAYERS_DISABLE='~implicit~', GOW3_VK_RECORD_THREAD='0', GOW3_DRAW_PIPE='0',
@@ -320,6 +322,7 @@ class Launcher:
           ('Frame rate limit','fps',('30','60','120')),('Anti-aliasing','upscaler',('none','fsr3','taa'))]: self.choice(p,label,key,options)
         self.label(p,'Window size controls the display output. The game renders internally at 1920 × 1080.',True).pack(fill='x',pady=12)
         self.check(p,'VSync','vsync'); self.check(p,'Sharpening (RCAS)','rcas'); self.check(p,'Show FPS','show_fps')
+        self.check(p,'Motion blur (experimental)','motion_blur')
         self.label(p,'Frame limits do not guarantee performance. FSR 3.1 AA and TAA use native resolution and may introduce trails on moving objects.',True).pack(fill='x',pady=15)
 
     def build_controls(self):

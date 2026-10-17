@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include "runtime.h"
 #include "kzsf_timing.h"
+#include "kzsf_motion_blur.h"
 #include "cpu_check.h"
 #include "isa_rewrite.h"
 #include "orb_hook.h"
@@ -1450,6 +1451,14 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_actor_watch(segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(segments, ns, size);
     if (gpu_enabled) install_kzsf_cheats(segments, ns, size);
+    if (gpu_enabled && getenv("KZSF_DISABLE_MOTION_BLUR") && getenv("KZSF_DISABLE_MOTION_BLUR")[0]=='1') {
+        uint32_t before=0,after=0;
+        if (!mapped(segments,ns,KZSF_BLUR_FLAGS,4) ||
+            !mapped(segments,ns,KZSF_BLUR_GUARD,sizeof(kzsf_blur_signature)) ||
+            !kzsf_disable_motion_blur(image,size,&before,&after))
+            fail("Killzone motion-blur signature mismatch; refusing to patch");
+        printf("Killzone motion blur: engine mask %08x -> %08x; native off path selected (visual test pending)\n",before,after);
+    }
 #ifdef _WIN32
     if(gpu_enabled && getenv("KZSF_PLAYER_TURN") && getenv("KZSF_PLAYER_TURN")[0]=='1') {
         if(!mapped(segments,ns,KZSF_PLAYER_TURN_GUARD,sizeof(kzsf_player_turn_signature)) ||
