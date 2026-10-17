@@ -112,17 +112,16 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         Gow3Settings::Get().display_mode = Gow3Graphics::Borderless;
     }
     ApplyDisplayMode(Gow3Settings::Get().display_mode);
-    const char* mouse_env=std::getenv("GOW3_MOUSE_AIM");
-    mouse_enabled=mouse_env && mouse_env[0]=='1';
+    mouse_enabled=Gow3Settings::Get().mouse_aim.load();
     {
         std::scoped_lock lock{mouse_mutex};
         mouse_input.Reset(false,MouseNow());
-        const char* gain=std::getenv("GOW3_MOUSE_SENSITIVITY");
-        mouse_input.gain=gain ? std::clamp(std::atoi(gain),50,300)/100.f : 1.f;
-        const char* aim_gain=std::getenv("GOW3_MOUSE_ADS_SENSITIVITY");
-        mouse_input.aim_gain=aim_gain ? std::clamp(std::atoi(aim_gain),25,300)/100.f : mouse_input.gain;
-        const char* invert=std::getenv("GOW3_MOUSE_INVERT_Y");
-        mouse_input.invert=invert && invert[0]=='1';
+        const auto& s=Gow3Settings::Get();
+        mouse_input.gain=s.mouse_sensitivity.load()/100.f;
+        mouse_input.aim_gain=s.mouse_ads_sensitivity.load()/100.f;
+        mouse_input.horizontal_gain=s.mouse_horizontal_speed.load()/100.f;
+        mouse_input.vertical_gain=s.mouse_vertical_speed.load()/100.f;
+        mouse_input.invert=s.mouse_invert_y.load();
     }
     if (mouse_enabled) SDL_ShowCursor(); else SDL_HideCursor();
     int w = 0, h = 0;
@@ -192,6 +191,18 @@ void WindowSDL::UpdateTextTitle() {
 }
 
 bool WindowSDL::PollEvents() {
+    const auto& mouse_settings=Gow3Settings::Get();
+    const bool mouse_requested=mouse_settings.mouse_aim.load();
+    if (mouse_enabled && !mouse_requested) SetMouseCapture(false);
+    mouse_enabled=mouse_requested;
+    {
+        std::scoped_lock lock{mouse_mutex};
+        mouse_input.gain=mouse_settings.mouse_sensitivity.load()/100.f;
+        mouse_input.aim_gain=mouse_settings.mouse_ads_sensitivity.load()/100.f;
+        mouse_input.horizontal_gain=mouse_settings.mouse_horizontal_speed.load()/100.f;
+        mouse_input.vertical_gain=mouse_settings.mouse_vertical_speed.load()/100.f;
+        mouse_input.invert=mouse_settings.mouse_invert_y.load();
+    }
     if (mouse_enabled && (Gow3Overlay::CapturesInput() || text_active ||
         !(SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS))) SetMouseCapture(false);
     {

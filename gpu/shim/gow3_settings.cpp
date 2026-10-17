@@ -63,7 +63,16 @@ void Set(Values& v, const std::string& key, const std::string& value) {
             return;
         }
     }
-    if (key == "controller_turn_speed") {
+    if (key == "mouse_aim") { v.mouse_aim=i!=0;
+    } else if (key == "mouse_invert_y") { v.mouse_invert_y=i!=0;
+    } else if (key == "mouse_sensitivity") { v.mouse_sensitivity=std::clamp(i,50,300);
+    } else if (key == "mouse_ads_sensitivity") { v.mouse_ads_sensitivity=std::clamp(i,25,300);
+    } else if (key == "mouse_horizontal_speed") { v.mouse_horizontal_speed=std::clamp(i,25,300);
+    } else if (key == "mouse_vertical_speed") { v.mouse_vertical_speed=std::clamp(i,25,300);
+    } else if (key == "motion_blur") { v.motion_blur=i!=0;
+    } else if (key == "unlimited_health") { v.unlimited_health=i!=0;
+    } else if (key == "infinite_ammo") { v.infinite_ammo=i!=0;
+    } else if (key == "controller_turn_speed") {
         v.controller_turn_speed = i >= 50 && i <= 300 ? i : 100;
     } else if (key == "controller_pitch_speed") {
         v.controller_pitch_speed = i >= 50 && i <= 300 ? i : 100;
@@ -186,6 +195,12 @@ void Load() {
         }
     }
     const std::pair<const char*, const char*> env_keys[] = {
+        {"GOW3_MOUSE_AIM", "mouse_aim"}, {"GOW3_MOUSE_SENSITIVITY", "mouse_sensitivity"},
+        {"GOW3_MOUSE_ADS_SENSITIVITY", "mouse_ads_sensitivity"},
+        {"GOW3_MOUSE_HORIZONTAL_SPEED", "mouse_horizontal_speed"},
+        {"GOW3_MOUSE_VERTICAL_SPEED", "mouse_vertical_speed"}, {"GOW3_MOUSE_INVERT_Y", "mouse_invert_y"},
+        {"GOW3_MOTION_BLUR", "motion_blur"}, {"KZSF_UNLIMITED_HEALTH", "unlimited_health"},
+        {"KZSF_INFINITE_AMMO", "infinite_ammo"},
         {"GOW3_PAD_TURN_SPEED", "controller_turn_speed"},
         {"GOW3_PAD_PITCH_SPEED", "controller_pitch_speed"},
         {"GOW3_PAD_LOOK_GAIN", "controller_look_gain"}, {"GOW3_PAD_AIM_GAIN", "controller_aim_gain"},
@@ -203,6 +218,7 @@ void Load() {
         }
     }
     v.startup_preset = v.preset;
+    if (const char* off=std::getenv("KZSF_DISABLE_MOTION_BLUR")) v.motion_blur=off[0]!='1';
     const char* turn_hook=std::getenv("KZSF_ENGINE_TURN");
     v.engine_turn_hook=turn_hook && turn_hook[0]=='1';
     const char *player_turn_hook=std::getenv("KZSF_PLAYER_TURN");
@@ -329,6 +345,12 @@ void Save() {
                  v.controller_look_gain.load(), v.controller_aim_gain.load());
     std::fprintf(file, "controller_turn_speed=%d\n",v.controller_turn_speed.load());
     std::fprintf(file, "controller_pitch_speed=%d\n",v.controller_pitch_speed.load());
+    std::fprintf(file,"mouse_aim=%d\nmouse_invert_y=%d\nmouse_sensitivity=%d\nmouse_ads_sensitivity=%d\n"
+                      "mouse_horizontal_speed=%d\nmouse_vertical_speed=%d\nmotion_blur=%d\n"
+                      "unlimited_health=%d\ninfinite_ammo=%d\n",
+        int(v.mouse_aim.load()),int(v.mouse_invert_y.load()),v.mouse_sensitivity.load(),v.mouse_ads_sensitivity.load(),
+        v.mouse_horizontal_speed.load(),v.mouse_vertical_speed.load(),int(v.motion_blur.load()),
+        int(v.unlimited_health.load()),int(v.infinite_ammo.load()));
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");

@@ -51,6 +51,13 @@ DEFAULTS = dict(game_dir='', profile='Current build',
                 controller_pitch_speed='100', keys={}, pads={})
 DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_ads_sensitivity='100',mouse_invert_y=False)
 DEFAULTS.update(motion_blur=True)
+DEFAULTS.update(mouse_horizontal_speed='100',mouse_vertical_speed='100')
+LIVE_CONFIG = {'fps':'fps_limit', 'upscaler':'upscaler', 'display_mode':'display_mode',
+    **{key:key for key in ('vsync','rcas','show_fps','async_shaders','stale_readback',
+       'deferred_readback','frames_queued','mouse_aim','mouse_invert_y','mouse_sensitivity',
+       'mouse_ads_sensitivity','mouse_horizontal_speed','mouse_vertical_speed','motion_blur',
+       'unlimited_health','infinite_ammo','controller_look_gain','controller_aim_gain',
+       'controller_turn_speed','controller_pitch_speed')}}
 
 def load_preferences():
     try:
@@ -60,6 +67,13 @@ def load_preferences():
     values = dict(DEFAULTS)
     if isinstance(data, dict):
         values.update({k:v for k,v in data.items() if k in DEFAULTS})
+    settings=read_ini(CONFIG)
+    for key,ini_key in LIVE_CONFIG.items():
+        if ini_key in settings:
+            value=settings[ini_key]
+            if isinstance(DEFAULTS[key],bool):
+                if value in ('0','1'):values[key]=value=='1'
+            else:values[key]='none' if key=='upscaler' and value=='off' else value
     for key, choices in [('profile', PROFILES), ('fps', ('30','60','120')),
                          ('display_mode', ('windowed','borderless','fullscreen')),
                          ('window_size', ('1280x720','1600x900','1920x1080','2560x1440','3840x2160')),
@@ -71,8 +85,11 @@ def load_preferences():
     settings=read_ini(CONFIG)
     mouse_gain=str(values.get('mouse_sensitivity','100'))
     values['mouse_sensitivity']=mouse_gain if mouse_gain.isdigit() and 50<=int(mouse_gain)<=300 else '100'
-    ads_gain=str(data.get('mouse_ads_sensitivity',values['mouse_sensitivity'])) if isinstance(data,dict) else '100'
+    ads_gain=str(settings.get('mouse_ads_sensitivity',data.get('mouse_ads_sensitivity',values['mouse_sensitivity']))) if isinstance(data,dict) else '100'
     values['mouse_ads_sensitivity']=ads_gain if ads_gain.isdigit() and 25<=int(ads_gain)<=300 else '100'
+    for key in ('mouse_horizontal_speed','mouse_vertical_speed'):
+        value=str(values[key])
+        values[key]=value if value.isdigit() and 25<=int(value)<=300 else '100'
     for key in ('controller_look_gain','controller_aim_gain','controller_turn_speed','controller_pitch_speed'):
         value=str(settings.get(key,values[key]))
         values[key]=value if value.isdigit() and 50<=int(value)<=300 else '100'
@@ -104,6 +121,10 @@ def persist(values):
                    controller_aim_gain=values['controller_aim_gain'],
                    controller_turn_speed=values['controller_turn_speed'],
                    controller_pitch_speed=values['controller_pitch_speed'])
+    for key in ('mouse_aim','mouse_invert_y','mouse_sensitivity','mouse_ads_sensitivity',
+                'mouse_horizontal_speed','mouse_vertical_speed','motion_blur','unlimited_health','infinite_ammo'):
+        value=values.get(key,DEFAULTS[key])
+        updates[key]=str(int(value)) if isinstance(value,bool) else str(value)
     write_keys(CONFIG, updates)
 
 def executable_for(values):
@@ -139,6 +160,8 @@ def launch_spec(values, folder):
         GOW3_MOUSE_AIM=str(int(values.get('mouse_aim',True))),
         GOW3_MOUSE_SENSITIVITY=str(values.get('mouse_sensitivity','100')),
         GOW3_MOUSE_ADS_SENSITIVITY=str(values.get('mouse_ads_sensitivity',values.get('mouse_sensitivity','100'))),
+        GOW3_MOUSE_HORIZONTAL_SPEED=str(values.get('mouse_horizontal_speed','100')),
+        GOW3_MOUSE_VERTICAL_SPEED=str(values.get('mouse_vertical_speed','100')),
         GOW3_MOUSE_INVERT_Y=str(int(values.get('mouse_invert_y',False))),
         GOW3_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
         GOW3_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
@@ -150,8 +173,8 @@ def launch_spec(values, folder):
     env['GOW3_PAD_MAP'] = ','.join(f'{k}={v}' for k,v in values['pads'].items() if v)
     executable=executable_for(values)
     env.update(KZSF_DIRECT_TSC='1',GOW3_PRECOMPILE='1',GOW3_BACKGROUND_WARMUP='0',GOW3_FREEZE_SECONDS='0')
-    if any(str(values.get(k,'100'))!='100' for k in ('controller_turn_speed','controller_pitch_speed')):
-        env['KZSF_PLAYER_TURN']='1'
+    # Keep the guarded player hook available for live overlay adjustments from 100%.
+    env['KZSF_PLAYER_TURN']='1'
     if values['upscaler'] in ('fsr3','taa'):
         env.update(KZSF_FSR_NATIVE='1',GOW3_UPSCALE_PRESET='0',GOW3_OUTPUT_RES='1920x1080',
                    GOW3_JITTER='0',GOW3_REACTIVE='0',GOW3_OBJECT_MOTION='0')
@@ -344,6 +367,9 @@ class Launcher:
         self.check(p,'Enable mouse look','mouse_aim')
         self.choice(p,'Mouse look sensitivity (%)','mouse_sensitivity',gains)
         self.choice(p,'Mouse aim sensitivity / ADS (%)','mouse_ads_sensitivity',('25',)+gains)
+        self.choice(p,'Mouse horizontal speed (%)','mouse_horizontal_speed',('25',)+gains)
+        self.choice(p,'Mouse vertical speed (%)','mouse_vertical_speed',('25',)+gains)
+        self.label(p,'Axis speed multiplies both look and ADS sensitivity. 100% keeps the original mouse scale.',True).pack(fill='x',pady=(0,8))
         self.check(p,'Invert mouse Y axis','mouse_invert_y')
         self.label(p,'Click the game to capture the mouse. Left Alt releases it.\nLeft click fires; right click aims. Insert opens the in-game menu.\nMouse look uses the game\'s camera controls and turn-speed limits.',True).pack(fill='x',pady=(0,20))
         self.heading(p,'Controller')
@@ -392,6 +418,8 @@ class Launcher:
         self.vars['mouse_aim'].set(True)
         self.vars['mouse_sensitivity'].set('100')
         self.vars['mouse_ads_sensitivity'].set('100')
+        self.vars['mouse_horizontal_speed'].set('100')
+        self.vars['mouse_vertical_speed'].set('100')
         self.vars['mouse_invert_y'].set(False)
         self.vars['controller_turn_speed'].set('100')
         self.vars['controller_pitch_speed'].set('100')
@@ -472,10 +500,15 @@ class Launcher:
                     log.write(f'{key}={spec["env"][key]}\n')
             self.monitor=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--run-session',str(folder/'session.json')],
                 env=spec['env'],cwd=ROOT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            self.launched_values=values
             self.play_button.configure(text='GAME RUNNING',state='disabled'); self.session_label.configure(text='Game running. Enjoy your session.',fg=CYAN)
         except (OSError,ValueError) as exc: messagebox.showerror('Launch failed',str(exc),parent=self.root)
     def poll(self):
         if self.monitor and self.monitor.poll() is not None:
+            updated=load_preferences()
+            for key in LIVE_CONFIG:
+                # Preserve edits made in the launcher during this game session.
+                if self.vars[key].get()==self.launched_values[key]:self.vars[key].set(updated[key])
             try:
                 result=json.loads((self.session/'status.json').read_text())
                 text='Game closed. Ready to play again.' if result.get('exit_code')==0 else 'Game stopped unexpectedly. See session logs.'

@@ -7,7 +7,7 @@
 // Sampling the pad more often must not consume the movement multiple times.
 struct KillzoneMouseInput {
     double pending_x{}, pending_y{};
-    float x{}, y{}, gain=1.f, aim_gain=1.f;
+    float x{}, y{}, gain=1.f, aim_gain=1.f, horizontal_gain=1.f, vertical_gain=1.f;
     uint64_t sampled{}, moved{};
     unsigned buttons{};
     bool captured{}, invert{};
@@ -18,7 +18,8 @@ struct KillzoneMouseInput {
     void Motion(float dx,float dy,uint64_t now) {
         if (!captured || !std::isfinite(dx) || !std::isfinite(dy)) return;
         const float sensitivity=(buttons&2u) ? aim_gain : gain;
-        pending_x+=dx*sensitivity; pending_y+=dy*sensitivity; moved=now;
+        pending_x+=dx*sensitivity*horizontal_gain;
+        pending_y+=dy*sensitivity*vertical_gain; moved=now;
     }
     void Sample(uint64_t now,int16_t& rx,int16_t& ry) {
         rx=ry=0;

@@ -37,7 +37,9 @@ in the tree; the instructions below are for this Killzone branch.
 - **30, 60 and 120 FPS limits.** These are caps, not guaranteed frame rates.
 - Controller and keyboard input, button remapping, separate controller look/aim
   gains, and heading/pitch turn-speed controls.
-- Mouse look with separate look and right-click ADS sensitivity, plus Y inversion. Click the game window
+- Mouse look with separate look and right-click ADS sensitivity, horizontal/vertical
+  speed multipliers and Y inversion. Axis speed applies to both look and ADS and
+  does not change controller settings. Click the game window
   to capture the mouse; **Left Alt** releases it. **Left click** fires and
   **right click** aims. Capture also releases on focus loss, the port menu,
   Enter, or the controller's Start button. Mouse input drives the game's
@@ -53,8 +55,10 @@ in the tree; the instructions below are for this Killzone branch.
   - **Cheats:** unlimited player health and infinite ammo / no reload.
   - **Advanced:** shader compilation, GPU readbacks, queued frames and session logs.
 - **In-game menu:** **Insert** on the keyboard or **R3 + L2** on the controller,
-  with display, performance, control and overlay options. Select campaign cheats
-  in the launcher before starting the game.
+  with display, performance, control and overlay options. Mouse look/ADS sensitivity,
+  horizontal/vertical mouse speed and Y inversion adjust live under **Game → Mouse**.
+  Motion blur and campaign cheats can be selected in the overlay but require a
+  game restart. Overlay settings carry back to the launcher after the session.
 
 ## What still needs work
 

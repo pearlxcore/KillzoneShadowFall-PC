@@ -275,13 +275,29 @@ std::string OverlayText() {
 
 void GameTab() {
     auto& s = Gow3Settings::Get();
+    ImGui::SeparatorText("Mouse");
+    if (BeginRows("##mouse-controls")) {
+        CheckRow("Enable mouse look",s.mouse_aim,"Click the game to capture the mouse. Left Alt releases it.");
+        ImGui::BeginDisabled(!s.mouse_aim.load());
+        SliderRow("Look sensitivity",s.mouse_sensitivity,50,300,"%d%%","Mouse sensitivity without right-click aiming.");
+        SliderRow("Aim sensitivity / ADS",s.mouse_ads_sensitivity,25,300,"%d%%","Independent mouse sensitivity while holding right click.");
+        SliderRow("Horizontal speed",s.mouse_horizontal_speed,25,300,"%d%%","Horizontal mouse multiplier for both look and ADS.");
+        SliderRow("Vertical speed",s.mouse_vertical_speed,25,300,"%d%%","Vertical mouse multiplier for both look and ADS.");
+        CheckRow("Invert mouse Y",s.mouse_invert_y,"Reverse vertical mouse movement.");
+        ImGui::EndDisabled();ImGui::EndTable();
+    }
+    if (ImGui::Button("Reset mouse controls")) {
+        s.mouse_aim=true;s.mouse_invert_y=false;
+        s.mouse_sensitivity=100;s.mouse_ads_sensitivity=100;
+        s.mouse_horizontal_speed=100;s.mouse_vertical_speed=100;dirty=true;
+    }
     ImGui::SeparatorText("Controller aiming");
     if (BeginRows("##controller-aim")) {
         ImGui::BeginDisabled(!s.engine_turn_hook.load());
-        SliderRow("Engine turn speed (test)", s.controller_turn_speed, 50, 300, "%d%%",
+        SliderRow("Horizontal turn speed", s.controller_turn_speed, 50, 300, "%d%%",
                   s.engine_turn_hook.load() ? "Experimental engine horizontal look-rate multiplier. 100% is original. Sprint effect needs testing."
                                            : "Requires the engine turn-speed test build and launcher flag.");
-        SliderRow("Engine pitch speed (test)", s.controller_pitch_speed, 50, 300, "%d%%",
+        SliderRow("Vertical turn speed", s.controller_pitch_speed, 50, 300, "%d%%",
                   s.engine_turn_hook.load() ? "Experimental engine vertical look-rate multiplier, separate from heading. 100% is original."
                                            : "Requires the engine turn-speed test build and launcher flag.");
         ImGui::EndDisabled();
@@ -304,11 +320,13 @@ void GameTab() {
             const char* value = std::getenv(key);
             return value && std::strcmp(value, "1") == 0;
         };
-        InfoRow("Unlimited player health", enabled("KZSF_UNLIMITED_HEALTH") ? "Enabled at launch" : "Off");
-        InfoRow("Infinite ammo", enabled("KZSF_INFINITE_AMMO") ? "Enabled at launch" : "Off");
+        CheckRow("Unlimited health (restart)",s.unlimited_health,"Saved for the next game launch.");
+        CheckRow("Infinite ammo (restart)",s.infinite_ammo,"Saved for the next game launch.");
+        InfoRow("Current health assist", enabled("KZSF_UNLIMITED_HEALTH") ? "Enabled at launch" : "Off");
+        InfoRow("Current ammo assist", enabled("KZSF_INFINITE_AMMO") ? "Enabled at launch" : "Off");
         ImGui::EndTable();
     }
-    ImGui::TextDisabled("Change player assists in the launcher before starting the game.");
+    ImGui::TextDisabled("Player assist changes apply after restarting the game.");
 
 }
 
@@ -320,6 +338,7 @@ void ImageTab() {
         ChoiceRow("Display mode", s.display_mode, G::DisplayModeNames.data(), nullptr, G::DisplayModeCount,
                   "Windowed, borderless window or exclusive fullscreen.");
         CheckRow("VSync", s.vsync, "Waits for the monitor: no tearing, a little more input delay.");
+        CheckRow("Motion blur (restart)",s.motion_blur,"Use Killzone's native motion-blur switch on the next launch (experimental).");
         ImGui::EndTable();
     }
     const int iw = s.image_width, ih = s.image_height, ww = s.window_width, wh = s.window_height;

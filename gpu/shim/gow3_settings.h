@@ -28,6 +28,10 @@ inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
 
 struct Values {
+    std::atomic<bool> mouse_aim{true}, mouse_invert_y{false};
+    std::atomic<int> mouse_sensitivity{100}, mouse_ads_sensitivity{100};
+    std::atomic<int> mouse_horizontal_speed{100}, mouse_vertical_speed{100};
+    std::atomic<bool> motion_blur{true}, unlimited_health{false}, infinite_ammo{false};
     std::atomic<int> controller_look_gain{100};
     std::atomic<int> controller_aim_gain{100};
     std::atomic<int> controller_turn_speed{100};
