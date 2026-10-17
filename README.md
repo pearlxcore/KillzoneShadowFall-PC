@@ -175,6 +175,9 @@ selected options, and relevant logs; do not upload your game dump.
 See the [engine-controls investigation](docs/KILLZONE-ENGINE-CONTROLS.md) for
 hidden-setting candidates, implemented controls and the current sprint-turn limitations.
 
+Next planned feature: [Modern Warfare 2019-style controls](docs/ROADMAP.md),
+including direct mouse aiming, configurable controller response and binding presets.
+
 | Part | Where | What it does |
 |---|---|---|
 | Preparation | `scripts/` | Applies relocations and links bundled modules with dynamic exports |
