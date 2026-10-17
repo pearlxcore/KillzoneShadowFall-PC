@@ -36,7 +36,7 @@ in the tree; the instructions below are for this Killzone branch.
   gains, and heading/pitch turn-speed controls.
 - **Shader-cache precompilation** on startup. Cached shaders persist between runs;
   new areas and shaders can still cause stutters.
-- **Launcher** in the game's colors, with five tabs:
+- **Launcher** with five settings pages and a Killzone-inspired design:
   - **Game:** game-folder validation, build profile, saves and logs.
   - **Graphics:** display mode, window size, frame limit, VSync, sharpening,
     FPS display and experimental temporal filtering.
