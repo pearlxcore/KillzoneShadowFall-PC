@@ -196,6 +196,8 @@ class Launcher:
         self.session = None
         root.title('Killzone Shadow Fall')
         try:
+            self.icon=tk.PhotoImage(file=str(ROOT/'launcher/killzone.png'))
+            root.iconphoto(True,self.icon)
             root.iconbitmap(str(ROOT/'launcher/killzone.ico'))
         except tk.TclError: pass
         root.geometry('1180x860'); root.minsize(1100,800); root.configure(bg=BG)
@@ -463,10 +465,22 @@ class Launcher:
         except OSError: pass
         self.root.destroy()
 
+def configure_windows_identity():
+    """Give the Tk window its own taskbar group instead of Python's identity."""
+    if os.name!='nt':
+        return
+    import ctypes
+    app_id=ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+    app_id.argtypes=[ctypes.c_wchar_p]
+    app_id.restype=ctypes.c_long
+    app_id('pearlxcore.KillzoneShadowFall.Launcher')
+
+
 def main():
     if len(sys.argv)>2 and sys.argv[1]=='--run-session':
         # Child monitor inherits the launch environment, not a copy written to disk.
         run_session(sys.argv[2]); return
+    configure_windows_identity()
     if os.name=='nt':
         import ctypes
         try: ctypes.windll.shcore.SetProcessDpiAwareness(1)
