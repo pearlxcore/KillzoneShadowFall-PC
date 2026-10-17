@@ -345,7 +345,7 @@ class Launcher:
           ('Frame rate limit','fps',('30','60','120')),('Anti-aliasing','upscaler',('none','fsr3','taa'))]: self.choice(p,label,key,options)
         self.label(p,'Window size controls the display output. The game renders internally at 1920 × 1080.',True).pack(fill='x',pady=12)
         self.check(p,'VSync','vsync'); self.check(p,'Sharpening (RCAS)','rcas'); self.check(p,'Show FPS','show_fps')
-        self.check(p,'Motion blur (experimental)','motion_blur')
+        self.check(p,'Motion blur (restart required)','motion_blur')
         self.label(p,'Frame limits do not guarantee performance. FSR 3.1 AA and TAA use native resolution and may introduce trails on moving objects.',True).pack(fill='x',pady=15)
 
     def build_controls(self):

@@ -338,7 +338,7 @@ void ImageTab() {
         ChoiceRow("Display mode", s.display_mode, G::DisplayModeNames.data(), nullptr, G::DisplayModeCount,
                   "Windowed, borderless window or exclusive fullscreen.");
         CheckRow("VSync", s.vsync, "Waits for the monitor: no tearing, a little more input delay.");
-        CheckRow("Motion blur (restart)",s.motion_blur,"Use Killzone's native motion-blur switch on the next launch (experimental).");
+        CheckRow("Motion blur (restart required)",s.motion_blur,"Enable camera motion blur. Restart the game to apply changes.");
         ImGui::EndTable();
     }
     const int iw = s.image_width, ih = s.image_height, ww = s.window_width, wh = s.window_height;

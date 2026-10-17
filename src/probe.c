@@ -1457,7 +1457,7 @@ int main(int argc, char **argv) {
             !mapped(segments,ns,KZSF_BLUR_GUARD,sizeof(kzsf_blur_signature)) ||
             !kzsf_disable_motion_blur(image,size,&before,&after))
             fail("Killzone motion-blur signature mismatch; refusing to patch");
-        printf("Killzone motion blur: engine mask %08x -> %08x; native off path selected (visual test pending)\n",before,after);
+        printf("Killzone motion blur: engine mask %08x -> %08x; native off path selected\n",before,after);
     }
 #ifdef _WIN32
     if(gpu_enabled && getenv("KZSF_PLAYER_TURN") && getenv("KZSF_PLAYER_TURN")[0]=='1') {
