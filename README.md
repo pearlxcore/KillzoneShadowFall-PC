@@ -106,34 +106,19 @@ as a supported Killzone option**. Native rendering (`none`) is the baseline.
 
 ### Portable Windows package
 
-For a packaged Windows build, extract the entire ZIP, open **Killzone Launcher.exe**,
-select your decrypted **CUSA00190 / 01.81** dump folder and press **PLAY GAME**.
-The first launch prepares the game automatically. **Prepare Game.bat** is also
-available as a setup fallback. Python and runtime libraries are included;
-players do not need MSYS2. Preparation generates the game image locally.
-Packages contain no game files, saves, personal settings or shader caches.
+1. Download and extract the **[Windows package](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases/download/v0.1.1-beta/KillzoneShadowFall-PC-Windows-20261018-162402.zip)**.
+2. **For less stuttering:** download the optional **[Starter shader cache — 100 MiB](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases/download/v0.1.1-beta/KillzoneShadowFall-PC-CUSA00190-01.81-StarterCache-beta0.1.1.zip)**.
+   With the game closed, extract it beside **Killzone Launcher.exe**, merging
+   `user/cache/CUSA00190/`. Back up an existing cache before replacing it.
+3. Open **Killzone Launcher.exe**, select your own decrypted **CUSA00190 / 01.81**
+   game folder and press **PLAY GAME**. Setup is automatic; no Python/MSYS2 install needed.
+4. Let **Loading shader cache...** finish. Keep `user/` for future launches and saves.
 
-### Optional starter shader cache (Beta 0.1.1)
+> **Cache tested only on the PC listed above. Other hardware/drivers are untested
+> and may reject it. Some stuttering can remain.** The cache contains 31,713
+> pipelines; GPU-driver binaries are generated locally.
 
-Download **KillzoneShadowFall-PC-CUSA00190-01.81-StarterCache-beta0.1.1.zip**
-from the [Beta 0.1.1 release](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases/tag/v0.1.1-beta).
-Close the game, then extract it into the same folder as **Killzone Launcher.exe**.
-Its `user/cache/CUSA00190/` folder must merge with that path in the installation;
-do not extract it inside another `user` folder. Back up an existing cache before
-replacing it. Saves and launcher preferences are not included or replaced.
-
-Open the launcher and press **PLAY GAME**. On a compatible configuration, the
-**Loading shader cache...** progress prepares the recorded pipelines before play.
-The first preparation can take longer; let it finish. Keep the installation's
-`user` folder between launches. New pipelines and other work may still stutter.
-
-The archive contains 31,713 recorded pipeline entries, translated shaders and
-their metadata/profile. It is approximately 100 MiB compressed and 300 MiB
-extracted. It excludes GPU-driver pipeline binaries; those are generated locally.
-It is an optional game-derived rendering cache, not a universal offline shader
-compiler. **Only the exact PC configuration above has been tested.** The renderer
-retains its compatibility checks and may discard incompatible cache data and
-rebuild during gameplay on other systems. Do not bypass those checks.
+Game files are not included. If automatic setup fails, use **Prepare Game.bat**.
 
 ### Build from source
 
