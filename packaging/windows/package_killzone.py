@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -49,23 +50,29 @@ def main():
     copy(ROOT / 'packaging/windows/prepare_killzone.py', 'packaging/windows/prepare_killzone.py')
     copy(ROOT / 'LICENSE', 'LICENSE')
     copy(ROOT / 'README.md', 'SOURCE-README.md')
-    # Capture dependencies recursively with MSYS2 ldd, then resolve Windows paths.
-    env = dict(os.environ, MSYSTEM='CLANG64',
-               KZSF_PACKAGE_ROOT=str(ROOT), KZSF_PACKAGE_MSYS=str(args.msys))
-    command = r'''
-cd "$(cygpath -u "$KZSF_PACKAGE_ROOT")"
-export PATH="$(cygpath -u "$KZSF_PACKAGE_MSYS")/clang64/bin:$PATH"
-ldd out/gow3-probe.exe out/gow3-gpu-capabilities.exe |
-  awk '/\/clang64\/bin\// {print $3}' | sort -u |
-  while IFS= read -r dll; do cygpath -w "$dll"; done
-'''
-    result = subprocess.run([str(args.msys / 'usr/bin/bash.exe'), '-lc', command],
-                            env=env, text=True, capture_output=True, check=True)
-    dlls = [Path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
-    if not dlls or not any(p.name.lower() == 'sdl3.dll' for p in dlls):
+    # Read PE imports recursively. ldd can return a partial DLL graph when Windows
+    # loader probing fails; static traversal must account for every dependency.
+    bindir = args.msys / 'clang64/bin'
+    available = {p.name.lower(): p for p in bindir.glob('*.dll')}
+    pending = [ROOT / 'out/gow3-probe.exe', ROOT / 'out/gow3-gpu-capabilities.exe',
+               ROOT / 'Killzone Launcher.exe']
+    bundled = set()
+    while pending:
+        binary = pending.pop()
+        imports = subprocess.check_output([str(bindir / 'llvm-objdump.exe'), '-p', str(binary)], text=True)
+        for dependency in re.findall(r'DLL Name:\s*(\S+)', imports):
+            key = dependency.lower()
+            if key in available:
+                if key not in bundled:
+                    bundled.add(key)
+                    dll = available[key]
+                    copy(dll, 'out/' + dll.name)
+                    pending.append(dll)
+            elif not key.startswith(('api-ms-', 'ext-ms-')) and not (
+                Path(os.environ['SystemRoot']) / 'System32' / dependency).is_file():
+                raise RuntimeError(f'Unresolved dependency {dependency} from {binary.name}')
+    if 'sdl3.dll' not in bundled:
         raise RuntimeError('Dependency discovery failed: SDL3 was not resolved.')
-    for dll in dlls:
-        copy(dll, 'out/' + dll.name)
     # Keep redistribution notices supplied with the CLANG64 installation.
     shutil.copytree(args.msys / 'clang64/share/licenses', dest / 'licenses/CLANG64')
     for filename in ('python.exe', 'pythonw.exe', 'python3.dll', 'LICENSE.txt'):
@@ -113,6 +120,21 @@ ldd out/gow3-probe.exe out/gow3-gpu-capabilities.exe |
     subprocess.run([str(dest / 'runtime/python.exe'), '-I', '-B', '-c',
                     'import tkinter,PIL.Image,ctypes,ssl; t=tkinter.Tcl(); print("Bundled runtime:",t.eval("info patchlevel"))'],
                    cwd=dest, check=True)
+    clean_env = dict(os.environ, PATH=os.environ['SystemRoot'] + '/System32;' + os.environ['SystemRoot'],
+                     PYTHONDONTWRITEBYTECODE='1')
+    for key in ('PYTHONHOME', 'PYTHONPATH'):
+        clean_env.pop(key, None)
+    subprocess.run([str(dest / 'runtime/python.exe'), '-B', '-c',
+                    'import sys,runpy;sys.path.insert(0,"launcher");'
+                    'import kzsf_local as ui;import tkinter as tk;'
+                    'r=tk.Tk();r.withdraw();a=ui.Launcher(r);r.update();r.destroy();'
+                    'runpy.run_path("packaging/windows/prepare_killzone.py",run_name="verify_setup");'
+                    'print("Packaged launcher and setup imports: OK")'],
+                   cwd=dest, env=clean_env, check=True, timeout=25)
+    native = subprocess.run([str(dest / 'out/gow3-probe-launcher.exe')], cwd=dest,
+                            env=clean_env, capture_output=True, timeout=20)
+    if b'usage:' not in (native.stdout + native.stderr).lower():
+        raise RuntimeError(f'Packaged runtime failed its no-argument startup check: {native.returncode}')
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     manifest = {'source_commit': revision, 'built_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
                 'files': {str(p.relative_to(dest)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest()
