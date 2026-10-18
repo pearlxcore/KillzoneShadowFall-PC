@@ -66,6 +66,10 @@ in the tree; the instructions below are for this Killzone branch.
 
 ## What still needs work
 
+Startup menu tab crashes have a [runtime compatibility fix](docs/MENU-TAB-COMPATIBILITY.md)
+tested with scripted R1/L1 switching. Individual tab actions still need gameplay
+verification; online multiplayer and PSN services are not implemented.
+
 - **Performance:** wall-facing views can reach 60 FPS while open areas and dense
   vegetation drop into the 40–50 FPS range on the development machine.
 - **Stuttering:** precompilation helps with cached shaders, but does not remove

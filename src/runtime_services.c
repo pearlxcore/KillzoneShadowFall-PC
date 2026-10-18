@@ -1,6 +1,7 @@
 /* System services for an offline, single-user console:
  *   - one local user (id 1) who is logged in but not signed in to PSN;
- *   - network cable unplugged: NetCtl disconnected, sockets unavailable;
+ *   - network cable unplugged: NetCtl disconnected, local socket bookkeeping
+ *     available, network transfers unavailable;
  *   - common dialogs complete immediately (no UI is drawn yet);
  *   - the whole package is installed (PlayGo reports every chunk local).
  * Every entry here is an explicit contract; unknown functions still stop. */
@@ -105,10 +106,105 @@ static ABI int32_t launch_browser(void) { note("SystemService: web browser reque
 static int32_t net_errno;
 static ABI int32_t net_init(void) { return 0; }
 static ABI int32_t net_term(void) { return 0; }
+/* RUDP local lifecycle is entered by Killzone's menu even while PSN is signed
+ * out (456dd0, before TurbineClientCreate). Accepting this local setup does
+ * not create a socket or establish a peer; the existing offline Net provider
+ * rejects the following client socket/bind operation. No packet APIs are
+ * reported successful, and unknown RUDP imports still stop explicitly.
+ */
+static int rudp_initialized;
+static ABI int32_t rudp_init(void *pool,uint32_t size) {
+    if(!pool || !size) return -1;
+    pthread_mutex_lock(&lock);
+    int first=!rudp_initialized;
+    rudp_initialized=1;
+    pthread_mutex_unlock(&lock);
+    if(first)note("RUDP local setup; network remains offline");
+    return 0;
+}
+static ABI int32_t rudp_end(void) {
+    pthread_mutex_lock(&lock);
+    rudp_initialized=0;
+    pthread_mutex_unlock(&lock);
+    return 0;
+}
+/* Killzone pumps this with timeout 0 from its menu's update worker. With no
+ * peer contexts there are no events/callbacks to dispatch. */
+static ABI int32_t rudp_process_events(void) {
+    pthread_mutex_lock(&lock);int initialized=rudp_initialized;pthread_mutex_unlock(&lock);
+    return initialized?0:-1;
+}
 static ABI int32_t *net_errno_loc(void) { return &net_errno; }
 static ABI int32_t net_pool_create(const char *name,int size,int flags) { (void)name; (void)size; (void)flags; return new_id(); }
 static ABI int32_t net_pool_destroy(int id) { (void)id; return 0; }
 static ABI int32_t net_unreachable(void) { net_errno=51; return NET_ENETUNREACH; }
+/* Offline socket objects, not host sockets. Turbine creates its local signal
+ * socket before checking PSN status. Rejecting creation causes gClient==NULL
+ * assertions in its worker threads. Local setup is valid even without a cable;
+ * no connect/send succeeds and no incoming packet is ever reported here. */
+#define NET_EBADF ((int32_t)0x80410109)
+#define NET_EWOULDBLOCK ((int32_t)0x80410123)
+typedef struct { int id; unsigned char address[16]; } OfflineSocket;
+static OfflineSocket net_sockets[64];
+static OfflineSocket *net_find(int id) {
+    for(unsigned i=0;i<sizeof(net_sockets)/sizeof(*net_sockets);++i)
+        if(net_sockets[i].id==id && id>0)return &net_sockets[i];
+    return NULL;
+}
+static ABI int32_t net_socket(const char *name,int family,int type,int protocol) {
+    (void)name;(void)protocol;
+    if(family!=2 || (type!=1 && type!=2)) {net_errno=22;return NET_EINVAL;}
+    int id=0x1000+new_id();pthread_mutex_lock(&lock);
+    for(unsigned i=0;i<sizeof(net_sockets)/sizeof(*net_sockets);++i)if(!net_sockets[i].id) {
+        OfflineSocket *s=&net_sockets[i];memset(s,0,sizeof(*s));s->id=id;
+        s->address[0]=16;s->address[1]=2;
+        pthread_mutex_unlock(&lock);return id;
+    }
+    pthread_mutex_unlock(&lock);net_errno=24;return (int32_t)0x80410118;
+}
+static ABI int32_t net_socket_close(int id) {
+    pthread_mutex_lock(&lock);OfflineSocket *s=net_find(id);
+    if(s)memset(s,0,sizeof(*s));
+    pthread_mutex_unlock(&lock);if(s)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_socket_configure(int id) {
+    pthread_mutex_lock(&lock);int valid=net_find(id)!=NULL;pthread_mutex_unlock(&lock);
+    if(valid)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_bind(int id,const unsigned char *address,uint32_t size) {
+    if(!address || size<16 || address[1]!=2){net_errno=22;return NET_EINVAL;}
+    pthread_mutex_lock(&lock);OfflineSocket *s=net_find(id);
+    if(s){
+        memcpy(s->address,address,16);s->address[0]=16;
+        if(!s->address[2]&&!s->address[3]) {
+            unsigned port=49152u+(unsigned)id%16384u;
+            s->address[2]=(unsigned char)(port>>8);s->address[3]=(unsigned char)port;
+        }
+    }
+    pthread_mutex_unlock(&lock);if(s)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_getsockname(int id,unsigned char *address,uint32_t *size) {
+    if(!address || !size || *size<16){net_errno=22;return NET_EINVAL;}
+    pthread_mutex_lock(&lock);OfflineSocket *s=net_find(id);
+    if(s){memcpy(address,s->address,16);*size=16;}
+    pthread_mutex_unlock(&lock);if(s)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_recv_offline(void) {net_errno=35;return NET_EWOULDBLOCK;}
+static ABI int32_t net_epoll_control(int id,int op,int socket,const void *event) {
+    if(id<=0 || op<1 || op>3 || (op!=2&&!event)){net_errno=22;return NET_EINVAL;}
+    return net_socket_configure(socket);
+}
+static ABI int32_t net_epoll_wait(int id,void *events,int max,int32_t timeout_us) {
+    if(id<=0 || !events || max<=0){net_errno=22;return NET_EINVAL;}
+    /* No traffic can arrive. Bound the wait so shutdown remains responsive. */
+    uint64_t ns=(uint64_t)(timeout_us<0 || timeout_us>100000?100000:timeout_us)*1000;
+#ifdef _WIN32
+    if(ns)compat_sleep_ns(ns);
+#else
+    if(ns){struct timespec delay={0,(long)ns};nanosleep(&delay,NULL);}
+#endif
+    return 0;
+}
 static ABI int32_t net_epoll_create(const char *name,int flags) { (void)name; (void)flags; return new_id(); }
 static ABI int32_t net_epoll_destroy(int id) { (void)id; return 0; }
 static ABI int32_t net_resolver_create(const char *name,int pool,int flags) { (void)name; (void)pool; (void)flags; return new_id(); }
@@ -604,6 +700,8 @@ static const RuntimeExport exports[]={
     {"sceSystemServiceLaunchWebBrowser",launch_browser},
     {"sceSystemServiceGetDisplaySafeAreaInfo",safe_area}, {"sceSystemServiceDisableMusicPlayer",disable_music_player},
     {"sceNetInit",net_init}, {"sceNetTerm",net_term}, {"sceNetErrnoLoc",net_errno_loc},
+    {"sceRudpInit",rudp_init}, {"sceRudpEnd",rudp_end},
+    {"sceRudpProcessEvents",rudp_process_events},
     {"sceNetPoolCreate",net_pool_create}, {"sceNetPoolDestroy",net_pool_destroy},
     {"sceNetEpollCreate",net_epoll_create}, {"sceNetEpollDestroy",net_epoll_destroy},
     {"sceNetResolverCreate",net_resolver_create}, {"sceNetResolverDestroy",net_resolver_destroy},
@@ -612,13 +710,13 @@ static const RuntimeExport exports[]={
     {"sceKernelGetOpenPsId",open_psid}, {"sceNpAuthAbortRequest",ok_void},
     {"sceSystemServiceShowDisplaySafeAreaSettings",ok_void}, {"sceNpCommerceDialogClose",commerce_close},
     {"sceNetInetPton",net_pton}, {"sceNetInetNtop",net_ntop},
-    {"sceNetSocket",net_unreachable}, {"sceNetConnect",net_unreachable}, {"sceNetBind",net_unreachable},
+    {"sceNetSocket",net_socket}, {"sceNetConnect",net_unreachable}, {"sceNetBind",net_bind},
     {"sceNetListen",net_unreachable}, {"sceNetAccept",net_unreachable}, {"sceNetSend",net_unreachable},
-    {"sceNetSendto",net_unreachable}, {"sceNetRecv",net_unreachable}, {"sceNetRecvfrom",net_unreachable},
-    {"sceNetSetsockopt",net_unreachable}, {"sceNetGetsockopt",net_unreachable},
-    {"sceNetGetsockname",net_unreachable}, {"sceNetShutdown",net_unreachable},
-    {"sceNetSocketClose",net_unreachable}, {"sceNetSocketAbort",net_unreachable},
-    {"sceNetEpollControl",net_unreachable}, {"sceNetEpollWait",net_unreachable}, {"sceNetEpollAbort",net_unreachable},
+    {"sceNetSendto",net_unreachable}, {"sceNetRecv",net_recv_offline}, {"sceNetRecvfrom",net_recv_offline},
+    {"sceNetSetsockopt",net_socket_configure}, {"sceNetGetsockopt",net_unreachable},
+    {"sceNetGetsockname",net_getsockname}, {"sceNetShutdown",net_socket_configure},
+    {"sceNetSocketClose",net_socket_close}, {"sceNetSocketAbort",net_socket_configure},
+    {"sceNetEpollControl",net_epoll_control}, {"sceNetEpollWait",net_epoll_wait}, {"sceNetEpollAbort",net_unreachable},
     {"sceNetResolverStartNtoa",net_unreachable}, {"sceNetResolverStartAton",net_unreachable},
     {"sceNetCtlInit",ok_void}, {"sceNetCtlTerm",ok_void},
     {"sceNetCtlGetState",netctl_state}, {"sceNetCtlGetInfo",netctl_info},

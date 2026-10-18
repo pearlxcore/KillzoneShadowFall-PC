@@ -115,6 +115,16 @@ static ABI int32_t rtc_set_tick(DateTime *t, const uint64_t *tick) {
     from_tick(*tick,t); return 0;
 }
 static ABI uint32_t rtc_tick_resolution(void) { return 1000000; }
+/* FILETIME counts 100 ns intervals since 1601-01-01, not RTC microseconds
+ * since year 1. Killzone uses this conversion when initializing menu services. */
+static ABI int32_t rtc_win32_filetime(const DateTime *date,uint64_t *out) {
+    if(!date || !out)return ERR_INVALID_POINTER;
+    int32_t error=validate(date);if(error)return error;
+    const uint64_t epoch=(uint64_t)days_from_civil(1601,1,1)*TICKS_PER_DAY;
+    uint64_t ticks=to_tick(date);
+    if(ticks<epoch)return (int32_t)0x80B50003; /* INVALID_VALUE */
+    *out=(ticks-epoch)*10;return 0;
+}
 static ABI int32_t rtc_set_time_t(DateTime *t, int64_t seconds) {
     if (!t) return ERR_INVALID_POINTER;
     if (seconds<0) return (int32_t)0x80B50003; /* INVALID_VALUE */
@@ -150,6 +160,7 @@ static const RuntimeExport exports[]={
     {"sceRtcConvertUtcToLocalTime",rtc_utc_to_local}, {"sceRtcConvertLocalTimeToUtc",rtc_local_to_utc},
     {"sceRtcGetDayOfWeek",rtc_day_of_week}, {"sceRtcGetTick",rtc_get_tick}, {"sceRtcSetTick",rtc_set_tick},
     {"sceRtcGetTickResolution",rtc_tick_resolution}, {"sceRtcSetTime_t",rtc_set_time_t},
+    {"sceRtcGetWin32FileTime",rtc_win32_filetime},
     {"sceRtcGetTime_t",rtc_get_time_t}, {"sceRtcFormatRFC2822LocalTime",rtc_rfc2822_local},
 };
 uintptr_t runtime_rtc_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
