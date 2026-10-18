@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -179,6 +180,16 @@ public:
     int WaitForSmallTimer(OrbisKernelEvent* ev, int num, u32 micros);
 
     bool EventExists(u64 id, s16 filter);
+
+    // gow3: watchdog diagnostics for the loading freeze (last blocked waiter, counters).
+    std::atomic<unsigned int> diag_blocked_tid{0};
+    std::atomic<int> diag_blocked_num{0};
+    std::atomic<unsigned long long> diag_waits{0};
+    std::atomic<unsigned long long> diag_triggers{0};
+    OrbisKernelEqueue Handle() const { return m_handle; }
+    bool TryLockEvents() { return m_mutex.try_lock(); }
+    void UnlockEvents() { m_mutex.unlock(); }
+    const std::vector<EqueueEvent>& Events() const { return m_events; }
 
 private:
     OrbisKernelEqueue m_handle;

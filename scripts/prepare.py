@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect a plaintext PS4 SELF or unpacked ELF; prepare a native entry-point probe.
+"""Inspect an already plaintext PS4 SELF; prepare a native entry-point probe.
 
 No decryption, patches to source files, third-party modules or Python dependencies.
 Format references are linked in README.md. All offsets are checked before use.
@@ -27,15 +27,10 @@ def unpack(fmt, data, offset):
 def parse_self(data):
     if not data:  # read_self names the file; this covers every other way in
         raise ValueError('empty SELF (0 bytes)')
-    magic = span(data, 0, 4)
-    plain_elf = magic == b'\x7fELF'
-    if plain_elf:
-        count, base = 0, 0
-    elif magic == b'O\x15=\x1d':
-        count, = unpack('<H', data, 24)
-        base = 32 + count * 32
-    else:
-        raise ValueError("expected PS4 SELF or ELF")
+    if span(data, 0, 4) != b'O\x15=\x1d':
+        raise ValueError("expected PS4 SELF")
+    count, = unpack('<H', data, 24)
+    base = 32 + count * 32
     header = unpack('<16sHHIQQQIHHHHHH', data, base)
     if header[0][:7] != b'\x7fELF\x02\x01\x01' or header[2] != 62:
         raise ValueError("expected little-endian x86-64 ELF")
@@ -44,15 +39,11 @@ def parse_self(data):
     ph = [dict(zip(('type', 'flags', 'offset', 'vaddr', 'paddr', 'filesz', 'memsz', 'align'),
                    unpack('<IIQQQQQQ', data, base + header[5] + i * 56)))
           for i in range(header[10])]
-    header_end = header[5] + header[10] * 56
-    end = max(header_end, max(p['offset'] + p['filesz'] for p in ph))
+    end = max(p['offset'] + p['filesz'] for p in ph)
     if end > 512 * 1024 * 1024:
         raise ValueError("probe image exceeds 512 MiB limit")
-    # A plaintext ELF already stores segments at their program-header file
-    # offsets. Validate that every referenced byte exists before using it.
-    if plain_elf:
-        return bytearray(span(data, 0, end)), header, ph, [], []
     elf = bytearray(end)
+    header_end = header[5] + header[10] * 56
     elf[:header_end] = span(data, base, header_end)
     covered = [(0, header_end)]
     segments = []
@@ -205,6 +196,7 @@ def prepare(game, out):
         name, info, other, shndx, value, sz = unpack('<IBBHQQ', syms, pos)
         symbols.append(dict(name=string(name), type=info & 15, section=shndx, value=value, size=sz))
     relocs, counts, imports = [], collections.Counter(), {}
+    skipped = collections.Counter()
     for offset_tag, size_tag in ((0x61000029, 0x6100002d), (0x6100002f, 0x61000031)):
         table = span(blob, tags[offset_tag], tags[size_tag])
         if len(table) % 24:
@@ -232,7 +224,9 @@ def prepare(game, out):
                         raise ValueError('unsupported import addend')
                     relocs.append((target, kind, imports[sym], addend))
             else:
-                raise ValueError(f'unsupported relocation {kind}')
+                # Killzone: TLS and other kinds the base loader does not model yet. Recorded,
+                # not fatal, so the loader can still reach the guest entry (M1).
+                skipped[kind] += 1
     names = [symbols[i]['name'] for i in imports]
     candidates = ('_init_env', 'atexit', 'exit', '_exit', '__cxa_atexit', '__cxa_finalize',
                   '__cxa_guard_acquire', '__cxa_guard_release', '__cxa_guard_abort',
@@ -289,6 +283,8 @@ def prepare(game, out):
     write_report(out / 'analysis.json', report)
     print(f"{report['sfo'].get('TITLE')} | entry={header[4]:#x} | image={size:,} bytes")
     print(f"{len(names)} imported symbols; {sum(counts.values()):,} relocations; {len(report['needed'])} required modules")
+    if skipped:
+        print(f"Skipped relocation kinds: {dict(skipped)}")
     print(f"Unavailable non-loadable metadata headers: {missing}; not a byte-exact ELF reconstruction")
     print(f"Output: {out.resolve()}")
     print(f"libc _init_env verified RET: {libc_evidence['init_env_is_ret']}")

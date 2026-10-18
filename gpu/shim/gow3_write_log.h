@@ -13,6 +13,7 @@ bool Enabled();
 void Note(std::uint64_t address, const void* data, std::uint64_t size, Source source);
 /// GOW3_WRITE_LOG=2: where the GPU command thread decodes a fence or WriteData, off the write
 /// path (the address and value it will write later).
+/// GOW3_WRITE_LOG=3 records both intents and actual writes in the same ring.
 void NoteIntent(std::uint64_t address, const void* data, std::uint64_t size, Source source);
 }
 

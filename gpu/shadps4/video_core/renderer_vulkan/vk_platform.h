@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdio>
 #include <fmt/format.h>
 
 #include "common/assert.h"
@@ -50,9 +51,19 @@ void SetObjectName(vk::Device device, const HandleType& handle, const char* form
     SetObjectName(device, handle, debug_name);
 }
 
+// gow3: a failing Check() aborts with only the result, and several call sites pass no
+// message, so nothing recorded which Vulkan call failed (a driver returning
+// VK_ERROR_UNKNOWN gave no clue). Log the enclosing function (inline template =>
+// the call site's function) and the return address before aborting.
 template <StringLiteral msg = "">
 static void Check(vk::Result r) {
     if constexpr (msg.len <= 1) {
+        if (r != vk::Result::eSuccess) {
+            fmt::print(stderr, "VULKAN CHECK FAILED in {}: vk::Result={} (return address {:p})\n",
+                       __builtin_FUNCTION(), vk::to_string(r),
+                       static_cast<const void*>(__builtin_return_address(0)));
+            std::fflush(stderr);
+        }
         ASSERT_MSG(r == vk::Result::eSuccess, "vk::Result={}", vk::to_string(r));
     } else {
         ASSERT_MSG(r == vk::Result::eSuccess, "Failed to {}: vk::Result={}", msg.value,
@@ -63,6 +74,12 @@ static void Check(vk::Result r) {
 template <StringLiteral msg = "", typename T>
 static T Check(vk::ResultValue<T> r) {
     if constexpr (msg.len <= 1) {
+        if (r.result != vk::Result::eSuccess) {
+            fmt::print(stderr, "VULKAN CHECK FAILED in {}: vk::Result={} (return address {:p})\n",
+                       __builtin_FUNCTION(), vk::to_string(r.result),
+                       static_cast<const void*>(__builtin_return_address(0)));
+            std::fflush(stderr);
+        }
         ASSERT_MSG(r.result == vk::Result::eSuccess, "vk::Result={}", vk::to_string(r.result));
     } else {
         ASSERT_MSG(r.result == vk::Result::eSuccess, "Failed to {}: vk::Result={}", msg.value,

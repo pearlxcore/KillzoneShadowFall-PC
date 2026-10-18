@@ -1,9 +1,15 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <cstring>
 #include <thread>
 #include <magic_enum/magic_enum.hpp>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "common/assert.h"
 #include "common/debug.h"
@@ -30,6 +36,96 @@ EqueueInternal* GetEqueue(OrbisKernelEqueue eq) {
     }
     return kqueues[eq];
 }
+
+// ---- gow3: watchdog diagnostics (loading freeze: who waits on which queue/event) ----
+namespace {
+struct EqDiagEntry {
+    char op;           // 'W' wait-enter, 'w' wait-exit, 'T' trigger, 'A' add-event
+    unsigned int tid;  // host thread id (Windows TID; 0 elsewhere)
+    s64 queue;
+    u64 ident;
+    s32 arg;           // num requested (W) / events returned (w) / filter (T, A)
+    u32 timo;          // wait timeout in us; 0 = indefinite
+    char name[20];
+};
+std::mutex g_eq_diag_mutex;
+EqDiagEntry g_eq_ring[128];
+unsigned int g_eq_ring_seq;
+
+unsigned int EqDiagTid() {
+#ifdef _WIN32
+    return static_cast<unsigned int>(GetCurrentThreadId());
+#else
+    return 0;
+#endif
+}
+
+// Callers may hold EqueueInternal::m_mutex; this only takes g_eq_diag_mutex.
+void EqDiagLog(char op, const EqueueInternal* q, u64 ident, s32 arg, u32 timo) {
+    std::scoped_lock lock{g_eq_diag_mutex};
+    EqDiagEntry& e = g_eq_ring[g_eq_ring_seq & 127];
+    e = {};
+    e.op = op;
+    e.tid = EqDiagTid();
+    e.queue = q ? q->Handle() : -1;
+    e.ident = ident;
+    e.arg = arg;
+    e.timo = timo;
+    if (q) {
+        const auto name = q->GetName();
+        std::memcpy(e.name, name.data(), std::min<std::size_t>(name.size(), sizeof(e.name) - 1));
+    }
+    ++g_eq_ring_seq;
+}
+} // namespace
+} // namespace Libraries::Kernel
+
+// Printed by the loader's freeze/stall watchdogs (src/probe.c). Best-effort: never blocks
+// on a queue's mutex (a trigger in progress just means "events skipped"), so it cannot
+// deadlock the process it is diagnosing.
+extern "C" void gow3gpu_equeue_dump(void) {
+    Libraries::Kernel::EqDiagEntry ring[128];
+    unsigned int total;
+    {
+        std::scoped_lock lock{Libraries::Kernel::g_eq_diag_mutex};
+        total = Libraries::Kernel::g_eq_ring_seq;
+        const unsigned int first = total > 128 ? total - 128 : 0;
+        for (unsigned int i = first; i < total; ++i)
+            ring[i - first] = Libraries::Kernel::g_eq_ring[i & 127];
+        total -= first;
+    }
+    std::fprintf(stderr, "  equeues:\n");
+    for (const auto& [handle, q] : Libraries::Kernel::kqueues) {
+        if (!q)
+            continue;
+        std::fprintf(stderr,
+                     "    handle=%d '%.*s' waits=%llu triggers=%llu blocked_tid=%u blocked_num=%d\n",
+                     handle, static_cast<int>(q->GetName().size()), q->GetName().data(),
+                     q->diag_waits.load(), q->diag_triggers.load(), q->diag_blocked_tid.load(),
+                     q->diag_blocked_num.load());
+        if (q->TryLockEvents()) {
+            for (const auto& ev : q->Events())
+                std::fprintf(stderr, "      event ident=0x%llx filter=%d flags=0x%x %s\n",
+                             static_cast<unsigned long long>(ev.event.ident),
+                             static_cast<int>(ev.event.filter), ev.event.flags,
+                             ev.IsTriggered() ? "TRIGGERED" : "pending");
+            q->UnlockEvents();
+        } else {
+            std::fprintf(stderr, "      (event list skipped: queue busy)\n");
+        }
+    }
+    if (total) {
+        std::fprintf(stderr, "    recent equeue events (oldest first):\n");
+        for (unsigned int i = 0; i < total; ++i) {
+            const Libraries::Kernel::EqDiagEntry& e = ring[i];
+            std::fprintf(stderr, "      %c q=%lld '%s' ident=0x%llx arg=%d timo=%u tid=%u\n", e.op,
+                         static_cast<long long>(e.queue), e.name,
+                         static_cast<unsigned long long>(e.ident), e.arg, e.timo, e.tid);
+        }
+    }
+}
+
+namespace Libraries::Kernel {
 
 static void HrTimerCallback(OrbisKernelEqueue eq, const OrbisKernelEvent& kevent) {
     if (kqueues.contains(eq)) {
@@ -106,6 +202,7 @@ bool EqueueInternal::AddEvent(EqueueEvent& event) {
             m_events.emplace_back(std::move(event));
         }
     }
+    EqDiagLog('A', this, id, static_cast<s32>(filter), 0);
 
     // Schedule callbacks for timer events
     if (filter == OrbisKernelEvent::Filter::Timer) {
@@ -192,6 +289,10 @@ int EqueueInternal::WaitForEvents(OrbisKernelEvent* ev, int num, const OrbisKern
         return count > 0;
     };
 
+    diag_waits.fetch_add(1);
+    diag_blocked_tid.store(EqDiagTid());
+    diag_blocked_num.store(num);
+    EqDiagLog('W', this, 0, num, micros);
     if (micros == 0) {
         // Wait indefinitely for events
         std::unique_lock lock{m_mutex};
@@ -201,12 +302,16 @@ int EqueueInternal::WaitForEvents(OrbisKernelEvent* ev, int num, const OrbisKern
         std::unique_lock lock{m_mutex};
         m_cond.wait_for(lock, std::chrono::microseconds(micros), predicate);
     }
+    diag_blocked_tid.store(0);
+    EqDiagLog('w', this, count, count, micros);
 
     return count;
 }
 
 bool EqueueInternal::TriggerEvent(u64 ident, s16 filter, void* trigger_data) {
     bool has_found = false;
+    diag_triggers.fetch_add(1);
+    EqDiagLog('T', this, ident, static_cast<s32>(filter), 0);
     {
         std::scoped_lock lock{m_mutex};
         for (auto& event : m_events) {

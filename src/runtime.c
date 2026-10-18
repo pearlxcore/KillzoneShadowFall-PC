@@ -77,6 +77,8 @@ void runtime_report(void) {
     runtime_rwlock_report();
     runtime_sema_report();
     runtime_content_report();
+    runtime_font_report();
+    runtime_png_report();
     runtime_memory_report();
     runtime_ajm_report();
     runtime_audio_report();
@@ -227,6 +229,10 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     if (thread) return thread;
     uintptr_t content=runtime_content_resolve(name);
     if (content) return content;
+    uintptr_t font=runtime_font_resolve(name);
+    if (font) return font;
+    uintptr_t png=runtime_png_resolve(name);
+    if (png) return png;
     uintptr_t timer = runtime_time_resolve(name);
     if (timer) return timer;
     uintptr_t sema = runtime_sema_resolve(name);

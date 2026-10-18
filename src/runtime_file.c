@@ -191,6 +191,7 @@ static File *get(int fd) {
 }
 /* GOW3_AUDIO_TRACE=1: sound file opens and failed reads (missing game sounds). */
 static int audio_trace(void) { static int v=-1; if (v<0) { const char *e=getenv("GOW3_AUDIO_TRACE"); v=e && e[0]=='1'; } return v; }
+static int file_trace(void) { const char *e=getenv("KZSF_FILE_TRACE"); return e && e[0]=='1'; }
 /* Game mounts (including linked mod overlays) are read-only. Saves use other mounts. */
 static int game_path(const char *p) {
     if (!p || !*p) return 0;
@@ -201,6 +202,9 @@ static int game_path(const char *p) {
 /* All operations return >=0 or -(host errno); wrappers adapt the convention. */
 static int64_t do_open(const char *guest,int flags,int mode) {
     if (game_path(guest) && (flags & (3|0x8|0x200|0x400|0x800))) return -EROFS;
+    /* Diagnostic: GOW3_NO_MOVIES=1 makes Bink movie opens fail, to test whether the
+     * cutscene/movie path is what triggers the transition crash. */
+    if (strstr(guest,".bk2") && getenv("GOW3_NO_MOVIES")) return -ENOENT;
     char path[1024];
     int e=translate(guest,path,sizeof(path));
     if (e) return -e;
@@ -224,6 +228,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
             if (e==ENOENT) { ++missing; printf("Runtime: open(%s) -> not found\n",guest); }
             return -e;
         }
+        if (strstr(guest,".bk2")) printf("Runtime: movie open(%s)\n",guest);
         if (host_fstat(host,&s)) memset(&s,0,sizeof(s));
     }
 #else
@@ -245,7 +250,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
     snprintf(files[fd].path,sizeof(files[fd].path),"%s",guest);
     ++opens;
     pthread_mutex_unlock(&lock);
-    if (audio_trace() && strstr(guest,"sound/")) printf("Audio trace: open(%s) -> fd %d, %lld bytes\n",guest,fd,(long long)s.st_size);
+    if (file_trace() || (audio_trace() && strstr(guest,"sound/"))) printf("File trace: open(%s) -> fd %d, %lld bytes\n",guest,fd,(long long)s.st_size);
     const char *mod_trace=getenv("GOW3_MOD_TRACE"), *mod_root=getenv("GOW3_MODS_DIR");
     if (mod_trace && mod_trace[0]=='1' && mod_root) {
         char actual[PATH_MAX],root[PATH_MAX];
@@ -299,6 +304,7 @@ static int64_t do_read(int fd,void *buffer,uint64_t size) {
     if (h<0) return -EBADF;
     touch_for_write(buffer,size);
     ssize_t n=host_read(h,buffer,size);
+    if (file_trace()) { int saved=errno; printf("File trace: read fd=%d bytes=%llu -> %lld errno=%d\n",fd,(unsigned long long)size,(long long)n,n<0?saved:0); errno=saved; }
     if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     return n;
@@ -308,6 +314,7 @@ static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     if (h<0) return -EBADF;
     touch_for_write(buffer,size);
     ssize_t n=pread(h,buffer,size,offset);
+    if (file_trace()) { int saved=errno; printf("File trace: pread fd=%d offset=%lld bytes=%llu -> %lld errno=%d\n",fd,(long long)offset,(unsigned long long)size,(long long)n,n<0?saved:0); errno=saved; }
     if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     return n;

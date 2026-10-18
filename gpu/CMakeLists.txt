@@ -191,18 +191,24 @@ endif()
 # linked here, where CMake knows its dependencies (build.sh builds them with ninja).
 if (WIN32)
     enable_language(RC)
+    add_executable(killzone-launcher WIN32 ../launcher/start_kzsf.c
+        ../packaging/windows/killzone-launcher.rc)
+    set_target_properties(killzone-launcher PROPERTIES OUTPUT_NAME "Killzone Launcher")
+    target_link_options(killzone-launcher PRIVATE -municode)
+    target_link_libraries(killzone-launcher PRIVATE shell32 user32)
     file(GLOB GOW3_RUNTIME CONFIGURE_DEPENDS ../src/runtime*.c)
     file(GLOB GOW3_ATRAC9 CONFIGURE_DEPENDS ../third_party/LibAtrac9/C/src/*.c)
     add_library(atrac9 STATIC ${GOW3_ATRAC9})
     target_compile_options(atrac9 PRIVATE -w)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
     add_executable(gow3-probe ../src/probe.c ${GOW3_RUNTIME} ../src/compat_win.c ../src/cpu_check.c ../src/vulkan_smoke.c
-        ../src/isa_rewrite.c ../src/isa_emulate.c
+        ../src/isa_rewrite.c ../src/isa_emulate.c ../src/tsc_patch.c ../src/allocation_trace.cpp
         ../packaging/windows/gow3-probe.rc)
     set_target_properties(gow3-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(gow3-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
     target_include_directories(gow3-probe PRIVATE .. ../src)
-    target_link_libraries(gow3-probe PRIVATE gow3gpu atrac9 onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(gow3-probe PRIVATE gow3gpu atrac9 Zydis::Zydis onecore bcrypt ws2_32 -pthread)
+    target_link_options(gow3-probe PRIVATE -Wl,--wrap=__cxa_throw)
     # The PS4 range (64 GiB - 1 TiB) must stay free: no high-entropy ASLR for heaps and stacks.
     # The guest main thread runs on the process stack: 16 MiB, committed (no stack probes).
     target_link_options(gow3-probe PRIVATE -Wl,--disable-high-entropy-va "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
@@ -326,9 +332,6 @@ target_link_libraries(frame-capture-test PRIVATE Vulkan::Headers fmt::fmt Boost:
 add_executable(lighting-test-knob-test EXCLUDE_FROM_ALL ../tests/test_lighting_test.cpp)
 target_compile_options(lighting-test-knob-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(lighting-test-knob-test PRIVATE shadps4)
-add_executable(movie-bars-test EXCLUDE_FROM_ALL ../tests/test_movie_bars.cpp)
-target_compile_options(movie-bars-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
-target_include_directories(movie-bars-test PRIVATE shadps4)
 add_executable(amd-paths-test EXCLUDE_FROM_ALL ../tests/test_amd_paths.cpp)
 target_compile_options(amd-paths-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(amd-paths-test PRIVATE shadps4)

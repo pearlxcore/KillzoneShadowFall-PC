@@ -1,6 +1,7 @@
 /* System services for an offline, single-user console:
  *   - one local user (id 1) who is logged in but not signed in to PSN;
- *   - network cable unplugged: NetCtl disconnected, sockets unavailable;
+ *   - network cable unplugged: NetCtl disconnected, local socket bookkeeping
+ *     available, network transfers unavailable;
  *   - common dialogs complete immediately (no UI is drawn yet);
  *   - the whole package is installed (PlayGo reports every chunk local).
  * Every entry here is an explicit contract; unknown functions still stop. */
@@ -20,7 +21,6 @@
 #endif
 
 #define USER_ID 1
-#define USER_NAME "Player"
 #define ORBIS_OK 0
 #define USER_INVALID_ARGUMENT ((int32_t)0x80960005)
 #define USER_NO_EVENT ((int32_t)0x80960007)
@@ -57,8 +57,9 @@ static ABI int32_t user_list(int32_t *ids) {
 }
 static ABI int32_t user_name(int32_t id,char *name,uint64_t size) {
     if (id!=USER_ID || !name) return USER_INVALID_ARGUMENT;
-    if (sizeof USER_NAME>size) return (int32_t)0x8096000a; /* BUFFER_TOO_SHORT */
-    strcpy(name,USER_NAME); return 0;
+    const char *value=getenv("GOW3_USER_NAME") ? getenv("GOW3_USER_NAME") : "Hunter";
+    if (strlen(value)+1>size) return (int32_t)0x8096000a; /* BUFFER_TOO_SHORT */
+    strcpy(name,value); return 0;
 }
 static ABI int32_t user_event(int32_t *event) {
     if (!event) return USER_INVALID_ARGUMENT;
@@ -105,10 +106,114 @@ static ABI int32_t launch_browser(void) { note("SystemService: web browser reque
 static int32_t net_errno;
 static ABI int32_t net_init(void) { return 0; }
 static ABI int32_t net_term(void) { return 0; }
+/* RUDP local lifecycle is entered by Killzone's menu even while PSN is signed
+ * out (456dd0, before TurbineClientCreate). Accepting this local setup does
+ * not create a socket or establish a peer; the existing offline Net provider
+ * rejects the following client socket/bind operation. No packet APIs are
+ * reported successful, and unknown RUDP imports still stop explicitly.
+ */
+static int rudp_initialized;
+static ABI int32_t rudp_init(void *pool,uint32_t size) {
+    if(!pool || !size) return -1;
+    pthread_mutex_lock(&lock);
+    int first=!rudp_initialized;
+    rudp_initialized=1;
+    pthread_mutex_unlock(&lock);
+    if(first)note("RUDP local setup; network remains offline");
+    return 0;
+}
+static ABI int32_t rudp_end(void) {
+    pthread_mutex_lock(&lock);
+    rudp_initialized=0;
+    pthread_mutex_unlock(&lock);
+    return 0;
+}
+/* Killzone pumps this with timeout 0 from its menu's update worker. With no
+ * peer contexts there are no events/callbacks to dispatch. */
+static ABI int32_t rudp_process_events(void) {
+    pthread_mutex_lock(&lock);int initialized=rudp_initialized;pthread_mutex_unlock(&lock);
+    return initialized?0:-1;
+}
+/* 49aee0 requests the 0xf8-byte statistics layout and reads traffic counters
+ * throughout it, ignoring the return code. No peer contexts/packets exist in
+ * this provider, so initialize every counter, not just the first field. */
+static ABI int32_t rudp_get_status(void *status,uint32_t size) {
+    if(!status || size!=0xf8)return -1;
+    memset(status,0,size);
+    pthread_mutex_lock(&lock);int initialized=rudp_initialized;pthread_mutex_unlock(&lock);
+    return initialized?0:-1;
+}
 static ABI int32_t *net_errno_loc(void) { return &net_errno; }
 static ABI int32_t net_pool_create(const char *name,int size,int flags) { (void)name; (void)size; (void)flags; return new_id(); }
 static ABI int32_t net_pool_destroy(int id) { (void)id; return 0; }
 static ABI int32_t net_unreachable(void) { net_errno=51; return NET_ENETUNREACH; }
+/* Offline socket objects, not host sockets. Turbine creates its local signal
+ * socket before checking PSN status. Rejecting creation causes gClient==NULL
+ * assertions in its worker threads. Local setup is valid even without a cable;
+ * no connect/send succeeds and no incoming packet is ever reported here. */
+#define NET_EBADF ((int32_t)0x80410109)
+#define NET_EWOULDBLOCK ((int32_t)0x80410123)
+typedef struct { int id; unsigned char address[16]; } OfflineSocket;
+static OfflineSocket net_sockets[64];
+static OfflineSocket *net_find(int id) {
+    for(unsigned i=0;i<sizeof(net_sockets)/sizeof(*net_sockets);++i)
+        if(net_sockets[i].id==id && id>0)return &net_sockets[i];
+    return NULL;
+}
+static ABI int32_t net_socket(const char *name,int family,int type,int protocol) {
+    (void)name;(void)protocol;
+    if(family!=2 || (type!=1 && type!=2)) {net_errno=22;return NET_EINVAL;}
+    int id=0x1000+new_id();pthread_mutex_lock(&lock);
+    for(unsigned i=0;i<sizeof(net_sockets)/sizeof(*net_sockets);++i)if(!net_sockets[i].id) {
+        OfflineSocket *s=&net_sockets[i];memset(s,0,sizeof(*s));s->id=id;
+        s->address[0]=16;s->address[1]=2;
+        pthread_mutex_unlock(&lock);return id;
+    }
+    pthread_mutex_unlock(&lock);net_errno=24;return (int32_t)0x80410118;
+}
+static ABI int32_t net_socket_close(int id) {
+    pthread_mutex_lock(&lock);OfflineSocket *s=net_find(id);
+    if(s)memset(s,0,sizeof(*s));
+    pthread_mutex_unlock(&lock);if(s)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_socket_configure(int id) {
+    pthread_mutex_lock(&lock);int valid=net_find(id)!=NULL;pthread_mutex_unlock(&lock);
+    if(valid)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_bind(int id,const unsigned char *address,uint32_t size) {
+    if(!address || size<16 || address[1]!=2){net_errno=22;return NET_EINVAL;}
+    pthread_mutex_lock(&lock);OfflineSocket *s=net_find(id);
+    if(s){
+        memcpy(s->address,address,16);s->address[0]=16;
+        if(!s->address[2]&&!s->address[3]) {
+            unsigned port=49152u+(unsigned)id%16384u;
+            s->address[2]=(unsigned char)(port>>8);s->address[3]=(unsigned char)port;
+        }
+    }
+    pthread_mutex_unlock(&lock);if(s)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_getsockname(int id,unsigned char *address,uint32_t *size) {
+    if(!address || !size || *size<16){net_errno=22;return NET_EINVAL;}
+    pthread_mutex_lock(&lock);OfflineSocket *s=net_find(id);
+    if(s){memcpy(address,s->address,16);*size=16;}
+    pthread_mutex_unlock(&lock);if(s)return 0;net_errno=9;return NET_EBADF;
+}
+static ABI int32_t net_recv_offline(void) {net_errno=35;return NET_EWOULDBLOCK;}
+static ABI int32_t net_epoll_control(int id,int op,int socket,const void *event) {
+    if(id<=0 || op<1 || op>3 || (op!=2&&!event)){net_errno=22;return NET_EINVAL;}
+    return net_socket_configure(socket);
+}
+static ABI int32_t net_epoll_wait(int id,void *events,int max,int32_t timeout_us) {
+    if(id<=0 || !events || max<=0){net_errno=22;return NET_EINVAL;}
+    /* No traffic can arrive. Bound the wait so shutdown remains responsive. */
+    uint64_t ns=(uint64_t)(timeout_us<0 || timeout_us>100000?100000:timeout_us)*1000;
+#ifdef _WIN32
+    if(ns)compat_sleep_ns(ns);
+#else
+    if(ns){struct timespec delay={0,(long)ns};nanosleep(&delay,NULL);}
+#endif
+    return 0;
+}
 static ABI int32_t net_epoll_create(const char *name,int flags) { (void)name; (void)flags; return new_id(); }
 static ABI int32_t net_epoll_destroy(int id) { (void)id; return 0; }
 static ABI int32_t net_resolver_create(const char *name,int pool,int flags) { (void)name; (void)pool; (void)flags; return new_id(); }
@@ -186,7 +291,8 @@ static ABI int32_t voice_info(uint32_t port,uint32_t *info) {
 /* ---- Common dialogs: nothing is displayed; an opened dialog finishes. ---- */
 typedef struct { const char *name; int initialized, status; uint32_t button; } Dialog;
 static Dialog dialogs[]={{"CommonDialog",0,0,0},{"MsgDialog",0,0,0},{"SaveDataDialog",0,0,0},
-                         {"NpProfileDialog",0,0,0},{"NpCommerceDialog",0,0,0},{"ImeDialog",0,0,0}};
+                         {"NpProfileDialog",0,0,0},{"NpCommerceDialog",0,0,0},{"ImeDialog",0,0,0},
+                         {"ErrorDialog",0,0,0},{"WebBrowserDialog",0,0,0},{"InvitationDialog",0,0,0}};
 #define DIALOG_RUNNING 2
 #define DIALOG_FINISHED 3
 #define DIALOG_NOT_FINISHED ((int32_t)0x80B80005)
@@ -236,17 +342,27 @@ static int32_t dialog_term(int i) {
     static ABI int32_t tag##_open(const void *p) { (void)p; return dialog_open(i); } \
     static ABI int32_t tag##_status(void) { return dialog_status(i); } \
     static ABI int32_t tag##_term(void) { return dialog_term(i); }
-DIALOG(profile,3) DIALOG(commerce,4)
+DIALOG(profile,3) DIALOG(commerce,4) DIALOG(error,6) DIALOG(browser,7) DIALOG(invitation,8)
+static ABI int32_t error_close(void) { return dialog_close(6); }
+static ABI int32_t browser_close(void) { return dialog_close(7); }
+static ABI int32_t invitation_close(void) { return dialog_close(8); }
 /* OrbisMsgDialogParam: BaseParam (48 bytes), size, mode (2 = progress bar).
  * OrbisSaveDataDialogParam: BaseParam, int32 size, mode (5 = progress bar). */
 static int32_t dialog_open_mode(int i, const unsigned char *param, size_t mode_offset, uint32_t progress_mode) {
     if (!param) return DIALOG_ARG_NULL;
     uint32_t mode; memcpy(&mode,param+mode_offset,4);
+    printf("Runtime: %s opened mode=%u\n", dialogs[i].name, mode);
     return mode==progress_mode ? dialog_open_progress(i) : dialog_open(i);
 }
 static ABI int32_t msg_init(void) { return dialog_init(1); }
 static ABI int32_t msg_open(const unsigned char *p) { return dialog_open_mode(1,p,56,2); }
-static ABI int32_t msg_status(void) { return dialog_status(1); }
+static ABI int32_t msg_status(void) {
+    int32_t status=dialog_status(1);
+    static unsigned calls;
+    if (calls<5 || (calls%200000)==0) printf("Runtime: MsgDialog UpdateStatus -> %d (call %u)\n",status,calls);
+    ++calls;
+    return status;
+}
 static ABI int32_t msg_term(void) { return dialog_term(1); }
 static ABI int32_t msg_close(void) { return dialog_close(1); }
 static ABI int32_t msg_progress(uint32_t target, uint32_t value) { (void)value; return dialog_progress(1,target); }
@@ -406,9 +522,10 @@ static ABI int32_t ime_init(const ImeParam *param, const void *extended) {
     utf16_to_utf8(param->title,128,prompt,sizeof(prompt));
     const char *preset=getenv("GOW3_IME_TEXT");
     if (preset) { ime_complete(0,preset); return 0; }
-    /* An empty field starts with the user name: a controller alone can accept it (the port
-     * has no on-screen keyboard). */
-    const char *start=initial[0] ? initial : USER_NAME;
+    /* An empty field starts with the player name (launcher) or "Hunter": a controller alone
+     * can accept it (the port has no on-screen keyboard). */
+    const char *name=getenv("GOW3_USER_NAME");
+    const char *start=initial[0] ? initial : name && *name ? name : "Hunter";
     if (!gow3gpu_text_input_begin(start,prompt[0] ? prompt : "Text")) ime_complete(0,start);
     else printf("Runtime: ImeDialog opened: shown on screen; keyboard Enter or Cross accepts, Esc or Circle cancels\n");
     return 0;
@@ -522,6 +639,34 @@ static ABI int32_t playgo_close(int32_t handle) {
     playgo_handle=0; return 0;
 }
 static ABI int32_t playgo_terminate(void) { playgo_handle=0; return 0; }
+/* Language mask and the remaining entry points: the package is fully installed. */
+static ABI int32_t playgo_language_mask(int32_t handle,uint32_t *mask) {
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!mask) return PLAYGO_BAD_POINTER;
+    *mask=1; return 0; /* English */
+}
+static ABI int32_t playgo_set_language_mask(int32_t handle,uint32_t mask) {
+    (void)mask; return handle==playgo_handle && handle ? 0 : PLAYGO_BAD_HANDLE;
+}
+static ABI int32_t playgo_eta(int32_t handle,const uint16_t *ids,uint32_t count,int64_t *eta) {
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!ids || !eta) return PLAYGO_BAD_POINTER;
+    if (!count) return PLAYGO_BAD_SIZE;
+    for (uint32_t i=0;i<count;++i) if (ids[i]>=playgo_chunks) return PLAYGO_BAD_CHUNK;
+    *eta=0; return 0; /* nothing left to download */
+}
+static ABI int32_t playgo_get_todo(int32_t handle,void *list,uint32_t capacity,uint32_t *out) {
+    (void)list; (void)capacity;
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!out) return PLAYGO_BAD_POINTER;
+    *out=0; return 0; /* everything installed */
+}
+static ABI int32_t playgo_prefetch(int32_t handle,const uint16_t *ids,uint32_t count) {
+    (void)count;
+    if (handle!=playgo_handle || !handle) return PLAYGO_BAD_HANDLE;
+    if (!ids) return PLAYGO_BAD_POINTER;
+    return 0;
+}
 
 /* ---- DiscMap: the game is fully installed, no disc bitmap exists ---- */
 #define DISC_MAP_NO_BITMAP ((int32_t)0x81100004)
@@ -544,6 +689,17 @@ static ABI int32_t mouse_close(int32_t handle) { (void)handle; return 0; }
 static ABI int32_t audio_in_open(void) { return AUDIO_IN_NOT_OPENED; }
 
 
+/* ---- Remaining libkernel/system entry points the game reaches during init ---- */
+static ABI int32_t open_psid(void *id) {
+    if (!id) return (int32_t)0x80020016;
+    memset(id,0,16);
+    return 0;
+}
+static ABI int32_t commerce_close(void) { return dialog_close(4); }
+static ABI uint64_t net_htonll(uint64_t v) { return ((uint64_t)net_htonl((uint32_t)v)<<32)|net_htonl((uint32_t)(v>>32)); }
+static ABI uint64_t net_ntohll(uint64_t v) { return net_htonll(v); }
+static ABI int32_t net_sock_info(int32_t fd,void *info) { (void)fd; (void)info; return (int32_t)0x80410124; /* ENOTCONN */ }
+
 static const RuntimeExport exports[]={
     {"sceUserServiceInitialize",user_initialize}, {"sceUserServiceTerminate",user_terminate},
     {"sceUserServiceGetInitialUser",user_initial}, {"sceUserServiceGetLoginUserIdList",user_list},
@@ -553,19 +709,26 @@ static const RuntimeExport exports[]={
     {"sceSystemServiceLaunchWebBrowser",launch_browser},
     {"sceSystemServiceGetDisplaySafeAreaInfo",safe_area}, {"sceSystemServiceDisableMusicPlayer",disable_music_player},
     {"sceNetInit",net_init}, {"sceNetTerm",net_term}, {"sceNetErrnoLoc",net_errno_loc},
+    {"sceRudpInit",rudp_init}, {"sceRudpEnd",rudp_end},
+    {"sceRudpProcessEvents",rudp_process_events},
+    {"sceRudpGetStatus",rudp_get_status},
     {"sceNetPoolCreate",net_pool_create}, {"sceNetPoolDestroy",net_pool_destroy},
     {"sceNetEpollCreate",net_epoll_create}, {"sceNetEpollDestroy",net_epoll_destroy},
     {"sceNetResolverCreate",net_resolver_create}, {"sceNetResolverDestroy",net_resolver_destroy},
     {"sceNetHtons",net_htons}, {"sceNetNtohs",net_ntohs}, {"sceNetHtonl",net_htonl}, {"sceNetNtohl",net_ntohl},
+    {"sceNetHtonll",net_htonll}, {"sceNetNtohll",net_ntohll}, {"sceNetGetSockInfo",net_sock_info},
+    {"sceKernelGetOpenPsId",open_psid}, {"sceNpAuthAbortRequest",ok_void},
+    {"sceSystemServiceShowDisplaySafeAreaSettings",ok_void}, {"sceNpCommerceDialogClose",commerce_close},
     {"sceNetInetPton",net_pton}, {"sceNetInetNtop",net_ntop},
-    {"sceNetSocket",net_unreachable}, {"sceNetConnect",net_unreachable}, {"sceNetBind",net_unreachable},
+    {"sceNetSocket",net_socket}, {"sceNetConnect",net_unreachable}, {"sceNetBind",net_bind},
     {"sceNetListen",net_unreachable}, {"sceNetAccept",net_unreachable}, {"sceNetSend",net_unreachable},
-    {"sceNetSendto",net_unreachable}, {"sceNetRecv",net_unreachable}, {"sceNetRecvfrom",net_unreachable},
-    {"sceNetSetsockopt",net_unreachable}, {"sceNetGetsockopt",net_unreachable},
-    {"sceNetGetsockname",net_unreachable}, {"sceNetShutdown",net_unreachable},
-    {"sceNetSocketClose",net_unreachable}, {"sceNetSocketAbort",net_unreachable},
-    {"sceNetEpollControl",net_unreachable}, {"sceNetEpollWait",net_unreachable}, {"sceNetEpollAbort",net_unreachable},
+    {"sceNetSendto",net_unreachable}, {"sceNetRecv",net_recv_offline}, {"sceNetRecvfrom",net_recv_offline},
+    {"sceNetSetsockopt",net_socket_configure}, {"sceNetGetsockopt",net_unreachable},
+    {"sceNetGetsockname",net_getsockname}, {"sceNetShutdown",net_socket_configure},
+    {"sceNetSocketClose",net_socket_close}, {"sceNetSocketAbort",net_socket_configure},
+    {"sceNetEpollControl",net_epoll_control}, {"sceNetEpollWait",net_epoll_wait}, {"sceNetEpollAbort",net_unreachable},
     {"sceNetResolverStartNtoa",net_unreachable}, {"sceNetResolverStartAton",net_unreachable},
+    {"sceNetCtlInit",ok_void}, {"sceNetCtlTerm",ok_void},
     {"sceNetCtlGetState",netctl_state}, {"sceNetCtlGetInfo",netctl_info},
     {"sceNetCtlRegisterCallback",netctl_register}, {"sceNetCtlCheckCallback",netctl_check},
     {"sceNetCtlUnregisterCallback",netctl_unregister}, {"sceNetCtlGetNatInfo",netctl_nat},
@@ -655,6 +818,14 @@ static const RuntimeExport exports[]={
     {"sceNpCommerceDialogUpdateStatus",commerce_status}, {"sceNpCommerceDialogTerminate",commerce_term},
     {"sceImeDialogInit",ime_init}, {"sceImeDialogGetStatus",ime_status}, {"sceImeDialogGetResult",ime_result},
     {"sceImeDialogTerm",ime_term}, {"sceImeDialogAbort",ime_term},
+    {"sceErrorDialogInitialize",error_init}, {"sceErrorDialogTerminate",error_term},
+    {"sceErrorDialogUpdateStatus",error_status}, {"sceErrorDialogOpen",error_open}, {"sceErrorDialogClose",error_close},
+    {"sceWebBrowserDialogInitialize",browser_init}, {"sceWebBrowserDialogTerminate",browser_term},
+    {"sceWebBrowserDialogUpdateStatus",browser_status}, {"sceWebBrowserDialogOpen",browser_open},
+    {"sceWebBrowserDialogClose",browser_close},
+    {"sceInvitationDialogInitialize",invitation_init}, {"sceInvitationDialogTerminate",invitation_term},
+    {"sceInvitationDialogUpdateStatus",invitation_status}, {"sceInvitationDialogOpen",invitation_open},
+    {"sceInvitationDialogClose",invitation_close},
     {"sceNpTrophyCreateContext",trophy_context}, {"sceNpTrophyCreateHandle",trophy_handle},
     {"sceNpTrophyRegisterContext",trophy_register}, {"sceNpTrophyUnlockTrophy",trophy_unlock},
     {"sceNpTrophyGetGameInfo",trophy_game_info}, {"sceNpTrophyGetTrophyInfo",trophy_info},
@@ -664,6 +835,8 @@ static const RuntimeExport exports[]={
     {"scePlayGoGetLocus",playgo_locus}, {"scePlayGoSetInstallSpeed",playgo_speed},
     {"scePlayGoGetInstallSpeed",playgo_get_speed}, {"scePlayGoGetProgress",playgo_progress},
     {"scePlayGoSetToDoList",playgo_todo}, {"scePlayGoClose",playgo_close}, {"scePlayGoTerminate",playgo_terminate},
+    {"scePlayGoGetLanguageMask",playgo_language_mask}, {"scePlayGoSetLanguageMask",playgo_set_language_mask},
+    {"scePlayGoGetEta",playgo_eta}, {"scePlayGoGetToDoList",playgo_get_todo}, {"scePlayGoPrefetch",playgo_prefetch},
     {"sceMouseInit",ok_void}, {"sceMouseOpen",mouse_open}, {"sceMouseRead",mouse_read}, {"sceMouseClose",mouse_close},
     {"sceAudioInOpen",audio_in_open},
     {"sceDiscMapIsRequestOnHDD",discmap_on_hdd}, {"sceDiscMap_8A828CAEE7EDD5E9",discmap_8a82},

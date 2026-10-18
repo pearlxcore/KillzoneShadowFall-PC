@@ -175,6 +175,11 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     // Available unless GOW3_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("GOW3_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0);
+    const char* quality_env = std::getenv("KZSF_FSR_QUALITY");
+    killzone_quality = camera_motion.KillzoneNative() && quality_env &&
+                      std::strcmp(quality_env, "1") == 0;
+    const char* diagnostic_env = std::getenv("GOW3_UPSCALER_DIAGNOSTICS");
+    diagnostics = diagnostic_env && diagnostic_env[0] == '1';
     if (const char* hash = std::getenv("GOW3_UPSCALE_BEFORE_CS")) {
         trigger_hash = std::strtoull(hash, nullptr, 16);
     }
@@ -211,10 +216,15 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
         enabled = false;
     }
     if (enabled) {
+        if(camera_motion.KillzoneNative()) {
+            std::printf("Upscaler: Killzone %s native integration, graphics PS857a8dc0, jitter forced OFF\n",
+                        Gow3Settings::Get().upscaler==Gow3Settings::UpscalerTaa ? "TAA" : "FSR3");
+        } else {
         std::printf("Upscaler: FSR 3.1 available (%s) on scene color before compute shader "
                     "%016llx\n",
                     Gow3Settings::Get().upscaler != Gow3Settings::UpscalerOff ? "on" : "off",
                     static_cast<unsigned long long>(trigger_hash));
+        }
     }
 }
 
@@ -227,6 +237,14 @@ TemporalUpscaler::~TemporalUpscaler() {
 }
 
 bool TemporalUpscaler::Active() const {
+    if(camera_motion.KillzoneNative() &&
+       (scaled_session ||
+        (Gow3Settings::Get().upscaler!=Gow3Settings::UpscalerFsr3 &&
+         Gow3Settings::Get().upscaler!=Gow3Settings::UpscalerTaa) ||
+        (Gow3Settings::Get().upscaler==Gow3Settings::UpscalerTaa &&
+         Gow3Settings::RenderPreset()!=Gow3Settings::NativeAA) ||
+        (Gow3Settings::RenderPreset()!=Gow3Settings::NativeAA &&
+         !(killzone_quality && Gow3Settings::RenderPreset()==1)))) return false;
     // Toggle 1 << 24 switches it off at run time (A/B); history restarts after.
     return enabled && !failed &&
            (Gow3Settings::Get().upscaler == Gow3Settings::UpscalerFsr3 ||
@@ -237,6 +255,7 @@ bool TemporalUpscaler::Active() const {
 }
 
 bool TemporalUpscaler::ReactiveOn() const {
+    if(camera_motion.KillzoneNative()) return false; // no verified Killzone transparency mask yet
     // FSR 4 takes no reactive mask: the opaque snapshot and the mask pass would be wasted.
     return Gow3Settings::Get().reactive && !Gow3Toggle::Disabled(1u << 27) && !UseFsr4() && !UseDlss() &&
            Gow3Settings::Get().upscaler != Gow3Settings::UpscalerTaa;
@@ -266,6 +285,22 @@ bool TemporalUpscaler::RasterScaling() const {
 }
 
 bool TemporalUpscaler::OnFrameStart() {
+    if (diagnostics) {
+        ++diagnostic_frames;
+        diagnostic_camera_frames += diagnostic_camera;
+        diagnostic_scene_frames += diagnostic_scene;
+        diagnostic_trigger_frames += diagnostic_trigger;
+        diagnostic_dispatch_frames += dispatched_last_frame;
+        diagnostic_camera = diagnostic_scene = diagnostic_trigger = false;
+        if (diagnostic_frames == 60 || diagnostic_frames % 300 == 0) {
+            std::printf("Upscaler diagnostics: frames=%u camera_ready=%u scene=%u trigger=%u "
+                        "dispatched=%u preset=%d jitter=%d\n", diagnostic_frames,
+                        diagnostic_camera_frames, diagnostic_scene_frames,
+                        diagnostic_trigger_frames, diagnostic_dispatch_frames,
+                        Gow3Settings::RenderPreset(), int(Gow3Settings::Get().jitter.load()));
+            std::fflush(stdout);
+        }
+    }
     // gow3: GOW3_PRESET_FILE=<file> holding a preset number, read about once a second: switches
     // the preset like the menu does (scripted tests of live preset changes).
     static const char* preset_file = std::getenv("GOW3_PRESET_FILE");
@@ -294,9 +329,9 @@ bool TemporalUpscaler::OnFrameStart() {
     const int preset = Gow3Settings::RenderPreset();
     if (applied_preset != preset || settings.upscaler == Gow3Settings::UpscalerOff) failed = false;
     const bool active = Active();
-    const bool jitter_on = active && settings.jitter && !Gow3Toggle::Disabled(1u << 25);
+    const bool jitter_on = !camera_motion.KillzoneNative() && active && settings.jitter && !Gow3Toggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
-    const int output = settings.output_res.load();
+    const int output = camera_motion.KillzoneNative() ? 1 : settings.output_res.load();
     const bool output_changed = !scaled_session && applied_output != output;
     if (output_changed) {
         target_width = Gow3Settings::OutputWidths[output];
@@ -358,6 +393,12 @@ bool TemporalUpscaler::OnFrameStart() {
 }
 
 void TemporalUpscaler::OnDispatch(u64 cs_hash) {
+    if (diagnostics) {
+        diagnostic_camera |= camera_motion.Ready();
+        diagnostic_scene |= bool(scene_color);
+        diagnostic_trigger |= cs_hash == trigger_hash;
+    }
+    if(camera_motion.KillzoneNative()) return; // Killzone's trigger is graphics, not GOW3 compute.
     if (cs_hash != trigger_hash || done_this_frame || failed || Scaled()) {
         return;
     }
@@ -367,6 +408,38 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
         return;
     }
     Run();
+}
+
+void TemporalUpscaler::OnKillzonePost(u64 vs_hash,u64 ps_hash,VideoCore::ImageId color,
+                                     VideoCore::ImageId secondary,bool has_depth,bool native_viewport) {
+    if(!camera_motion.KillzoneNative() || !Active() || done_this_frame || failed ||
+       vs_hash!=0x3de7685c || ps_hash!=0x857a8dc0 || !native_viewport || has_depth ||
+       !color || !secondary || !scene_color) return;
+    const auto& destination=texture_cache.GetImage(color);
+    const auto& auxiliary=texture_cache.GetImage(secondary);
+    const auto& source=texture_cache.GetImage(scene_color);
+    if(destination.info.pixel_format!=vk::Format::eB10G11R11UfloatPack32 ||
+       (auxiliary.info.pixel_format!=vk::Format::eR8G8B8A8Srgb &&
+        auxiliary.info.pixel_format!=vk::Format::eR8G8B8A8Unorm) ||
+       source.info.pixel_format!=vk::Format::eR16G16B16A16Sfloat) return;
+    for(const auto* image: {&destination,&auxiliary,&source})
+        if(image->info.size.width!=1920 || image->info.size.height!=1080) return;
+    diagnostic_trigger=true;
+    diagnostic_camera|=camera_motion.Ready();
+    diagnostic_scene=true;
+    done_this_frame=true;
+    if(!camera_motion.Ready()) { reset=true; return; }
+    Run();
+    static int reported=-1;
+    const int provider=Gow3Settings::Get().upscaler;
+    if(dispatched_last_frame && reported!=provider) {
+        reported=provider;
+        std::printf("Killzone %s: recorded real %s dispatch before PS857a8dc0; scene=%ux%u output=1920x1080, jitterOFF, camera-only motion\n",
+                    provider==Gow3Settings::UpscalerTaa ? "TAA" : "FSR",
+                    provider==Gow3Settings::UpscalerTaa ? "TAA" : "FSR3",
+                    render_width,render_height);
+        std::fflush(stdout);
+    }
 }
 
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
@@ -500,7 +573,8 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
                vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst |
                    vk::ImageUsageFlagBits::eTransferSrc);
     make_image(reactive_image, reactive_view, vk::Format::eR8Unorm,
-               vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+               vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                   vk::ImageUsageFlagBits::eTransferDst);
     for (u32 i = 0; i < taa_history.size(); ++i) {
         taa_history_views[i].reset();
         taa_history[i] = VideoCore::UniqueImage{};
@@ -1005,6 +1079,8 @@ void TemporalUpscaler::Run() {
     auto& depth = texture_cache.GetImage(camera_motion.Depth());
     const u32 ow = color.info.size.width, oh = color.info.size.height;
     const bool reduced = ReducedScene(color) && scene_targets.EligibleScene(depth);
+    const bool color_proxy_current = reduced && scene_targets.ProxyCurrent(color);
+    const bool depth_proxy_current = reduced && scene_targets.ContentsCurrent(depth);
     const u32 w = reduced ? scene_targets.Size().width : ow;
     const u32 h = reduced ? scene_targets.Size().height : oh;
     if (color.info.pixel_format != vk::Format::eR16G16B16A16Sfloat ||
@@ -1074,6 +1150,20 @@ void TemporalUpscaler::Run() {
                 vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
 
     const bool has_reactive = mask_ready || RecordReactive(input_color_view);
+    if(!has_reactive) {
+        // The merge shader still has a reactive-image descriptor when the optional
+        // FSR input is absent. Give that descriptor a valid layout and zero contents.
+        own_barrier(vk::Image(reactive_image),vk::ImageLayout::eUndefined,all,
+            vk::AccessFlagBits2::eNone,vk::ImageLayout::eGeneral,
+            vk::PipelineStageFlagBits2::eTransfer,vk::AccessFlagBits2::eTransferWrite);
+        cmdbuf.clearColorImage(vk::Image(reactive_image),vk::ImageLayout::eGeneral,
+            vk::ClearColorValue{std::array<float,4>{}},
+            vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor,0,1,0,1});
+        own_barrier(vk::Image(reactive_image),vk::ImageLayout::eGeneral,
+            vk::PipelineStageFlagBits2::eTransfer,vk::AccessFlagBits2::eTransferWrite,
+            vk::ImageLayout::eGeneral,vk::PipelineStageFlagBits2::eComputeShader,
+            vk::AccessFlagBits2::eShaderRead);
+    }
 
     const auto now = std::chrono::steady_clock::now();
     float frame_ms = std::chrono::duration<float, std::milli>(now - last_frame).count();
@@ -1134,7 +1224,7 @@ void TemporalUpscaler::Run() {
         info.frameTimeMilliseconds = frame_ms;
         info.preExposure = 1.0f;
         info.cameraNear = camera_motion.Near();
-        info.cameraFar = 3000.0f;
+        info.cameraFar = camera_motion.Far();
         info.cameraVerticalFovRadians = camera_motion.VerticalFov();
         info.viewSpaceToMeters = 1.0f;
         // RCAS strength 0..1 (menu, GOW3_FSR_SHARPNESS); jitter at 1:1 softens the image slightly.
@@ -1167,6 +1257,14 @@ void TemporalUpscaler::Run() {
     if (dispatched) {
         reset = false;
         dispatched_last_frame = true;
+        if(killzone_quality) {
+            static u32 quality_dispatches=0;
+            if(++quality_dispatches==1 || quality_dispatches%300==0) {
+                std::printf("Killzone FSR Quality: dispatch=%u input=%ux%u output=%ux%u color_proxy_current=%d depth_proxy_current=%d\n",
+                    quality_dispatches,w,h,ow,oh,int(color_proxy_current),int(depth_proxy_current));
+                std::fflush(stdout);
+            }
+        }
         if (Gow3Settings::Get().upscaler != Gow3Settings::UpscalerTaa) {
             ExtraSharpen(cmdbuf, vk::Image(output_image), false, ow, oh);
         }
@@ -1729,7 +1827,7 @@ void TemporalUpscaler::RunScaled() {
     info.frameTimeMilliseconds = frame_ms;
     info.preExposure = 1.0f;
     info.cameraNear = camera_motion.Near();
-    info.cameraFar = 3000.0f;
+    info.cameraFar = camera_motion.Far();
     info.cameraVerticalFovRadians = camera_motion.VerticalFov();
     info.viewSpaceToMeters = 1.0f;
     info.sharpness = std::min(settings.sharpness.load(), 1.0f);

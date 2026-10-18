@@ -9,6 +9,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/gow3gpu.h"
+#include "kzsf_controller_aim.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -215,6 +216,7 @@ static void sample_host(PadData *d) {
     d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
+    if (g) SDL_UpdateGamepads(); /* refresh the gamepad state on this thread as well */
     if (gow3gpu_overlay_captures_input()) return; /* settings menu open: neutral input */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     load_button_maps();
@@ -229,6 +231,31 @@ static void sample_host(PadData *d) {
         if (d->r2>30) d->buttons|=BTN_R2;
         if (mapped & BTN_L2) d->l2=255;
         if (mapped & BTN_R2) d->r2=255;
+        {
+            int16_t rx=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX);
+            int16_t ry=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY);
+            int drift_zone=gow3gpu_controller_drift_deadzone();
+            int16_t raw_x=rx,raw_y=ry;
+            int suppressed=kzsf_controller_drift_guard(&rx,&ry,drift_zone);
+            static int drift_log=-1;
+            if(drift_log<0)drift_log=getenv("KZSF_PAD_DRIFT_LOG")!=NULL;
+            if(drift_log) {
+                float raw_radius=hypotf((float)raw_x,(float)raw_y)/32768.0f;
+                static uint64_t report_at;static unsigned samples,blocked;
+                static float peak;
+                if(raw_radius>peak)peak=raw_radius;
+                ++samples;blocked+=(unsigned)suppressed;
+                uint64_t now=now_us();
+                if(!report_at)report_at=now;
+                if(now-report_at>=5000000) {
+                    fprintf(stderr,"KILLZONE_PAD_DRIFT raw_peak=%.2f%% guard=%d%% suppressed=%u/%u samples\n",
+                        (double)(peak*100.f),drift_zone,blocked,samples);
+                    report_at=now;samples=blocked=0;peak=0;
+                }
+            }
+            kzsf_controller_aim(&rx,&ry,gow3gpu_controller_aim_gain(d->l2>30));
+            d->right_x=axis(rx); d->right_y=axis(ry);
+        }
         if (SDL_GetNumGamepadTouchpads(g)>0) {
             const int fingers=SDL_GetNumGamepadTouchpadFingers(g,0);
             for (int finger=0;finger<fingers && d->touch_count<2;++finger) {
@@ -239,6 +266,26 @@ static void sample_host(PadData *d) {
                         .y=touch_axis(y,942),.id=(uint8_t)finger};
                 }
             }
+        }
+        /* Diagnostic: the raw SDL gamepad state, independent of the button mapping. */
+        {
+            unsigned raw=0;
+            for (int b=0;b<SDL_GAMEPAD_BUTTON_COUNT;++b)
+                if (SDL_GetGamepadButton(g,(SDL_GamepadButton)b)) raw|=(1u<<b);
+            static unsigned last_raw; static uint64_t last_raw_t;
+            if (raw && raw!=last_raw) {
+                uint64_t now=now_us();
+                if (now-last_raw_t>300000) { last_raw_t=now; last_raw=raw;
+                    printf("Runtime: raw SDL gamepad buttons=0x%x\n",raw); }
+            }
+        }
+    }
+    {
+        int16_t mx=0,my=0; uint32_t buttons=0;
+        if (gow3gpu_mouse_state(&mx,&my,&buttons)) {
+            if (mx || my) { d->right_x=axis(mx); d->right_y=axis(my); }
+            if (buttons&1) { d->buttons|=BTN_R2; d->r2=255; }
+            if (buttons&2) { d->buttons|=BTN_L2; d->l2=255; }
         }
     }
     /* The keyboard works with or without a gamepad: its buttons add to the pad's, and a stick
@@ -251,6 +298,15 @@ static void sample_host(PadData *d) {
     key_axis(&d->left_y,k[SDL_SCANCODE_W],k[SDL_SCANCODE_S]);
     key_axis(&d->right_x,k[SDL_SCANCODE_LEFT],k[SDL_SCANCODE_RIGHT]);
     key_axis(&d->right_y,k[SDL_SCANCODE_UP],k[SDL_SCANCODE_DOWN]);
+    /* Diagnostic: report non-neutral pad states (throttled). */
+    if (d->buttons || d->l2 || d->r2) {
+        static uint64_t last_print;
+        uint64_t now=now_us();
+        if (now-last_print>500000) {
+            last_print=now;
+            printf("Runtime: pad buttons=0x%x lx=%u ly=%u l2=%u r2=%u\n",d->buttons,d->left_x,d->left_y,d->l2,d->r2);
+        }
+    }
 }
 
 /* GOW3_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
@@ -380,6 +436,12 @@ static void sample(PadData *d) {
         if (d->buttons) d->buttons=0;
         else hold_after_capture=0;
     }
+    /* Diagnostic: the exact pad state handed to the guest (throttled). */
+    if (d->buttons) {
+        static uint64_t last;
+        uint64_t now=now_us();
+        if (now-last>500000) { last=now; printf("Runtime: pad -> game buttons=0x%x l2=%u r2=%u\n",d->buttons,d->l2,d->r2); }
+    }
 }
 
 static ABI int32_t pad_init(void) { pthread_mutex_lock(&lock); initialized=1; pthread_mutex_unlock(&lock); return 0; }
@@ -433,9 +495,7 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (!param) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
     SDL_Gamepad *g=current_gamepad();
-    /* The menu's vibration strength scales the game's motors (0: off). */
-    const unsigned percent=(unsigned)gow3gpu_vibration_percent();
-    if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257u*percent/100u),(uint16_t)(param[1]*257u*percent/100u),1000);
+    if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
     pthread_mutex_unlock(&lock);
     return 0;
 }
@@ -457,6 +517,9 @@ static const RuntimeExport exports[]={
 };
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
 void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }
+/* Diagnostic: how many times the guest has polled the pad, and whether a gamepad is open. */
+unsigned runtime_pad_reads(void) { return (unsigned)reads; }
+const char *runtime_pad_name(void) { return gamepad ? SDL_GetGamepadName(gamepad) : "none"; }
 
 /* probe --gamepad: runs before any game state exists, so it uses its own SDL gamepad and leaves
  * the lock and statics above alone. run.py parses this line; keep the format. */

@@ -853,7 +853,14 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {
             bound += (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb)) ? 1 : 0;
         }
-        motion_possible = Shader::MotionVectors::positions_address != 0 && bound >= 5 &&
+        // The injected varyings occupy locations 30 and 31, and FragmentMotion also
+        // declares the four-component FragCoord built-in. A 128-component device
+        // cannot accept this interface even when most lower locations are unused.
+        // Keep the ordinary shader variant on those devices.
+        constexpr u32 motion_input_components =
+            (Shader::MotionVectors::PreviousLocation + 1) * 4 + 4;
+        motion_possible = instance.GetMaxFragmentInputComponents() >= motion_input_components &&
+                          Shader::MotionVectors::positions_address != 0 && bound >= 5 &&
                           !regs.color_buffers[Shader::MotionVectors::Output] &&
                           regs.depth_buffer.DepthValid() &&
                           regs.depth_buffer.NumSamples() == 1 && !regs.IsClipDisabled() &&

@@ -19,6 +19,21 @@ void runtime_restart(void);
 typedef void (ABI *GuestCallback)(void);
 void runtime_start(uint64_t capabilities);
 uintptr_t runtime_resolve(const char *name, int is_data);
+/* The guest clock exposed by the kernel HLE (nanoseconds; see runtime_kernel.c). */
+uint64_t runtime_process_time_counter(void);
+/* Optional native TSC domain, configured before guest initialization. */
+void runtime_set_native_tsc(uint64_t frequency);
+void runtime_set_virtual_tsc(uint64_t source_frequency);
+uint64_t runtime_read_tsc(void);
+const uint64_t *runtime_tsc_multiplier(void);
+/* Immutable tables installed by the loader before guest threads start. */
+typedef struct { uint64_t module, offset, kind; char nid[16]; } RuntimeNativeExport;
+void runtime_native_modules(const char (*names)[128], size_t count,
+                            const RuntimeNativeExport *exports, size_t export_count, const void *base);
+int32_t runtime_native_module_handle(const char *path);
+uintptr_t runtime_native_symbol(int32_t handle, const char *name);
+int runtime_native_module_valid(int32_t handle);
+int runtime_symbol_nid(const char *name, char result[12]);
 void runtime_report(void);
 /* Called at the end of runtime_report (the loader adds its own counters). */
 void runtime_set_report_hook(void (*hook)(void));
@@ -37,16 +52,23 @@ void runtime_set_procparam(void *param);
 void **runtime_application_heap_api(void);
 uintptr_t runtime_thread_resolve(const char *name);
 void runtime_thread_report(void);
+uint32_t runtime_thread_trace_offset(void);
+uint32_t runtime_thread_trace_get(void);
 void runtime_set_main_tls(const void *data, uint64_t filesz, uint64_t memsz, uint64_t align);
 void runtime_thread_attach_main(void);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
+void runtime_sema_dump(void);
 unsigned runtime_sema_waiters(uint32_t id);
 uintptr_t runtime_time_resolve(const char *name);
 void runtime_content_configure(const uint32_t values[5]);
 uintptr_t runtime_content_resolve(const char *name);
 void runtime_content_report(void);
+uintptr_t runtime_font_resolve(const char *name);
+void runtime_font_report(void);
+uintptr_t runtime_png_resolve(const char *name);
+void runtime_png_report(void);
 typedef struct { const char *name; void *function; } RuntimeExport;
 #define RUNTIME_LOOKUP(table, nid) runtime_lookup(table, sizeof(table)/sizeof(*(table)), nid)
 const char *runtime_symbol(const char *nid);
@@ -91,6 +113,8 @@ uintptr_t runtime_videodec_resolve(const char *name);
 uintptr_t runtime_audio_resolve(const char *name);
 void runtime_audio_report(void);
 uintptr_t runtime_pad_resolve(const char *name);
+unsigned runtime_pad_reads(void);
+const char *runtime_pad_name(void);
 void runtime_pad_report(void);
 /* probe --gamepad: prints one "Gamepad:" line for the first pad found (returns 1) or none (0). */
 int runtime_pad_describe(void);

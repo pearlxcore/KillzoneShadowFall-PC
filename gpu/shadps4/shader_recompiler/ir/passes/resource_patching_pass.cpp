@@ -114,7 +114,11 @@ public:
 
     u32 Add(const ImageResource& desc) {
         const u32 index{Add(image_resources, desc, [&desc](const auto& existing) {
+            // A single guest T# can be read both normally and with depth comparison.
+            // Keep separate bindings: is_depth selects the host depth format and
+            // must not depend on which instruction was discovered first.
             return desc.sharp_fetch == existing.sharp_fetch && desc.is_array == existing.is_array &&
+                   desc.is_depth == existing.is_depth &&
                    desc.mip_fallback_mode == existing.mip_fallback_mode &&
                    desc.constant_mip_index == existing.constant_mip_index &&
                    desc.post_op == existing.post_op;

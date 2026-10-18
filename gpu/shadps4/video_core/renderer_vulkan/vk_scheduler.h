@@ -752,6 +752,13 @@ public:
             func(current_cmdbuf);
             return;
         }
+        if (!record_chunk) {
+            // KickRecording() hands the current chunk to the recorder queue and only then
+            // re-acquires a replacement (outside recorder_mutex): a concurrent Record() from
+            // another thread (small guest copies, deferred signals) can observe the null
+            // pointer in that window. Take a chunk instead of dereferencing null.
+            record_chunk = AcquireChunk();
+        }
         if (!record_chunk->Push(std::forward<Func>(func))) {
             full_chunks.push_back(std::move(record_chunk));
             record_chunk = AcquireChunk();
@@ -773,6 +780,9 @@ public:
             return;
         }
         ASSERT(bytes + 1024 <= RecordChunk::Capacity);
+        if (!record_chunk) {
+            record_chunk = AcquireChunk(); // see Record(): a concurrent kick can leave it null
+        }
         if (RecordChunk::Capacity - record_chunk->Size() < bytes + 1024) {
             full_chunks.push_back(std::move(record_chunk));
             record_chunk = AcquireChunk();

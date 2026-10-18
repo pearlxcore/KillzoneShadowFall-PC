@@ -292,11 +292,14 @@ static ABI int32_t audio_last_time(int32_t handle, uint64_t *time) {
     *time=p->last_output_us; return 0;
 }
 
+/* Pad-speaker mix levels are accepted and ignored (the port mix is host-managed). */
+static ABI int32_t audio_mix_level(uint32_t port,const void *levels) { (void)port; (void)levels; return 0; }
 static const RuntimeExport exports[]={
     {"sceAudioOutInit",audio_init}, {"sceAudioOutOpen",audio_open}, {"sceAudioOutClose",audio_close},
     {"sceAudioOutOutput",audio_output}, {"sceAudioOutOutputs",audio_outputs},
     {"sceAudioOutSetVolume",audio_volume}, {"sceAudioOutGetPortState",audio_state},
     {"sceAudioOutGetLastOutputTime",audio_last_time},
+    {"sceAudioOutSetMixLevelPadSpk",audio_mix_level},
 };
 uintptr_t runtime_audio_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
 void runtime_audio_report(void) { printf("Runtime: audio ports opened=%zu, buffers output=%zu\n",ports_opened,buffers_out); }

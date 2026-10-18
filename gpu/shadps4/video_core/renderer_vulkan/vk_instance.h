@@ -57,6 +57,11 @@ public:
     u64 GetMaxBufferSize() const {
         return vk13_props.maxBufferSize;
     }
+    bool SupportsSparseAliasing() const { return features.sparseResidencyAliased; }
+
+    u32 GetMaxFragmentInputComponents() const {
+        return properties.limits.maxFragmentInputComponents;
+    }
 
     vk::PhysicalDevice GetPhysicalDevice() const {
         return physical_device;
@@ -92,10 +97,6 @@ public:
 
     vk::Queue GetGraphicsQueue() const {
         return graphics_queue;
-    }
-
-    vk::Queue GetSparseQueue() const {
-        return sparse_queue;
     }
 
     vk::Queue GetPresentQueue() const {
@@ -557,7 +558,6 @@ private:
     VmaAllocator allocator{};
     vk::Queue present_queue;
     vk::Queue graphics_queue;
-    vk::Queue sparse_queue;
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;

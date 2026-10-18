@@ -77,6 +77,18 @@ uint32_t runtime_thread_tcb_offset(void) {
     }
     return 0x1480+8*(uint32_t)tls_slot;
 }
+/* Dedicated per-thread slot for the import tracer (gs-relative; see probe.c). */
+static DWORD trace_slot=TLS_OUT_OF_INDEXES;
+uint32_t runtime_thread_trace_offset(void) {
+    if (trace_slot==TLS_OUT_OF_INDEXES) {
+        trace_slot=TlsAlloc();
+        if (trace_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",trace_slot); exit(21); }
+    }
+    return 0x1480+8*(uint32_t)trace_slot;
+}
+uint32_t runtime_thread_trace_get(void) {
+    return trace_slot==TLS_OUT_OF_INDEXES ? 0 : (uint32_t)(uintptr_t)TlsGetValue(trace_slot);
+}
 static void set_gs(void *base) {
     runtime_thread_tcb_offset();
     if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
@@ -351,6 +363,17 @@ static ABI int32_t thread_rename(GuestThread *t,const char *name) {
     return 0;
 }
 static ABI int32_t thread_equal(GuestThread *a,GuestThread *b) { return a==b; }
+/* Scheduling parameters: policy plus the single sched_priority field. */
+static ABI int32_t thread_get_schedparam(GuestThread *t,int *policy,int *param) {
+    if (!find_thread(t)) return ERR(3);
+    if (!policy || !param) return ERR(22);
+    *policy=t->attr.policy; *param=t->attr.prio; return 0;
+}
+static ABI int32_t thread_set_schedparam(GuestThread *t,int policy,const int *param) {
+    if (!find_thread(t)) return ERR(3);
+    if (!param) return ERR(22);
+    t->attr.policy=policy; t->attr.prio=*param; return 0;
+}
 
 /* POSIX (libScePosix) variants return positive errno values. */
 static int32_t posix(int32_t r) { return r ? (int32_t)((uint32_t)r&0xffff) : 0; }
@@ -362,6 +385,7 @@ static ABI int32_t posix_attr_set_param(ThreadAttr **a,const int *p) { return po
 static ABI int32_t posix_create(GuestThread **t,ThreadAttr **a,GuestEntry e,void *arg) { return posix(create(t,a,e,arg,"posix")); }
 static ABI int32_t posix_create_name(GuestThread **t,ThreadAttr **a,GuestEntry e,void *arg,const char *name) { return posix(create(t,a,e,arg,name)); }
 static ABI int32_t posix_join(GuestThread *t,void **r) { return posix(thread_join(t,r)); }
+static ABI int32_t posix_set_schedparam(GuestThread *t,int policy,const int *param) { return posix(thread_set_schedparam(t,policy,param)); }
 
 uintptr_t runtime_thread_resolve(const char *name) {
     static const struct { const char *nid; void *fn; } table[]={
@@ -384,6 +408,8 @@ uintptr_t runtime_thread_resolve(const char *name) {
         {"euKRgm0Vn2M#libkernel",posix_attr_set_param}, {"OxhIB8LB-PQ#libkernel",posix_create},
         {"Jmi+9w9u0E4#libkernel",posix_create_name}, {"h9CcP3J0oVM#libkernel",posix_join},
         {"FJrT5LuUBAU#libkernel",thread_exit},
+        {"P41kTWUS3EI#libkernel",thread_get_schedparam}, {"oIRFTjoILbg#libkernel",thread_set_schedparam},
+        {"Xs9hdiD7sAA#libkernel",posix_set_schedparam},
     };
     for (size_t i=0;i<sizeof(table)/sizeof(*table);++i)
         if (!strcmp(name,table[i].nid)) return (uintptr_t)table[i].fn;

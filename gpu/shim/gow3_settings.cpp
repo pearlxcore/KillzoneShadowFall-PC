@@ -9,7 +9,6 @@
 #include <cstring>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace Gow3Settings {
 
@@ -64,7 +63,32 @@ void Set(Values& v, const std::string& key, const std::string& value) {
             return;
         }
     }
-    if (key == "upscaler") {
+    if (key == "mouse_aim") { v.mouse_aim=i!=0;
+    } else if (key == "mouse_invert_y") { v.mouse_invert_y=i!=0;
+    } else if (key == "mouse_sensitivity") { v.mouse_sensitivity=std::clamp(i,50,300);
+    } else if (key == "mouse_ads_sensitivity") { v.mouse_ads_sensitivity=std::clamp(i,25,300);
+    } else if (key == "mouse_horizontal_speed") { v.mouse_horizontal_speed=std::clamp(i,25,300);
+    } else if (key == "mouse_vertical_speed") { v.mouse_vertical_speed=std::clamp(i,25,300);
+    } else if (key == "motion_blur") { v.motion_blur=i!=0;
+    } else if (key == "unlimited_health") { v.unlimited_health=i!=0;
+    } else if (key == "infinite_ammo") { v.infinite_ammo=i!=0;
+    } else if (key == "look_curve") { v.look_curve=i>=0 && i<=2?i:0;
+    } else if (key == "look_deadzone") { v.look_deadzone=std::clamp(i,0,30);
+    } else if (key == "look_ramp") { v.look_ramp=i!=0;
+    } else if (key == "look_assist") { v.look_assist=i!=0;
+    } else if (key == "sprint_turn_speed") {
+        v.sprint_turn_speed = i >= 100 && i <= 500 ? i : 100;
+    } else if (key == "controller_turn_speed") {
+        v.controller_turn_speed = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "controller_pitch_speed") {
+        v.controller_pitch_speed = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "controller_drift_deadzone") {
+        v.controller_drift_deadzone=std::clamp(i,0,30);
+    } else if (key == "controller_look_gain") {
+        v.controller_look_gain = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "controller_aim_gain") {
+        v.controller_aim_gain = i >= 50 && i <= 300 ? i : 100;
+    } else if (key == "upscaler") {
         for (int u = 0; u < UpscalerCount; ++u) {
             if (value == UpscalerName(u)) {
                 v.upscaler = u;
@@ -101,9 +125,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "async_shaders") {
         v.async_shaders = i != 0;
     } else if (key == "fsr1") {
-        // FSR 1 left the launcher and the in-game menu: a value saved by an older version has no
-        // control left to turn it off, so it stays off.
-        v.fsr1 = false;
+        // Killzone's spatial presentation path; independent of temporal scene hooks.
+        v.fsr1 = i != 0;
     } else if (key == "rcas") {
         v.rcas = i != 0;
     } else if (key == "rcas_strength") {
@@ -118,10 +141,6 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.deferred_readback = i != 0;
     } else if (key == "stale_readback") {
         v.stale_readback = i != 0;
-    } else if (key == "anisotropy") {
-        v.anisotropy = Gow3Graphics::ParseAnisotropy(i);
-    } else if (key == "vibration") {
-        v.vibration = value.empty() ? 100 : std::clamp(i, 0, 100);
     } else if (key == "restart_unconfirmed") {
         v.restart_unconfirmed = i != 0;
     } else if (key == "enemy_health_bar") {
@@ -184,6 +203,19 @@ void Load() {
         }
     }
     const std::pair<const char*, const char*> env_keys[] = {
+        {"GOW3_MOUSE_AIM", "mouse_aim"}, {"GOW3_MOUSE_SENSITIVITY", "mouse_sensitivity"},
+        {"GOW3_MOUSE_ADS_SENSITIVITY", "mouse_ads_sensitivity"},
+        {"GOW3_MOUSE_HORIZONTAL_SPEED", "mouse_horizontal_speed"},
+        {"GOW3_MOUSE_VERTICAL_SPEED", "mouse_vertical_speed"}, {"GOW3_MOUSE_INVERT_Y", "mouse_invert_y"},
+        {"GOW3_MOTION_BLUR", "motion_blur"}, {"KZSF_UNLIMITED_HEALTH", "unlimited_health"},
+        {"KZSF_INFINITE_AMMO", "infinite_ammo"},
+        {"GOW3_PAD_TURN_SPEED", "controller_turn_speed"},
+        {"KZSF_SPRINT_TURN_SPEED", "sprint_turn_speed"},
+        {"KZSF_LOOK_CURVE", "look_curve"}, {"KZSF_LOOK_DEADZONE", "look_deadzone"},
+        {"KZSF_LOOK_RAMP", "look_ramp"}, {"KZSF_LOOK_ASSIST", "look_assist"},
+        {"GOW3_PAD_PITCH_SPEED", "controller_pitch_speed"},
+        {"GOW3_PAD_LOOK_GAIN", "controller_look_gain"}, {"GOW3_PAD_AIM_GAIN", "controller_aim_gain"},
+        {"KZSF_PAD_DRIFT_DEADZONE", "controller_drift_deadzone"},
         {"GOW3_FSR_SHARPNESS", "sharpness"},        {"GOW3_JITTER", "jitter"},
         {"GOW3_REACTIVE", "reactive"},              {"GOW3_REACTIVE_SCALE", "reactive_scale"},
         {"GOW3_REACTIVE_THRESHOLD", "reactive_threshold"}, {"GOW3_REACTIVE_MAX", "reactive_max"},
@@ -191,7 +223,6 @@ void Load() {
         {"GOW3_ASYNC_SHADERS", "async_shaders"},      {"GOW3_DEFERRED_READBACK", "deferred_readback"},
         {"GOW3_STALE_READBACK", "stale_readback"},     {"GOW3_FSR1", "fsr1"},
         {"GOW3_RCAS", "rcas"},                        {"GOW3_FRAMES_AHEAD", "frames_queued"},
-        {"GOW3_ANISOTROPY", "anisotropy"},            {"GOW3_VIBRATION", "vibration"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env); value && value[0]) {
@@ -199,6 +230,11 @@ void Load() {
         }
     }
     v.startup_preset = v.preset;
+    if (const char* off=std::getenv("KZSF_DISABLE_MOTION_BLUR")) v.motion_blur=off[0]!='1';
+    const char* turn_hook=std::getenv("KZSF_ENGINE_TURN");
+    v.engine_turn_hook=turn_hook && turn_hook[0]=='1';
+    const char *player_turn_hook=std::getenv("KZSF_PLAYER_TURN");
+    v.engine_turn_hook=v.engine_turn_hook.load() || (player_turn_hook && player_turn_hook[0]=='1');
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;
     v.startup_output_res = v.output_res;
@@ -210,7 +246,6 @@ void Load() {
                                                  : v.engine_fps.load();
     v.startup_deferred_readback = v.deferred_readback;
     v.startup_stale_readback = v.stale_readback;
-    v.startup_anisotropy = v.anisotropy;
 }
 
 bool GraphicsNeedRestart() {
@@ -218,8 +253,7 @@ bool GraphicsNeedRestart() {
     return v.render_resolution != v.startup_render_resolution ||
            v.engine_fps != v.startup_engine_fps ||
            v.deferred_readback != v.startup_deferred_readback ||
-           v.stale_readback != v.startup_stale_readback ||
-           v.anisotropy != v.startup_anisotropy;
+           v.stale_readback != v.startup_stale_readback;
 }
 
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411) {
@@ -308,7 +342,6 @@ void Save() {
                  int(v.overlay_items >> 3 & 1), int(v.overlay_items >> 4 & 1), int(v.overlay_items >> 5 & 1),
                  int(v.overlay_items >> 6 & 1), v.overlay_scale.load(), v.overlay_corner.load(),
                  v.overlay_opacity.load(), v.overlay_layout.load(), v.menu_tab.load());
-    const std::vector<std::string> resolution_names = Gow3Graphics::ResolutionNames();
     std::fprintf(file,
                  "display_mode=%s\nvsync=%d\nfps_limit=%d\nasync_shaders=%d\n"
                  "fsr1=%d\nrcas=%d\nrcas_strength=%d\nframes_queued=%d\n"
@@ -317,10 +350,23 @@ void Save() {
                  Gow3Graphics::DisplayModeKeys[std::clamp(v.display_mode.load(), 0, 2)].data(),
                  int(v.vsync.load()), v.fps_limit.load(), int(v.async_shaders.load()),
                  int(v.fsr1.load()), int(v.rcas.load()), v.rcas_strength.load(), v.frames_queued.load(),
-                 resolution_names[std::clamp(v.render_resolution.load(), 0, int(resolution_names.size()) - 1)].c_str(),
+                 Gow3Graphics::Resolutions[std::clamp(v.render_resolution.load(), 0, 5)].data(),
                  v.engine_fps.load(), int(v.deferred_readback.load()), int(v.stale_readback.load()),
                  int(v.restart_unconfirmed.load()));
-    std::fprintf(file, "anisotropy=%d\nvibration=%d\n", v.anisotropy.load(), v.vibration.load());
+    std::fprintf(file, "controller_look_gain=%d\ncontroller_aim_gain=%d\n",
+                 v.controller_look_gain.load(), v.controller_aim_gain.load());
+    std::fprintf(file, "controller_turn_speed=%d\n",v.controller_turn_speed.load());
+    std::fprintf(file, "controller_drift_deadzone=%d\n",v.controller_drift_deadzone.load());
+    std::fprintf(file, "sprint_turn_speed=%d\n",v.sprint_turn_speed.load());
+    std::fprintf(file,"look_curve=%d\nlook_deadzone=%d\nlook_ramp=%d\nlook_assist=%d\n",
+        v.look_curve.load(),v.look_deadzone.load(),int(v.look_ramp.load()),int(v.look_assist.load()));
+    std::fprintf(file, "controller_pitch_speed=%d\n",v.controller_pitch_speed.load());
+    std::fprintf(file,"mouse_aim=%d\nmouse_invert_y=%d\nmouse_sensitivity=%d\nmouse_ads_sensitivity=%d\n"
+                      "mouse_horizontal_speed=%d\nmouse_vertical_speed=%d\nmotion_blur=%d\n"
+                      "unlimited_health=%d\ninfinite_ammo=%d\n",
+        int(v.mouse_aim.load()),int(v.mouse_invert_y.load()),v.mouse_sensitivity.load(),v.mouse_ads_sensitivity.load(),
+        v.mouse_horizontal_speed.load(),v.mouse_vertical_speed.load(),int(v.motion_blur.load()),
+        int(v.unlimited_health.load()),int(v.infinite_ammo.load()));
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");

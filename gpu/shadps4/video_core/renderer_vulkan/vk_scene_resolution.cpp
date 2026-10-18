@@ -453,6 +453,10 @@ bool SceneTargets::ProxyCurrent(const VideoCore::Image& image, u32 level, u32 le
     if (copying || !image.scene_proxy || image.info.props.is_depth || levels != 1) {
         return false;
     }
+    return ContentsCurrent(image,level);
+}
+bool SceneTargets::ContentsCurrent(const VideoCore::Image& image, u32 level) const {
+    if(copying || !image.scene_proxy) return false;
     const auto it = entries.find(Key(image.image_uid, level));
     return it != entries.end() && it->second->state.valid;
 }

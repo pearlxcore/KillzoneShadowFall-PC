@@ -71,11 +71,30 @@ static ABI int32_t param_int(uint32_t id,int32_t *out) {
 }
 static ABI int32_t addon_list(uint32_t service,void *list,uint32_t capacity,uint32_t *hits) {
     require_initialized();
-    if (service) { fputs("STOP: nonzero AppContent service label unsupported\n",stderr); exit(21); }
+    /* No add-ons are mounted by this provider, for any service label. Never touch unused
+     * list slots. (An earlier revision stopped on a nonzero label; the game passes one.) */
+    (void)service;
     if ((!capacity || !list) && !hits) return PARAMETER;
-    /* No add-ons are mounted by this provider. Never touch unused list slots. */
     if (hits) *hits=0;
     ++lists; return 0;
+}
+static unsigned temp_mounts;
+/* sceAppContentTemporaryDataMount2: hand back a fixed temp mount point. */
+static ABI int32_t temporary_mount(uint32_t option, char *mount_point) {
+    (void)option;
+    require_initialized();
+    if (mount_point) memcpy(mount_point,"/temp0",7);
+    ++temp_mounts;
+    printf("Runtime: AppContent temporary data mounted at /temp0\n");
+    return 0;
+}
+/* sceAppContentTemporaryDataGetAvailableSpaceKb: report a fixed 1 GiB. */
+static ABI int32_t temporary_space(uint32_t option, uint64_t *kb) {
+    (void)option;
+    require_initialized();
+    if (kb) *kb = UINT64_C(1048576);
+    printf("Runtime: AppContent temporary space = 1 GiB\n");
+    return 0;
 }
 uintptr_t runtime_content_resolve(const char *name) {
     if (!strcmp(name,"g8cM39EUZ6o#libSceSysmodule")) return (uintptr_t)module_load;
@@ -84,8 +103,10 @@ uintptr_t runtime_content_resolve(const char *name) {
     if (!strcmp(name,"R9lA82OraNs#libSceAppContent")) return (uintptr_t)content_init;
     if (!strcmp(name,"99b82IKXpH4#libSceAppContent")) return (uintptr_t)param_int;
     if (!strcmp(name,"xnd8BJzAxmk#libSceAppContent")) return (uintptr_t)addon_list;
+    if (!strcmp(name,"buYbeLOGWmA#libSceAppContent")) return (uintptr_t)temporary_mount;
+    if (!strcmp(name,"SaKib2Ug0yI#libSceAppContent")) return (uintptr_t)temporary_space;
     return 0;
 }
 void runtime_content_report(void) {
-    printf("Runtime: AppContent references=%u, initialized=%u, parameter queries=%u, list queries=%u\n",refs,initialized,queries,lists);
+    printf("Runtime: AppContent references=%u, initialized=%u, parameter queries=%u, list queries=%u, temp mounts=%u\n",refs,initialized,queries,lists,temp_mounts);
 }

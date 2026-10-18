@@ -24,6 +24,7 @@ uintptr_t gow3gpu_resolve(const char *scoped_nid);
 int gow3gpu_handle_fault(void *ucontext, void *address);
 /* GOW3_WRITE_LOG=1: prints the logged GPU-side writes to guest memory near the fault. */
 void gow3gpu_dump_guest_writes(void *ucontext);
+void gow3gpu_dump_write_range(uint64_t address, uint64_t size);
 /* Keyboard text entry through the game window (IME dialog). begin returns 0 when
  * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
 int gow3gpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
@@ -35,11 +36,19 @@ int gow3gpu_choice_begin(const char *title, const char *const *items, const char
 int gow3gpu_choice_poll(void);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int gow3gpu_overlay_captures_input(void);
-/* Controller vibration strength set in the menu, 0 (off) to 100 (the game's own). */
-int gow3gpu_vibration_percent(void);
-/* The video decoder handed the game a picture: a cutscene is on screen (the presenter draws
- * black bars outside its 16:9 picture when the render resolution is not 16:9). */
-void gow3gpu_movie_picture(void);
+/* Live controller response gain in percent; aiming is nonzero while L2 is held. */
+int gow3gpu_controller_aim_gain(int aiming);
+int gow3gpu_controller_drift_deadzone(void);
+int gow3gpu_controller_turn_speed(void);
+int gow3gpu_sprint_turn_speed(void);
+int gow3gpu_look_curve(void);
+int gow3gpu_look_deadzone(void);
+int gow3gpu_look_ramp(void);
+int gow3gpu_look_assist(void);
+/* Live engine vertical look-rate multiplier in percent (the pitch field, separate from heading). */
+int gow3gpu_controller_pitch_speed(void);
+/* Captured mouse converted to held right-stick axes; buttons: 1 fire, 2 aim. */
+int gow3gpu_mouse_state(int16_t *x, int16_t *y, uint32_t *buttons);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned gow3gpu_symbol_count(void);
 #ifdef __cplusplus

@@ -130,15 +130,18 @@ def scan_segment(code, address):
 
 
 def read_boot_linked(data):
-    """Segments (address, size, flags) and image of a G3PROBE5 file, in link_modules.py's order."""
+    """Segments and image of a G3PROBE5/6 file, in link_modules.py's order."""
     magic, size, entry, ns, nr, ni, flags = unpack('<8s6Q', data, 0)
-    if magic != b'G3PROBE5':
+    if magic not in (b'G3PROBE5', b'G3PROBE6'):
         raise ValueError('not a G3PROBE5 image')
     pos = 56 + 8 + 32   # header, procparam, main TLS
     nmodules, = unpack('<Q', data, pos)
-    pos += 8 + nmodules * 56
+    pos += 8 + nmodules * (184 if magic == b'G3PROBE6' else 56)
     nbindings, = unpack('<Q', data, pos)
     pos += 8 + nbindings * 24
+    if magic == b'G3PROBE6':
+        nexports, = unpack('<Q', data, pos)
+        pos += 8 + nexports * 40
     segments = [unpack('<3Q', data, pos + i * 24) for i in range(ns)]
     pos += ns * 24 + ni * 128 + nr * 32
     return segments, span(data, pos, size)

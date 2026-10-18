@@ -63,6 +63,9 @@ public:
 
     /// Before a compute dispatch: the post-processing combine shader triggers the upscale.
     void OnDispatch(u64 cs_hash);
+    // Captured Killzone HDR-format transition; reduced raster is separately opt-in.
+    void OnKillzonePost(u64 vs_hash, u64 ps_hash, VideoCore::ImageId color,
+                        VideoCore::ImageId secondary, bool has_depth, bool native_viewport);
 
     /// Start of a frame in the command stream (display pass).
     bool OnFrameStart();
@@ -193,6 +196,12 @@ private:
 
 
     bool enabled = false;
+    bool killzone_quality = false; ///< isolated 720p -> 1080p scene-proxy experiment
+    bool diagnostics = false;
+    u32 diagnostic_frames = 0, diagnostic_camera_frames = 0;
+    u32 diagnostic_scene_frames = 0, diagnostic_trigger_frames = 0;
+    u32 diagnostic_dispatch_frames = 0;
+    bool diagnostic_camera = false, diagnostic_scene = false, diagnostic_trigger = false;
     bool failed = false;
     u64 trigger_hash = 0x9a9cf8a9;
     VideoCore::ImageId scene_color{};

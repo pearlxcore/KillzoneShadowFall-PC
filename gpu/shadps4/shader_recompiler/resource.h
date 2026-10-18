@@ -8,6 +8,7 @@
 #include "video_core/amdgpu/resource.h"
 
 #include <boost/container/static_vector.hpp>
+#include <boost/container/small_vector.hpp>
 
 namespace Shader {
 
@@ -198,7 +199,10 @@ struct SamplerResource {
         return sampler;
     }
 };
-using SamplerResourceList = boost::container::static_vector<SamplerResource, NUM_SAMPLERS>;
+// One guest sampler may need multiple host bindings (depth comparison, clamp or
+// anisotropy variants). NUM_SAMPLERS is the inline capacity, not a bound on the
+// translated list: Chapter 9 needs more than 16 distinct bindings.
+using SamplerResourceList = boost::container::small_vector<SamplerResource, NUM_SAMPLERS>;
 
 struct FMaskResource {
     SharpLocation sharp_idx;

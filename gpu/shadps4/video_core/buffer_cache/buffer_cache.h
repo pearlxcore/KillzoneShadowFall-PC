@@ -39,7 +39,7 @@ class PageManager;
 class BufferCache {
     static constexpr u64 ADDRESS_SPACE_BITS = 40;
     // gow3: arena pages are 4 GiB unless the driver's buffer size limit is lower (AMD's
-    // Windows driver: 2 GiB); an arena spans up to two pages, so they shrink to half the limit.
+    // Windows driver: 2 GiB). Reusable windows span at most two pages and never merge further.
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
     static constexpr u64 MIN_ARENA_PAGE_BITS = 30;
     static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
@@ -185,6 +185,7 @@ private:
             return {{a, b}, memory, offset + (a - start)};
         }
     };
+    void BindBackingToArena(const Buffer* arena, const Backing& backing);
     IntervalList<Backing> resident_ranges;
 
     u32 arena_memory_type_index{};

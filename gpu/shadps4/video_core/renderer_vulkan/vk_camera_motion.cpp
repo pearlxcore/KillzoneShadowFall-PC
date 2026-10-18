@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
+#include "video_core/renderer_vulkan/kzsf_camera.h"
 
 #include <cmath>
 #include <cstdio>
@@ -52,6 +53,8 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
                            VideoCore::TextureCache& texture_cache_, Runtime& runtime_)
     : instance{instance_}, scheduler{scheduler_}, texture_cache{texture_cache_}, runtime{runtime_} {
     const char* env = std::getenv("GOW3_DEBUG_MOTION");
+    const char* kzsf = std::getenv("KZSF_FSR_NATIVE");
+    killzone_native = kzsf && kzsf[0]=='1';
     debug_overlay = env && env[0] == '1';
     const char* upscaler = std::getenv("GOW3_UPSCALER");
     // The upscaler can be switched on from the menu at any time: the camera is always tracked
@@ -168,6 +171,7 @@ std::array<std::array<float, 4>, 3> CameraMotion::TaaDepthParameters() const noe
 }
 
 vk::ImageView CameraMotion::ObjectMotionView() const noexcept {
+    if(killzone_native) return {};
     return object_motion && object_motion->Enabled() ? object_motion->View() : vk::ImageView{};
 }
 
@@ -179,7 +183,7 @@ vk::Image CameraMotion::ObjectMotionImage(u32 width, u32 height) const noexcept 
 void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view,
                                 vk::ImageView motion_view, u32 width, u32 height) {
     bool object_valid = false;
-    const vk::ImageView object_view = object_motion && object_motion->Enabled()
+    const vk::ImageView object_view = !killzone_native && object_motion && object_motion->Enabled()
         ? object_motion->PrepareRead(cmdbuf, width, height, object_valid) : depth_view;
     const PushConstants push{
         .reproject = Multiply(previous.view, current.inv_view),
@@ -219,6 +223,7 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
 }
 
 void CameraMotion::OnConstants(const float* data) {
+    if(killzone_native) return;
     // Scene constants: far plane 3000, 1/far, and the render size.
     if (data[0] != 3000.0f || data[4] < 64.0f || data[5] < 64.0f ||
         std::abs(data[1] * data[0] - 1.0f) > 1e-3f) {
@@ -238,6 +243,25 @@ void CameraMotion::OnConstants(const float* data) {
         render_size = size;
     }
     frame_has_camera = true;
+}
+
+void CameraMotion::OnKillzoneConstants(const float* data) {
+    if(!killzone_native || frame_has_camera) return;
+    KillzoneCamera::Camera decoded;
+    if(!KillzoneCamera::DecodeWorld(std::span<const float>{data,160},decoded)) return;
+    previous=current;
+    current.view=decoded.view;
+    current.inv_view=decoded.inverse_view;
+    current.proj=decoded.projection;
+    current.valid=true;
+    world_far=decoded.far_plane;
+    // A projection change requires fresh temporal history.
+    if(previous.proj!=current.proj) previous.valid=false;
+    if(render_size!=std::array<u32,2>{1920,1080}) {
+        render_size={1920,1080};
+        std::printf("Killzone camera: world640, native1080p, near %.6f, far %.1f, +Z conversion\n",Near(),Far());
+    }
+    frame_has_camera=true;
 }
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {

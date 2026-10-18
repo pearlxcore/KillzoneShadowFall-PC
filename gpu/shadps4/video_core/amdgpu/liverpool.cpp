@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <chrono>
 #include <pthread.h>
 #ifndef _WIN32
@@ -260,6 +261,14 @@ void SignalEop(const PM4CmdEventWriteEop& eop) {
 // the draw recording thread when the draw pipeline is in use).
 void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto eop = *reinterpret_cast<const PM4CmdEventWriteEop*>(data);
+    {
+        static std::atomic<unsigned> n{0};
+        const unsigned c = ++n;
+        if (c <= 40) std::fprintf(stderr, "GPU: EOP #%u addr=%p data=%llu sel=%u\n", c,
+                                  static_cast<void*>(eop.Address<u32>()),
+                                  static_cast<unsigned long long>(eop.DataQWord()),
+                                  static_cast<unsigned>(eop.data_sel.Value()));
+    }
     rasterizer.ProcessDownloadImages();
     // Guest memory copies on the copy threads precede the fence the guest sees.
     // GOW3_ASYNC_FENCES=1 writes it once they are done instead of waiting for them; measured
@@ -325,6 +334,14 @@ void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
 void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto* header = reinterpret_cast<const PM4Header*>(data);
     const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(data);
+    {
+        static std::atomic<unsigned> n{0};
+        const unsigned c = ++n;
+        if (c <= 40) std::fprintf(stderr, "GPU: WriteData #%u addr=0x%llx data0=0x%x bytes=%u\n", c,
+                                  static_cast<unsigned long long>(write_data->addr64),
+                                  static_cast<unsigned>(write_data->data[0]),
+                                  (header->type3.count.Value() - 2) * sizeof(u32));
+    }
     // Copies deferred to the recording thread, and fences deferred to it (RecorderFences),
     // precede writes the guest sees.
     rasterizer.WaitHostCopies();

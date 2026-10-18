@@ -8,7 +8,9 @@ function (host contracts first) and otherwise binds the native export.
 Exports are matched by (NID, library identity, module identity). Imports of
 libSceLibcInternal are served by libc.prx's same-NID exports: the internal
 library is not shipped with the game and exposes the same functions.
-Output: out/boot-linked.bin (format G3PROBE5) and out/link.json.
+Output: out/boot-linked.bin (G3PROBE5, or G3PROBE6 with --dynamic-exports)
+and out/link.json. Version 6 adds a 128-byte basename after each module record,
+then an export count and <module, image offset, kind, NID[16]> records after bindings.
 """
 import collections
 import hashlib
@@ -94,7 +96,7 @@ def patch_fs_loads(image, ph, base):
     return patched
 
 
-def link(game, out, module_names=DEFAULT_MODULES):
+def link(game, out, module_names=DEFAULT_MODULES, dynamic_exports=False):
     main = module(game / 'eboot.bin')
     raw = (out / 'boot.bin').read_bytes()
     magic, size, entry, ns, nr, ni, flags = unpack('<8s6Q', raw, 0)
@@ -124,6 +126,7 @@ def link(game, out, module_names=DEFAULT_MODULES):
 
     exports, by_nid = {}, collections.defaultdict(list)
     table = []
+    dynamic_symbols = []
     base = (size + 65535) & ~65535
     fs_patched = patch_fs_loads(image, main['ph'], 0)
     tls_module = 2
@@ -188,6 +191,7 @@ def link(game, out, module_names=DEFAULT_MODULES):
                 entry_value = (base + s['value'], 2 if s['type'] == 1 else 1, filename)
                 exports[s['identity']] = entry_value
                 by_nid[(s['identity'][0], s['identity'][1][0])].append(entry_value)
+                dynamic_symbols.append((len(table), base + s['value'], entry_value[1], s['identity'][0]))
                 count += 1
         fs_patched += patch_fs_loads(image, m['ph'], base)
         table.append(dict(file=filename, base=base, size=modsize, init=base + m['tags'].get(12, 0),
@@ -214,16 +218,27 @@ def link(game, out, module_names=DEFAULT_MODULES):
         raise ValueError('unsupported eboot TLS layout')
     procparam = next(p for p in main['ph'] if p['type'] == 0x61000001)
     with (out / 'boot-linked.bin').open('wb') as f:
-        f.write(struct.pack('<8s6Q', b'G3PROBE5', len(image), entry, len(segments), len(relocs), len(names), flags))
+        f.write(struct.pack('<8s6Q', b'G3PROBE6' if dynamic_exports else b'G3PROBE5', len(image), entry, len(segments), len(relocs), len(names), flags))
         f.write(struct.pack('<Q', procparam['vaddr']))
         f.write(struct.pack('<4Q', *main_tls_values))
         f.write(struct.pack('<Q', len(table)))
         for t in table:
             f.write(struct.pack('<7Q', t['base'], t['size'], t['init'], t['tls_address'], t['tls_memsz'],
                                 t['tls_filesz'], t['tls_module']))
+            if dynamic_exports:
+                name = Path(t['file']).name.encode('ascii')
+                if len(name) >= 128:
+                    raise ValueError('module name too long')
+                f.write(name.ljust(128, b'\0'))
         f.write(struct.pack('<Q', len(bindings)))
         for binding in bindings:
             f.write(struct.pack('<3Q', *binding))
+        if dynamic_exports:
+            f.write(struct.pack('<Q', len(dynamic_symbols)))
+            for mod, address, kind, name in dynamic_symbols:
+                if len(name.encode('ascii')) != 11:
+                    raise ValueError('dynamic export is not an encoded NID')
+                f.write(struct.pack('<3Q16s', mod, address, kind, name.encode('ascii')))
         for segment in segments:
             f.write(struct.pack('<3Q', *segment))
         for name in names:
@@ -235,6 +250,7 @@ def link(game, out, module_names=DEFAULT_MODULES):
         f.write(image)
     report = dict(modules=[{k: (hex(v) if k in ('base', 'init', 'tls_address') else v) for k, v in t.items()} for t in table],
                   bindings=len(bindings), imports=len(names), fs_loads_patched=fs_patched,
+                  dynamic_exports=len(dynamic_symbols) if dynamic_exports else 0,
                   main_tls=dict(zip(('vaddr', 'filesz', 'memsz', 'align'), main_tls_values)),
                   unresolved_imports=unresolved)
     (out / 'link.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -249,5 +265,6 @@ if __name__ == '__main__':
     p.add_argument('game', type=Path)
     p.add_argument('--out', type=Path, default=Path(__file__).resolve().parent.parent / 'out')
     p.add_argument('--modules', nargs='*', default=list(DEFAULT_MODULES))
+    p.add_argument('--dynamic-exports', action='store_true', help='write G3PROBE6 with native dlsym exports')
     a = p.parse_args()
-    link(a.game, a.out, a.modules)
+    link(a.game, a.out, a.modules, a.dynamic_exports)
