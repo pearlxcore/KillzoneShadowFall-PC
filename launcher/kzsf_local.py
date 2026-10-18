@@ -146,6 +146,18 @@ def executable_for(values):
     # controls cannot silently select an older overlay/renderer executable.
     return PROFILES[values['profile']]
 
+
+def needs_preparation(game_dir):
+    if any(not (ROOT/'out'/name).is_file() for name in ('boot-linked.bin','content.bin')):
+        return True
+    stamp = ROOT/'out/prepared-game.json'
+    if not stamp.exists():
+        return False  # Preserve game images prepared by existing source checkouts.
+    try:
+        return Path(json.loads(stamp.read_text(encoding='utf-8'))['game_dir']).resolve() != Path(game_dir).resolve()
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
 def launch_spec(values, folder):
     env = dict(os.environ)
     for key in ('KZSF_ORIGINAL_CLOCK','KZSF_UNIFIED_TSC','KZSF_FILE_TRACE','KZSF_RWLOCK_TRACE',
@@ -247,6 +259,7 @@ class Launcher:
     def __init__(self, root):
         self.root, self.values = root, load_preferences()
         self.monitor = None
+        self.preparing = None
         self.session = None
         root.title('Killzone Shadow Fall')
         try:
@@ -506,6 +519,7 @@ class Launcher:
     def open_folder(self,path):
         path.mkdir(parents=True,exist_ok=True); os.startfile(str(path))
     def play(self):
+        if self.preparing is not None: return
         if self.monitor and self.monitor.poll() is None: return
         if os.name=='nt':
             running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
@@ -516,10 +530,26 @@ class Launcher:
         if not self.game_ok: self.show_tab('Game'); return
         values=self.gather()
         exe=ROOT/executable_for(values)
-        for path in (exe,ROOT/'out/boot-linked.bin',ROOT/'out/content.bin',ROOT/'out/renderer-stability-toggles.txt'):
-            if not path.is_file(): messagebox.showerror('Setup incomplete','A required game component is missing. Complete the build and game preparation steps in the README before playing.',parent=self.root); return
+        for path in (exe,ROOT/'out/renderer-stability-toggles.txt'):
+            if not path.is_file(): messagebox.showerror('Installation incomplete',f'A required application file is missing:\n{path.name}\n\nExtract the entire release ZIP again, then open the launcher from the extracted folder.',parent=self.root); return
         try:
             persist(values)
+            if needs_preparation(values['game_dir']):
+                helper=ROOT/'packaging/windows/prepare_killzone.py'
+                if not helper.is_file():
+                    raise OSError('Game preparation helper is missing. Extract the entire release ZIP again.')
+                self.preparation_log=ROOT/'out/prepare-game.log'
+                # pythonw drops standard streams in preparation's child scripts;
+                # use python.exe with CREATE_NO_WINDOW to retain the setup log.
+                python=Path(sys.executable)
+                if python.name.lower()=='pythonw.exe': python=python.with_name('python.exe')
+                with self.preparation_log.open('wb') as log:
+                    self.preparing=subprocess.Popen([str(python),str(helper),values['game_dir']],
+                        cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,
+                        creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                self.play_button.configure(text='PREPARING GAME',state='disabled')
+                self.session_label.configure(text='Preparing your game for first launch. This may take a few minutes.',fg=CYAN)
+                return
             folder=ROOT/'out'/('dialogue-'+time.strftime('%Y%m%d-%H%M%S')+f'-{time.time_ns()%1000000:06d}-modelauncher')
             folder.mkdir(parents=True); self.session=folder
             spec=launch_spec(values,folder)
@@ -539,6 +569,20 @@ class Launcher:
             self.play_button.configure(text='GAME RUNNING',state='disabled'); self.session_label.configure(text='Game running. Enjoy your session.',fg=CYAN)
         except (OSError,ValueError) as exc: messagebox.showerror('Launch failed',str(exc),parent=self.root)
     def poll(self):
+        if self.preparing is not None and self.preparing.poll() is not None:
+            code=self.preparing.returncode
+            self.preparing=None
+            self.play_button.configure(text='PLAY GAME',state='normal')
+            if code==0:
+                self.session_label.configure(text='Game preparation complete. Starting game...',fg=GREEN)
+                self.play()
+            else:
+                self.session_label.configure(text='Game preparation failed. Check your dump and setup log.',fg=CYAN)
+                try:
+                    detail=self.preparation_log.read_text(encoding='utf-8',errors='replace')[-1800:]
+                except OSError:
+                    detail='The setup log could not be read.'
+                messagebox.showerror('Game preparation failed',f'{detail}\n\nFull log: {self.preparation_log}',parent=self.root)
         if self.monitor and self.monitor.poll() is not None:
             updated=load_preferences()
             for key in LIVE_CONFIG:
