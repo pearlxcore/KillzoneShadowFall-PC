@@ -134,6 +134,15 @@ static ABI int32_t rudp_process_events(void) {
     pthread_mutex_lock(&lock);int initialized=rudp_initialized;pthread_mutex_unlock(&lock);
     return initialized?0:-1;
 }
+/* 49aee0 requests the 0xf8-byte statistics layout and reads traffic counters
+ * throughout it, ignoring the return code. No peer contexts/packets exist in
+ * this provider, so initialize every counter, not just the first field. */
+static ABI int32_t rudp_get_status(void *status,uint32_t size) {
+    if(!status || size!=0xf8)return -1;
+    memset(status,0,size);
+    pthread_mutex_lock(&lock);int initialized=rudp_initialized;pthread_mutex_unlock(&lock);
+    return initialized?0:-1;
+}
 static ABI int32_t *net_errno_loc(void) { return &net_errno; }
 static ABI int32_t net_pool_create(const char *name,int size,int flags) { (void)name; (void)size; (void)flags; return new_id(); }
 static ABI int32_t net_pool_destroy(int id) { (void)id; return 0; }
@@ -702,6 +711,7 @@ static const RuntimeExport exports[]={
     {"sceNetInit",net_init}, {"sceNetTerm",net_term}, {"sceNetErrnoLoc",net_errno_loc},
     {"sceRudpInit",rudp_init}, {"sceRudpEnd",rudp_end},
     {"sceRudpProcessEvents",rudp_process_events},
+    {"sceRudpGetStatus",rudp_get_status},
     {"sceNetPoolCreate",net_pool_create}, {"sceNetPoolDestroy",net_pool_destroy},
     {"sceNetEpollCreate",net_epoll_create}, {"sceNetEpollDestroy",net_epoll_destroy},
     {"sceNetResolverCreate",net_resolver_create}, {"sceNetResolverDestroy",net_resolver_destroy},

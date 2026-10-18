@@ -31,5 +31,16 @@ followed by four L1 presses, exercised the RUDP initialization path, continued
 presenting frames, and emitted no unsupported-import stop, guest assertion,
 access fault or Vulkan validation error. The test stopped its own process.
 
-Visual confirmation of the individual tabs and their actions remains pending.
-This change does not establish online multiplayer or PSN support.
+The user subsequently confirmed that switching tabs works. Starting Offline
+Botzone exposed a separate missing `sceRudpGetStatus` import (caller `0x49af24`
+in `FUN_49aee0`). That function requests a 248-byte traffic-statistics buffer
+and reads its counters even without checking the return value. The offline
+provider now initializes the complete supported buffer to zero, reflecting its
+absence of peer contexts or traffic. Null pointers and unsupported sizes fail.
+
+Validation includes uninitialized/initialized lifecycle behavior, every output
+byte, trailing-buffer sentinels, and rejected sizes. An isolated game test selected
+The Divide, passed map loading and reached its spawn-point screen, then accepted
+spawn selection without the previous unsupported-import stop. Extended combat
+and other maps remain unverified. The test process was stopped by its bounded
+test runner. This change does not establish online multiplayer or PSN support.
