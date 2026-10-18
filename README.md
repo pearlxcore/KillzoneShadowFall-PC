@@ -107,7 +107,7 @@ as a supported Killzone option**. Native rendering (`none`) is the baseline.
 ### Portable Windows package
 
 1. Download and extract the **[Windows package](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases/download/v0.1.1-beta/KillzoneShadowFall-PC-Windows-20261018-162402.zip)**.
-2. **For less stuttering:** download the optional **[Starter shader cache — 100 MiB](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases/download/v0.1.1-beta/KillzoneShadowFall-PC-CUSA00190-01.81-StarterCache-beta0.1.1.zip)**.
+2. **For less stuttering:** download the optional **[Starter shader cache — 102 MiB](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases/download/v0.1.1-beta/KillzoneShadowFall-PC-CUSA00190-01.81-StarterCache-beta0.1.1.zip)**.
    With the game closed, extract it beside **Killzone Launcher.exe**, merging
    `user/cache/CUSA00190/`. Back up an existing cache before replacing it.
 3. Open **Killzone Launcher.exe**, select your own decrypted **CUSA00190 / 01.81**
@@ -115,7 +115,7 @@ as a supported Killzone option**. Native rendering (`none`) is the baseline.
 4. Let **Loading shader cache...** finish. Keep `user/` for future launches and saves.
 
 > **Cache tested only on the PC listed above. Other hardware/drivers are untested
-> and may reject it. Some stuttering can remain.** The cache contains 31,713
+> and may reject it. Some stuttering can remain.** The cache contains 32,972
 > pipelines; GPU-driver binaries are generated locally.
 
 Game files are not included. If automatic setup fails, use **Prepare Game.bat**.
