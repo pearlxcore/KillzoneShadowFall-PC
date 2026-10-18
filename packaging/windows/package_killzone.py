@@ -107,7 +107,7 @@ def main():
         'Offline Botzone loading has been tested on The Divide; extended combat\n'
         'and other maps remain unverified. Online multiplayer is unsupported.\n'
         'Temporal AA options are experimental; shader compilation can stutter.\n\n'
-        'Source: https://github.com/pearlxcore/KillzoneShadowFall-PC/tree/killzone-source\n'
+        'Source: https://github.com/pearlxcore/KillzoneShadowFall-PC/tree/main\n'
         'See LICENSE and licenses/ for redistribution terms and notices.\n', encoding='utf-8')
     files = [p for p in dest.rglob('*') if p.is_file()]
     forbidden = {'eboot.bin', 'eboot.elf', 'boot.bin', 'boot-linked.bin', 'content.bin',

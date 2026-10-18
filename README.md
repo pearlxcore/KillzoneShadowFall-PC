@@ -20,10 +20,9 @@ memory, graphics, controls and the launcher. See [Credits](#credits).
 experimental port: performance varies by scene, stutters remain, and other hardware
 has not received the same testing. The development GPU is an AMD Radeon RX 9070 XT.
 
-Development is on **`killzone-source`**. Use that branch to build this port;
-`main` provides the project overview and still contains inherited upstream code.
-Older GOW documentation and packaging scripts remain in the tree; the instructions
-below are for the Killzone branch.
+The latest Killzone source is on **`main`**. The **`killzone-source`** branch is
+retained for the existing development history. Older GOW documentation and packaging
+scripts remain in the tree; the instructions below are for the Killzone port.
 
 ## What works
 
@@ -118,7 +117,7 @@ The game image, executables, saves and caches are generated locally.
 **1. Clone and build** — in the MSYS2 CLANG64 shell:
 
 ```bash
-git clone --recursive --branch killzone-source https://github.com/pearlxcore/KillzoneShadowFall-PC.git
+git clone --recursive --branch main https://github.com/pearlxcore/KillzoneShadowFall-PC.git
 cd KillzoneShadowFall-PC
 export CXXFLAGS='-include cstdlib -include cstdio -include cwchar -include cmath -include new'
 export CFLAGS="$CXXFLAGS"
