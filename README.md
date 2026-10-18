@@ -91,9 +91,10 @@ as a supported Killzone option**. Native rendering (`none`) is the baseline.
 
 ### Portable Windows package
 
-For a packaged Windows build, extract the entire ZIP, run **Prepare Game.bat**
-and enter the folder containing your decrypted **CUSA00190 / 01.81** dump.
-Then open **Killzone Launcher.exe**. Python and runtime libraries are included;
+For a packaged Windows build, extract the entire ZIP, open **Killzone Launcher.exe**,
+select your decrypted **CUSA00190 / 01.81** dump folder and press **PLAY GAME**.
+The first launch prepares the game automatically. **Prepare Game.bat** is also
+available as a setup fallback. Python and runtime libraries are included;
 players do not need MSYS2. Preparation generates the game image locally.
 Packages contain no game files, saves, personal settings or shader caches.
 

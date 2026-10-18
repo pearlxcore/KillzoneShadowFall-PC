@@ -96,9 +96,10 @@ def main():
     (dest / 'README.txt').write_text(
         'KILLZONE SHADOW FALL PC - Windows preview\n\n'
         '1. Extract this entire folder to a writable location.\n'
-        '2. Run Prepare Game.bat and enter your decrypted CUSA00190 / 01.81 dump folder.\n'
+        '2. Open Killzone Launcher.exe and select your decrypted CUSA00190 / 01.81 dump folder.\n'
         '   The dump must include all_programs.prx, sce_module and sce_sys.\n'
-        '3. Open Killzone Launcher.exe. Start with Standard, 60 FPS, Native.\n\n'
+        '3. Press PLAY GAME. First launch prepares the game automatically.\n'
+        '   Start with Standard, 60 FPS, Native. Prepare Game.bat is a setup fallback.\n\n'
         'Python and runtime DLLs are included. MSYS2 is not required to play.\n'
         'A Vulkan 1.3 capable GPU/driver and 64-bit Windows 10/11 are required.\n'
         'No game files, saves, settings or shader caches are included.\n'
