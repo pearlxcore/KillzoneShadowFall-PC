@@ -20,9 +20,10 @@ memory, graphics, controls and the launcher. See [Credits](#credits).
 experimental port: performance varies by scene, stutters remain, and other hardware
 has not received the same testing. The development GPU is an AMD Radeon RX 9070 XT.
 
-Development is on **`killzone-source`**. The repository's `main` branch currently
-retains the upstream GOW code. Older GOW documentation and packaging scripts remain
-in the tree; the instructions below are for this Killzone branch.
+Development is on **`killzone-source`**. Use that branch to build this port;
+`main` provides the project overview and still contains inherited upstream code.
+Older GOW documentation and packaging scripts remain in the tree; the instructions
+below are for the Killzone branch.
 
 ## What works
 
@@ -34,7 +35,7 @@ in the tree; the instructions below are for this Killzone branch.
 - **Sprint turn speed:** separate horizontal multiplier for controller and mouse,
   activated by the engine's sprint state, independent of the general horizontal
   turn multiplier. Adjust it live in launcher Controls or
-  overlay Game; 100% is original, 200% is a starting point. Gameplay testing pending.
+  overlay Game; 100% is original, 200% is a starting point. Confirmed in gameplay.
 - **Motion blur switch:** confirmed working in gameplay. Use **Graphics → Motion
   blur** in the launcher or **Image → Motion blur** in the in-game menu. Restart
   the game to apply changes. Depth of field and temporal ghosting are separate.
@@ -67,8 +68,9 @@ in the tree; the instructions below are for this Killzone branch.
 ## What still needs work
 
 Startup menu tab crashes have a [runtime compatibility fix](docs/MENU-TAB-COMPATIBILITY.md)
-tested with scripted R1/L1 switching. Individual tab actions still need gameplay
-verification; online multiplayer and PSN services are not implemented.
+confirmed by the user. Offline Botzone passed map loading and reached spawn
+selection on The Divide; extended combat and other maps still need verification.
+Online multiplayer and PSN services are not implemented.
 
 - **Performance:** wall-facing views can reach 60 FPS while open areas and dense
   vegetation drop into the 40–50 FPS range on the development machine.
@@ -88,7 +90,16 @@ as a supported Killzone option**. Native rendering (`none`) is the baseline.
 
 ## Build and play
 
-This branch is a **source checkout**, not a self-contained Windows release.
+### Portable Windows package
+
+For a packaged Windows build, extract the entire ZIP, run **Prepare Game.bat**
+and enter the folder containing your decrypted **CUSA00190 / 01.81** dump.
+Then open **Killzone Launcher.exe**. Python and runtime libraries are included;
+players do not need MSYS2. Preparation generates the game image locally.
+Packages contain no game files, saves, personal settings or shader caches.
+
+### Build from source
+
 The game image, executables, saves and caches are generated locally.
 
 **You need**
@@ -150,6 +161,17 @@ using the supplied Killzone icon. Python with Tkinter and Pillow must be availab
 on PATH, in `runtime/`, or at a supported fallback location.
 `Launch-Killzone.bat` and `Killzone Launcher.vbs` are alternative entry points.
 Launcher executables are generated locally and are not stored in Git.
+
+**Package a Windows build** — after building, run this with a Windows Python
+installation containing Tkinter and Pillow:
+
+```powershell
+python packaging/windows/package_killzone.py --msys C:/msys64
+```
+
+This creates a dated portable folder, ZIP, SHA256 checksum and file manifest under
+`dist/`. It bundles that Python runtime and the compiled runtime's DLL dependencies.
+Use the Killzone packager above, rather than the inherited GOW `package.sh`.
 
 The launcher uses a sidebar for Game, Graphics, Controls, Cheats and Advanced.
 Changing the display names does not reset existing preferences or button mappings.
