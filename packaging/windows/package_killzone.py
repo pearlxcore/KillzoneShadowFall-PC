@@ -120,8 +120,11 @@ def main():
     subprocess.run([str(dest / 'runtime/python.exe'), '-I', '-B', '-c',
                     'import tkinter,PIL.Image,ctypes,ssl; t=tkinter.Tcl(); print("Bundled runtime:",t.eval("info patchlevel"))'],
                    cwd=dest, check=True)
+    smoke_user = ROOT / 'out' / (name + '-smoke-user')
+    smoke_user.mkdir(exist_ok=False)
     clean_env = dict(os.environ, PATH=os.environ['SystemRoot'] + '/System32;' + os.environ['SystemRoot'],
-                     PYTHONDONTWRITEBYTECODE='1')
+                     PYTHONDONTWRITEBYTECODE='1', GOW3_USER_DIR=str(smoke_user),
+                     GOW3_GPU_USER_DIR=str(smoke_user))
     for key in ('PYTHONHOME', 'PYTHONPATH'):
         clean_env.pop(key, None)
     subprocess.run([str(dest / 'runtime/python.exe'), '-B', '-c',
@@ -135,6 +138,12 @@ def main():
                             env=clean_env, capture_output=True, timeout=20)
     if b'usage:' not in (native.stdout + native.stderr).lower():
         raise RuntimeError(f'Packaged runtime failed its no-argument startup check: {native.returncode}')
+    files = [p for p in dest.rglob('*') if p.is_file()]
+    for path in files:
+        rel = path.relative_to(dest)
+        if (rel.parts[0].lower() in ('user', 'cache', 'savedata') or
+            path.name.lower() in forbidden or path.suffix.lower() in ('.dmp', '.log', '.prx', '.sprx', '.pkg')):
+            raise RuntimeError('Unexpected artifact after startup checks: ' + str(rel))
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     manifest = {'source_commit': revision, 'built_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
                 'files': {str(p.relative_to(dest)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest()
