@@ -21,6 +21,14 @@ experimental port: performance varies by scene and stutters remain.
 **Tested only on the PC below. Other PC specifications, GPUs and driver versions
 have not been tested.** Compatibility or equivalent performance is not guaranteed.
 
+**PC spec and game dump used in this port:**
+
+
+| Title ID | Version |
+| --- | --- |
+| CUSA00190 | 01.81 |
+
+
 | Component | Tested configuration |
 | --- | --- |
 | CPU | AMD Ryzen 5 7500F (6 cores) |
