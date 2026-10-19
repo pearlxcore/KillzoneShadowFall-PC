@@ -36,7 +36,6 @@ have not been tested.** Compatibility or equivalent performance is not guarantee
 | RAM | 32 GB |
 | OS | Windows 11 Home, build 26300 |
 | GPU driver | 32.0.31041.1004 (Windows driver version) |
-| Game | CUSA00190, update 01.81 |
 
 The optional starter shader cache was tested in a separate release installation
 on this same PC. The shader-loading progress appeared and the tester reported
