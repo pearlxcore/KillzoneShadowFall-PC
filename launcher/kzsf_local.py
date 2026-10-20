@@ -7,31 +7,45 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 ROOT = Path(__file__).resolve().parent.parent
+LAUNCHER_VERSION = '0.2.0'
+KOFI_URL = 'https://ko-fi.com/R6R524N7X'
 sys.path.insert(0, str(ROOT / 'scripts'))
 from graphics_options import read_ini, write_keys
 from prepare import read_sfo
+from kzsf_catalog import load_catalog, verify_game_build
 
 PREFS = ROOT / 'user' / 'launcher-local.json'
 CONFIG = ROOT / 'user' / 'launcher-settings.ini'
-BG, PANEL, FIELD, LINE = '#111214', '#1a1c1f', '#26292d', '#34373c'
-TEXT, MUTED, CYAN, GREEN = '#f3f0eb', '#a3a5aa', '#f48b55', '#94c7a2'
+BG, PANEL, FIELD, LINE = '#080f17', '#0e1823', '#172633', '#273b4a'
+TEXT, MUTED, CYAN, GREEN = '#e5eef5', '#91a7b8', '#69d4e3', '#9bd0aa'
+PRIMARY = '#f4a66a'
 OPTION_LABELS = {
+    'prompt_style': {'0':'Automatic', '1':'Keyboard & mouse', '2':'PlayStation'},
     'look_curve': {'0':'Original', '1':'Linear (custom)', '2':'Precision (custom)'},
-    'profile': {'Current build': 'Standard', 'Beta memory layout (test)': 'Compatibility (experimental)'},
-    'upscaler': {'none': 'Native', 'fsr3': 'FSR 3.1 AA (experimental)', 'taa': 'TAA (experimental)'},
+    'profile': {'Current build': 'Standard', 'Beta memory layout (test)': 'Compatibility'},
+    'upscaler': {'none': 'Native', 'fsr3': 'FSR 3.1 AA', 'taa': 'TAA'},
     'display_mode': {'windowed': 'Windowed', 'borderless': 'Borderless', 'fullscreen': 'Fullscreen'},
     'frames_queued': {'0': 'Automatic', '1': '1 frame', '2': '2 frames'},
+    'frame_gen': {'off':'Off', 'fsr3':'FSR 3.1 — 2x'},
+    'render_output': {'1920x1080':'1080p (1920 × 1080)', '2560x1440':'1440p (2560 × 1440)',
+                      '3200x1800':'1800p (3200 × 1800)', '3840x2160':'4K (3840 × 2160)'},
+    'anisotropy': {'0':'Game default', '2':'2x', '4':'4x', '8':'8x', '16':'16x'},
+    'mip_lod_bias': {'-2':'Sharper (-2)', '-1':'Sharper (-1)', '-0.5':'Slightly sharper (-0.5)',
+                     '0':'Game default', '0.5':'Slightly softer (+0.5)', '1':'Softer (+1)', '2':'Softer (+2)'},
 }
+RENDER_OUTPUTS = ('1920x1080','2560x1440','3200x1800','3840x2160')
+GRAPHICS_EXE = 'out/gow3-probe-launcher.exe'
 PROFILES = {'Current build': 'out/gow3-probe-launcher.exe',
             'Beta memory layout (test)': 'out/gow3-probe-launcher.exe'}
-BUTTONS = [('cross','Cross / Jump','Space','a'), ('circle','Circle','Left Shift','b'),
+BUTTONS = [('cross','Cross / Jump','Space','a'), ('circle','Circle','Left Ctrl','b'),
            ('square','Square','E','x'), ('triangle','Triangle','Q','y'),
            ('l1','L1','1','leftshoulder'), ('r1','R1','3','rightshoulder'),
-           ('l2','L2','R',''), ('r2','R2','F',''), ('l3','L3','Z','leftstick'),
+           ('l2','L2','R',''), ('r2','R2','F',''), ('l3','L3','Left Shift','leftstick'),
            ('r3','R3','C','rightstick'), ('options','Options','Return','start'),
            ('touchpad_left','Touch left','Tab',''), ('touchpad_right','Touch right','Backspace','back'),
            ('up','D-pad up','I','dpup'), ('down','D-pad down','K','dpdown'),
@@ -51,16 +65,33 @@ DEFAULTS = dict(game_dir='', profile='Current build',
                 controller_look_gain='100', controller_aim_gain='100', controller_turn_speed='100',
                 controller_pitch_speed='100', keys={}, pads={})
 DEFAULTS.update(mouse_aim=True,mouse_sensitivity='100',mouse_ads_sensitivity='100',mouse_invert_y=False)
-DEFAULTS.update(motion_blur=True)
+DEFAULTS.update(motion_blur=True,bloom=True,film_grain=True)
+DEFAULTS.update(fov_percent='100',camera_shake=True,depth_of_field=True)
 DEFAULTS.update(mouse_horizontal_speed='100',mouse_vertical_speed='100')
 DEFAULTS.update(sprint_turn_speed='100')
 DEFAULTS.update(look_curve='1',look_deadzone='8',look_ramp=False,look_assist=True)
 DEFAULTS.update(controller_drift_deadzone='8')
+DEFAULTS.update(prompt_style='0')
+DEFAULTS.update(render_output='1920x1080',frame_gen='off',anisotropy='0',mip_lod_bias='0',
+                fsr1=False,rcas_strength='75')
+DEFAULTS.update(third_person=False,free_camera=False,model_switching=False)
+DEFAULTS.update(unlimited_sprint=False,continuous_scan=False)
+PLAYER_HOOK_ENV = (
+    'KZSF_CAMERA_OBSERVER','KZSF_CAMERA_CALL_BRIDGE','KZSF_THIRD_PERSON_TEST',
+    'KZSF_FOLLOW_FREE_CAMERA','KZSF_FREE_CAMERA_TEST','KZSF_FREE_CAMERA_BODY',
+    'KZSF_CHARACTER_SWAP_TEST','KZSF_CHARACTER_SELECTOR_TEST','KZSF_CHARACTER_RESOURCE_TEST',
+    'KZSF_CHARACTER_RETARGET_AUDIT','KZSF_CHARACTER_ENGINEER_TEST','KZSF_CHARACTER_ENGINEER_DRAW_TEST',
+    'KZSF_CHARACTER_BODY_ROUTE_TEST','KZSF_CHARACTER_SINGLE_BODY_TEST','KZSF_CHARACTER_COMMANDO_TEST',
+    'KZSF_CHARACTER_OVERLAY_TEST','KZSF_CHARACTER_ALL_MODELS_TEST','KZSF_CHARACTER_BUNDLE_TEST',
+    'KZSF_CHARACTER_PRESERVE_SOURCE_BODY','KZSF_CHARACTER_FACE_PLAYER_ANIMATION_CONTROL')
 LIVE_CONFIG = {'fps':'fps_limit', 'upscaler':'upscaler', 'display_mode':'display_mode',
+    'render_output':'output_res',
+    **{key:key for key in ('frame_gen','anisotropy','mip_lod_bias','fsr1','rcas_strength')},
     **{key:key for key in ('vsync','rcas','show_fps','async_shaders','stale_readback',
-       'deferred_readback','frames_queued','mouse_aim','mouse_invert_y','mouse_sensitivity',
-       'mouse_ads_sensitivity','mouse_horizontal_speed','mouse_vertical_speed','motion_blur',
-       'unlimited_health','infinite_ammo','controller_look_gain','controller_aim_gain',
+       'deferred_readback','frames_queued','prompt_style','mouse_aim','mouse_invert_y','mouse_sensitivity',
+       'mouse_ads_sensitivity','mouse_horizontal_speed','mouse_vertical_speed','motion_blur','bloom','film_grain',
+       'fov_percent','camera_shake','depth_of_field',
+       'unlimited_health','infinite_ammo','unlimited_sprint','continuous_scan','controller_look_gain','controller_aim_gain',
        'controller_turn_speed','controller_pitch_speed','sprint_turn_speed',
        'look_curve','look_deadzone','look_ramp','look_assist','controller_drift_deadzone')}}
 
@@ -82,7 +113,10 @@ def load_preferences():
     for key, choices in [('profile', PROFILES), ('fps', ('30','60','120')),
                          ('display_mode', ('windowed','borderless','fullscreen')),
                          ('window_size', ('1280x720','1600x900','1920x1080','2560x1440','3840x2160')),
-                         ('upscaler', ('none','fsr3','taa')), ('frames_queued', ('1','2','0'))]:
+                         ('upscaler', ('none','fsr3','taa')), ('frames_queued', ('1','2','0')),
+                         ('render_output', RENDER_OUTPUTS), ('frame_gen', ('off','fsr3')),
+                         ('anisotropy', ('0','2','4','8','16')),
+                         ('prompt_style', ('0','1','2'))]:
         if values[key] not in choices:
             values[key] = DEFAULTS[key]
     for key in ('keys','pads'):
@@ -100,11 +134,19 @@ def load_preferences():
         values[key]=value if value.isdigit() and 50<=int(value)<=300 else '100'
     sprint=str(values.get('sprint_turn_speed','100'))
     values['sprint_turn_speed']=sprint if sprint.isdigit() and 100<=int(sprint)<=500 else '100'
+    fov=str(values.get('fov_percent','100'))
+    values['fov_percent']=fov if fov.isdigit() and 75<=int(fov)<=150 else '100'
     if str(values['look_curve']) not in ('0','1','2'):values['look_curve']='0'
     deadzone=str(values['look_deadzone'])
     values['look_deadzone']=deadzone if deadzone.isdigit() and 0<=int(deadzone)<=30 else '8'
     drift=str(values['controller_drift_deadzone'])
     values['controller_drift_deadzone']=drift if drift.isdigit() and 0<=int(drift)<=30 else '8'
+    try:
+        bias=float(values['mip_lod_bias'])
+        values['mip_lod_bias']=format(round(bias*8)/8,'g') if -2<=bias<=2 else '0'
+    except (ValueError,TypeError): values['mip_lod_bias']='0'
+    strength=str(values['rcas_strength'])
+    values['rcas_strength']=strength if strength.isdigit() and 0<=int(strength)<=100 else '75'
     return values
 
 def validate_game(folder):
@@ -115,6 +157,7 @@ def validate_game(folder):
         title, version = info.get('TITLE_ID',''), info.get('APP_VER','')
         if title != 'CUSA00190' or version != '01.81':
             return False, f'Expected CUSA00190 / 01.81; found {title or "unknown title"} / {version or "unknown version"}.'
+        verify_game_build(folder)
     except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
         return False, f'Cannot verify game metadata: {exc}'
     return True, 'Ready · Killzone Shadow Fall · CUSA00190 · 01.81'
@@ -134,14 +177,25 @@ def persist(values):
                    controller_turn_speed=values['controller_turn_speed'],
                    controller_pitch_speed=values['controller_pitch_speed'],
                    sprint_turn_speed=values.get('sprint_turn_speed','100'))
-    for key in ('mouse_aim','mouse_invert_y','mouse_sensitivity','mouse_ads_sensitivity',
-                'mouse_horizontal_speed','mouse_vertical_speed','motion_blur','unlimited_health','infinite_ammo',
+    for key in ('prompt_style','mouse_aim','mouse_invert_y','mouse_sensitivity','mouse_ads_sensitivity',
+                'mouse_horizontal_speed','mouse_vertical_speed','motion_blur','bloom','film_grain','unlimited_health','infinite_ammo',
+                'fov_percent','camera_shake','depth_of_field','unlimited_sprint','continuous_scan',
                 'look_curve','look_deadzone','look_ramp','look_assist','controller_drift_deadzone'):
         value=values.get(key,DEFAULTS[key])
         updates[key]=str(int(value)) if isinstance(value,bool) else str(value)
     write_keys(CONFIG, updates)
+    write_keys(CONFIG, {LIVE_CONFIG[k]:str(int(values.get(k,DEFAULTS[k]))) if isinstance(DEFAULTS[k],bool)
+                       else str(values.get(k,DEFAULTS[k]))
+                       for k in ('render_output','frame_gen','anisotropy','mip_lod_bias','fsr1','rcas_strength')})
 
 def executable_for(values):
+    if any(values.get(k,False) for k in ('third_person','free_camera','model_switching','unlimited_sprint','continuous_scan')):
+        return GRAPHICS_EXE
+    # Route the new settings to a separate candidate until gameplay validation is complete.
+    # Returning these choices to their defaults restores the previously deployed executable.
+    if any(values.get(k,DEFAULTS[k]) != DEFAULTS[k] for k in
+           ('render_output','frame_gen','anisotropy','mip_lod_bias','fsr1','rcas_strength')):
+        return GRAPHICS_EXE
     # Features are opt-in flags in one current build, so changing assists or
     # controls cannot silently select an older overlay/renderer executable.
     return PROFILES[values['profile']]
@@ -152,27 +206,41 @@ def needs_preparation(game_dir):
         return True
     stamp = ROOT/'out/prepared-game.json'
     if not stamp.exists():
-        return False  # Preserve game images prepared by existing source checkouts.
+        return True  # Verify the supported assets before accepting old prepared images.
     try:
-        return Path(json.loads(stamp.read_text(encoding='utf-8'))['game_dir']).resolve() != Path(game_dir).resolve()
+        prepared = json.loads(stamp.read_text(encoding='utf-8'))
+        return (prepared.get('catalog_id') != load_catalog()['catalog_id'] or
+                Path(prepared['game_dir']).resolve() != Path(game_dir).resolve())
     except (OSError, ValueError, KeyError, TypeError):
         return True
 
 def launch_spec(values, folder):
     env = dict(os.environ)
+    for key in PLAYER_HOOK_ENV:
+        env.pop(key,None)
     for key in ('KZSF_ORIGINAL_CLOCK','KZSF_UNIFIED_TSC','KZSF_FILE_TRACE','KZSF_RWLOCK_TRACE',
                 'GOW3_TRACE_IMPORTS','GOW3_TSC_HZ','VK_INSTANCE_LAYERS','VK_LOADER_LAYERS_ENABLE',
                 'GOW3_PAD_FILE','GOW3_NO_MOVIES','GOW3_AUDIO','GOW3_AUDIO_DUMP','GOW3_WRITE_LOG',
                 'GOW3_USER_DIR','GOW3_GPU_USER_DIR','GOW3_DATA_DIR','GOW3_FREEZE_EXIT','KZSF_ENGINE_TURN',
                 'KZSF_TURN_LOG','KZSF_PLAYER_TURN','KZSF_FSR_NATIVE','KZSF_FSR_QUALITY','GOW3_RENDER_RES',
-                'GOW3_PRESET_FILE','GOW3_SCENE_DEBUG','KZSF_DIRECT_TEXTURE_MEMO'):
+                'GOW3_SCENE_NATIVE','GOW3_NATIVE_AA','GOW3_FRAME_GEN','GOW3_GAME_TAA_PS',
+                'GOW3_UI_TRIGGER_VS','GOW3_KZ_VELOCITY','GOW3_DISPLAY_BLIT',
+                'GOW3_PRESET_FILE','GOW3_SCENE_DEBUG','KZSF_DIRECT_TEXTURE_MEMO','KZSF_FREE_CAMERA_TEST',
+                'KZSF_FREE_CAMERA_BODY','KZSF_CAMERA_OBSERVER','KZSF_CAMERA_CALL_BRIDGE','KZSF_THIRD_PERSON_TEST','KZSF_THIRD_PERSON_AUTOTEST'):
         env.pop(key, None)
     beta = values['profile'] == 'Beta memory layout (test)'
     env.update(PATH=r'C:\msys64\clang64\bin'+';'+env.get('PATH',''),
         KZSF_VIRTUAL_TSC='1', KZSF_BETA_MEMORY_LAYOUT='1' if beta else '0',
         KZSF_UNLIMITED_HEALTH=str(int(values.get('unlimited_health',False))),
         KZSF_INFINITE_AMMO=str(int(values.get('infinite_ammo',False))),
+        KZSF_UNLIMITED_SPRINT=str(int(values.get('unlimited_sprint',False))),
+        KZSF_CONTINUOUS_SCAN=str(int(values.get('continuous_scan',False))),
         KZSF_DISABLE_MOTION_BLUR=str(int(not values.get('motion_blur',True))),
+        KZSF_DISABLE_DOF=str(int(not values.get('depth_of_field',True))),
+        KZSF_DISABLE_BLOOM=str(int(not values.get('bloom',True))),
+        KZSF_DISABLE_FILM_GRAIN=str(int(not values.get('film_grain',True))),
+        KZSF_CAMERA_CONTROLS='1',KZSF_FOV_PERCENT=values.get('fov_percent','100'),
+        KZSF_CAMERA_SHAKE=str(int(values.get('camera_shake',True))),
         GOW3_DMEM_MB='4608' if beta else '6144', GOW3_FPS_LIMIT=values['fps'], GOW3_VBLANK_HZ='60',
         GOW3_VK_VALIDATION='0', GOW3_VK_VALIDATION_SYNC='0', GOW3_VK_STOP_ON_ERROR='0',
         VK_LOADER_LAYERS_DISABLE='~implicit~', GOW3_VK_RECORD_THREAD='0', GOW3_DRAW_PIPE='0',
@@ -183,6 +251,7 @@ def launch_spec(values, folder):
         GOW3_USER_DIR=str(ROOT/'user'), GOW3_GPU_USER_DIR=str(ROOT/'user'),
         GOW3_ASYNC_SHADERS=str(int(values['async_shaders'])), GOW3_UPSCALER=values['upscaler'],
         GOW3_READBACK_LINEAR='1', GOW3_RCAS=str(int(values['rcas'])),
+        KZSF_NATIVE_PROMPTS='1', KZSF_PROMPT_STYLE=str(values.get('prompt_style','0')),
         GOW3_MOUSE_AIM=str(int(values.get('mouse_aim',True))),
         GOW3_MOUSE_SENSITIVITY=str(values.get('mouse_sensitivity','100')),
         GOW3_MOUSE_ADS_SENSITIVITY=str(values.get('mouse_ads_sensitivity',values.get('mouse_sensitivity','100'))),
@@ -201,7 +270,9 @@ def launch_spec(values, folder):
         GOW3_PAD_PITCH_SPEED=str(values.get('controller_pitch_speed','100')),
         GOW3_DEFERRED_READBACK=str(int(values['deferred_readback'])),
         GOW3_STALE_READBACK=str(int(values['stale_readback'])), GOW3_FRAMES_AHEAD=values['frames_queued'])
-    env['GOW3_KEY_MAP'] = ','.join(f'{k}={v}' for k,v in values['keys'].items() if v)
+    keyboard_defaults={key:keyboard for key,label,keyboard,pad in BUTTONS}
+    keyboard_defaults.update(values['keys'])
+    env['GOW3_KEY_MAP'] = ','.join(f'{k}={v}' for k,v in keyboard_defaults.items() if v)
     env['GOW3_PAD_MAP'] = ','.join(f'{k}={v}' for k,v in values['pads'].items() if v)
     executable=executable_for(values)
     env.update(KZSF_DIRECT_TSC='1',GOW3_PRECOMPILE='1',GOW3_BACKGROUND_WARMUP='0',GOW3_FREEZE_SECONDS='0')
@@ -210,6 +281,33 @@ def launch_spec(values, folder):
     if values['upscaler'] in ('fsr3','taa'):
         env.update(KZSF_FSR_NATIVE='1',GOW3_UPSCALE_PRESET='0',GOW3_OUTPUT_RES='1920x1080',
                    GOW3_JITTER='0',GOW3_REACTIVE='0',GOW3_OBJECT_MOTION='0')
+    output=values.get('render_output',DEFAULTS['render_output'])
+    fg=values.get('frame_gen','off')
+    env.update(GOW3_FRAME_GEN=fg,GOW3_OUTPUT_RES=output,
+               GOW3_ANISOTROPY=values.get('anisotropy','0'),
+               GOW3_MIP_LOD_BIAS=values.get('mip_lod_bias','0'),
+               GOW3_FSR1=str(int(values.get('fsr1',False))),
+               GOW3_RCAS_STRENGTH=values.get('rcas_strength','75'))
+    # Keep the stable native/AA paths at 1080p. The output reconstruction path retains
+    # all guest scene targets at 1080p and draws HUD/menu pixels at the selected output.
+    if output!='1920x1080' or fg!='off':
+        env.update(GOW3_UPSCALER='fsr3',KZSF_FSR_NATIVE='1',GOW3_SCENE_NATIVE='1',
+                   GOW3_NATIVE_AA='1' if output=='1920x1080' else '0',
+                   GOW3_UPSCALE_PRESET='0',GOW3_UI_TRIGGER_VS='6a09714a',
+                   GOW3_JITTER='0',GOW3_REACTIVE='0',GOW3_OBJECT_MOTION='0')
+    # Freecam and character rendering share the validated follow-camera bridge.
+    # Checkboxes enable controls; camera mode/model selection stays an in-game action.
+    if any(values.get(k,False) for k in ('third_person','free_camera','model_switching')):
+        env.update(KZSF_CAMERA_OBSERVER='1',KZSF_CAMERA_CALL_BRIDGE='1',KZSF_THIRD_PERSON_TEST='1')
+    if values.get('free_camera',False):
+        env['KZSF_FOLLOW_FREE_CAMERA']='1'
+    if values.get('model_switching',False):
+        env.update(KZSF_CHARACTER_SWAP_TEST='1',KZSF_CHARACTER_SELECTOR_TEST='1',
+                   KZSF_CHARACTER_ENGINEER_TEST='1',KZSF_CHARACTER_ENGINEER_DRAW_TEST='1',
+                   KZSF_CHARACTER_BODY_ROUTE_TEST='1',KZSF_CHARACTER_SINGLE_BODY_TEST='1',
+                   KZSF_CHARACTER_OVERLAY_TEST='1',KZSF_CHARACTER_ALL_MODELS_TEST='1',
+                   KZSF_CHARACTER_BUNDLE_TEST='1',KZSF_CHARACTER_PRESERVE_SOURCE_BODY='0',
+                   KZSF_CHARACTER_FACE_PLAYER_ANIMATION_CONTROL='0')
     command = [str(ROOT/executable), 'out/boot-linked.bin', '--content-profile',
                'out/content.bin', '--app0', values['game_dir']]
     return dict(command=command, env=env, cwd=str(ROOT), folder=str(folder))
@@ -261,13 +359,13 @@ class Launcher:
         self.monitor = None
         self.preparing = None
         self.session = None
-        root.title('Killzone Shadow Fall')
+        root.title(f'Killzone Shadow Fall — v{LAUNCHER_VERSION}')
         try:
             self.icon=tk.PhotoImage(file=str(ROOT/'launcher/killzone.png'))
             root.iconphoto(True,self.icon)
             root.iconbitmap(str(ROOT/'launcher/killzone.ico'))
         except tk.TclError: pass
-        root.geometry('1180x860'); root.minsize(1100,800); root.configure(bg=BG)
+        root.geometry('1240x900'); root.minsize(1100,740); root.configure(bg=BG)
         root.option_add('*Font', ('Segoe UI',10))
         self.vars = {k:(tk.BooleanVar(value=v) if isinstance(v,bool) else tk.StringVar(value=v))
                      for k,v in self.values.items() if k not in ('keys','pads')}
@@ -275,55 +373,78 @@ class Launcher:
         style.configure('TCombobox', fieldbackground=FIELD, background=LINE, foreground=TEXT,
                         arrowcolor=CYAN, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE, padding=5)
         style.map('TCombobox', fieldbackground=[('readonly',FIELD)], foreground=[('readonly',TEXT)])
-        style.configure('TCheckbutton', background=PANEL, foreground=TEXT, indicatorbackground=FIELD)
-        style.map('TCheckbutton', background=[('active',PANEL)])
-        sidebar=tk.Frame(root,bg=BG,width=214,padx=22,pady=28)
-        sidebar.pack(side='left',fill='y'); sidebar.pack_propagate(False)
-        tk.Label(sidebar,text='KILLZONE',bg=BG,fg=TEXT,font=('Segoe UI',22,'bold'),anchor='w').pack(fill='x')
-        tk.Label(sidebar,text='SHADOW FALL',bg=BG,fg=MUTED,font=('Segoe UI',11),anchor='w').pack(fill='x',pady=(0,8))
-        tk.Label(sidebar,text='PC EDITION',bg=BG,fg=CYAN,font=('Segoe UI',9,'bold'),anchor='w').pack(fill='x')
-        tk.Frame(sidebar,bg=LINE,height=1).pack(fill='x',pady=28)
+        style.configure('TCheckbutton', background=PANEL, foreground=TEXT, indicatorbackground=FIELD,padding=(0,3))
+        style.map('TCheckbutton', background=[('active',PANEL)],foreground=[('disabled',MUTED)],
+                  indicatorbackground=[('selected',CYAN),('active',LINE)])
+        style.configure('Vertical.TScrollbar',background=LINE,troughcolor=PANEL,bordercolor=PANEL,
+                        arrowcolor=MUTED,lightcolor=LINE,darkcolor=LINE,width=12)
+        mast=tk.Frame(root,bg=BG,padx=32,pady=20); mast.pack(fill='x')
+        identity=tk.Frame(mast,bg=BG);identity.pack(side='left')
+        tk.Frame(identity,bg=PRIMARY,width=4,height=36).pack(side='left',padx=(0,14))
+        tk.Label(identity,text='KILLZONE',bg=BG,fg=TEXT,font=('Segoe UI',22,'bold')).pack(side='left')
+        tk.Label(identity,text=' / ',bg=BG,fg=LINE,font=('Segoe UI',22)).pack(side='left',padx=8)
+        tk.Label(identity,text='SHADOW FALL',bg=BG,fg=MUTED,font=('Segoe UI',12)).pack(side='left')
+        self.support_button=self.button(mast,'Support me on Ko-fi',lambda:webbrowser.open_new_tab(KOFI_URL))
+        try:
+            self.support_badge=tk.PhotoImage(file=str(ROOT/'launcher/kofi.png'))
+            self.support_button.configure(image=self.support_badge,padx=0,pady=0,bg=BG,activebackground=BG)
+        except tk.TclError: pass
+        self.support_button.pack(side='right')
+        navigation=tk.Frame(root,bg=BG,padx=32);navigation.pack(fill='x')
         self.tab_buttons = {}
-        for index,name in enumerate(('Game','Graphics','Controls','Cheats','Advanced'),1):
-            b=self.button(sidebar,f'{index:02}   {name}',lambda n=name:self.show_tab(n))
-            b.configure(anchor='w',pady=13)
-            b.pack(fill='x',pady=4); self.tab_buttons[name]=b
-        tk.Label(sidebar,text='Settings apply when\nyou start the game.',bg=BG,fg=MUTED,
-                 justify='left',anchor='w',font=('Segoe UI',9)).pack(side='bottom',fill='x',pady=12)
-        self.banner=tk.Canvas(sidebar,height=164,bg=BG,highlightthickness=0)
-        self.banner.pack(side='bottom',fill='x',pady=16)
-        self.banner.bind('<Configure>',self.draw_banner)
-        main=tk.Frame(root,bg=PANEL,padx=30,pady=24); main.pack(side='right',fill='both',expand=True)
-        top=tk.Frame(main,bg=PANEL); top.pack(fill='x',pady=(0,20))
-        self.page_eyebrow=self.label(top,'LAUNCHER',True); self.page_eyebrow.configure(fg=CYAN,font=('Segoe UI',9,'bold')); self.page_eyebrow.pack(fill='x')
-        self.page_title=self.label(top,''); self.page_title.configure(font=('Segoe UI',26,'bold')); self.page_title.pack(fill='x',pady=(5,2))
-        self.page_description=self.label(top,'',True); self.page_description.pack(fill='x')
-        footer=tk.Frame(main,bg=PANEL); footer.pack(side='bottom',fill='x',pady=(18,0))
-        tk.Frame(footer,bg=LINE,height=1).pack(fill='x',pady=(0,16))
-        actions=tk.Frame(footer,bg=PANEL); actions.pack(fill='x')
-        self.session_label=self.label(actions,'Ready to play.',True); self.session_label.configure(wraplength=360)
-        self.session_label.pack(side='left',fill='x',expand=True,padx=(0,12))
-        self.play_button=self.button(actions,'PLAY GAME',self.play,primary=True); self.play_button.pack(side='right',ipadx=16,ipady=6)
-        self.save_button=self.button(actions,'Save settings',self.save); self.save_button.pack(side='right',padx=(0,12))
+        self.tab_indicators={}
+        for name in ('Game','Graphics','Controls','Cheats','Advanced'):
+            tab=tk.Frame(navigation,bg=BG);tab.pack(side='left',padx=(0,6))
+            b=self.button(tab,'HOME' if name=='Game' else name.upper(),lambda n=name:self.show_tab(n))
+            b.configure(bg=BG,pady=12,padx=20,font=('Segoe UI',10,'bold'))
+            b.pack(fill='x'); self.tab_buttons[name]=b
+            rule=tk.Frame(tab,bg=BG,height=3);rule.pack(fill='x');self.tab_indicators[name]=rule
+        tk.Frame(root,bg=LINE,height=1).pack(fill='x')
+        footer=tk.Frame(root,bg=BG,padx=32,pady=18);footer.pack(side='bottom',fill='x')
+        actions=tk.Frame(footer,bg=BG); actions.pack(fill='x')
+        status=tk.Frame(actions,bg=BG);status.pack(side='left',fill='x',expand=True,padx=(0,12))
+        self.session_label=self.label(status,'Ready to play.',True); self.session_label.configure(wraplength=360)
+        self.session_label.configure(bg=BG,wraplength=530)
+        self.session_label.pack(anchor='w')
+        tk.Label(status,text='Settings apply when you start the game.',bg=BG,fg=MUTED,font=('Segoe UI',9)).pack(anchor='w',pady=(3,0))
+        launch_actions=tk.Frame(actions,bg=BG);launch_actions.pack(side='right')
+        for column in (0,2):launch_actions.columnconfigure(column,weight=1,uniform='launch-buttons')
+        launch_actions.columnconfigure(1,minsize=12)
+        self.play_button=self.button(launch_actions,'PLAY GAME',self.play,primary=True)
+        self.save_button=self.button(launch_actions,'Save settings',self.save)
+        for button,column in ((self.save_button,0),(self.play_button,2)):
+            button.configure(width=18,font=('Segoe UI',10,'bold'))
+            button.grid(row=0,column=column,sticky='nsew',ipady=6)
+        tk.Frame(root,bg=LINE,height=1).pack(side='bottom',fill='x')
+        main=tk.Frame(root,bg=BG,padx=32,pady=22);main.pack(fill='both',expand=True)
+        top=tk.Frame(main,bg=BG); top.pack(fill='x',pady=(0,18))
+        self.page_title=self.label(top,''); self.page_title.configure(bg=BG,font=('Segoe UI',24,'bold')); self.page_title.pack(anchor='w')
+        self.page_description=self.label(top,'',True);self.page_description.configure(bg=BG); self.page_description.pack(anchor='w',pady=(4,0))
         self.body=tk.Frame(main,bg=PANEL); self.body.pack(fill='both',expand=True)
         self.pages={}
         for name in self.tab_buttons:
-            page=tk.Frame(self.body,bg=PANEL,padx=0,pady=8); self.pages[name]=page
+            page=tk.Frame(self.body,bg=PANEL,padx=20,pady=18); self.pages[name]=page
         self.build_game(); self.build_graphics(); self.build_controls(); self.build_cheats(); self.build_advanced()
         self.show_tab('Game'); self.refresh_ready(); self.poll()
         root.protocol('WM_DELETE_WINDOW',self.close)
+        for index,name in enumerate(self.pages,1):
+            root.bind(f'<Control-Key-{index}>',lambda event,n=name:self.show_tab(n))
 
     def label(self,parent,text,muted=False):
         return tk.Label(parent,text=text,bg=PANEL,fg=MUTED if muted else TEXT,anchor='w',justify='left',wraplength=730)
     def button(self,parent,text,command,primary=False):
-        return tk.Button(parent,text=text,command=command,bg=CYAN if primary else FIELD,fg=BG if primary else TEXT,
-                         activebackground='#ffab7e' if primary else LINE,activeforeground=BG if primary else TEXT,
-                         relief='flat',bd=0,padx=14,pady=8,cursor='hand2')
+        return tk.Button(parent,text=text,command=command,bg=PRIMARY if primary else FIELD,fg=BG if primary else TEXT,
+                         activebackground='#ffc08d' if primary else LINE,activeforeground=BG if primary else TEXT,
+                         disabledforeground=MUTED,font=('Segoe UI',10,'bold' if primary else 'normal'),
+                         highlightthickness=1,highlightbackground=LINE,highlightcolor=CYAN,
+                         relief='flat',bd=0,padx=16,pady=9,cursor='hand2')
     def heading(self,parent,text):
-        tk.Label(parent,text=text.upper(),bg=PANEL,fg=CYAN,font=('Segoe UI',10,'bold'),anchor='w').pack(fill='x',pady=(0,12))
+        bar=tk.Frame(parent,bg=PANEL);bar.pack(fill='x',pady=(8,12))
+        tk.Label(bar,text=text.upper(),bg=PANEL,fg=CYAN,font=('Segoe UI',9,'bold'),anchor='w').pack(side='left',padx=(0,16))
+        tk.Frame(bar,bg=LINE,height=1).pack(side='left',fill='x',expand=True)
     def choice(self,parent,label,key,options):
-        row=tk.Frame(parent,bg=PANEL); row.pack(fill='x',pady=7)
-        self.label(row,label).pack(side='left',fill='x',expand=True)
+        row=tk.Frame(parent,bg=FIELD,padx=14,pady=8); row.pack(fill='x',pady=3)
+        caption=self.label(row,label);caption.configure(bg=FIELD);caption.pack(side='left',fill='x',expand=True)
         labels=OPTION_LABELS.get(key,{str(value):str(value) for value in options})
         display=tk.StringVar(value=labels.get(self.vars[key].get(),self.vars[key].get()))
         box=ttk.Combobox(row,textvariable=display,values=[labels[str(value)] for value in options],state='readonly',width=30)
@@ -331,32 +452,51 @@ class Launcher:
         box.bind('<<ComboboxSelected>>',lambda event:self.vars[key].set(reverse[display.get()]))
         self.vars[key].trace_add('write',lambda *args:display.set(labels.get(self.vars[key].get(),self.vars[key].get())))
         box.pack(side='right'); return box
-    def check(self,parent,label,key):
-        ttk.Checkbutton(parent,text=label,variable=self.vars[key]).pack(anchor='w',pady=8)
+    def check(self,parent,label,key,command=None):
+        ttk.Checkbutton(parent,text=label,variable=self.vars[key],command=command).pack(anchor='w',pady=8)
+    def scroll_content(self,page):
+        canvas=tk.Canvas(page,bg=PANEL,highlightthickness=0)
+        scroll=ttk.Scrollbar(page,orient='vertical',command=canvas.yview)
+        scroll.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
+        canvas.configure(yscrollcommand=scroll.set)
+        content=tk.Frame(canvas,bg=PANEL)
+        window=canvas.create_window((0,0),window=content,anchor='nw')
+        content.bind('<Configure>',lambda event:canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>',lambda event:canvas.itemconfigure(window,width=event.width))
+        def wheel(event):
+            if canvas.winfo_ismapped() and event.widget.winfo_class()!='TCombobox':
+                canvas.yview_scroll(-int(event.delta/120),'units')
+        self.root.bind('<MouseWheel>',wheel,add='+')
+        return content
     def show_tab(self,name):
         for page in self.pages.values(): page.pack_forget()
         self.pages[name].pack(fill='both',expand=True)
-        for key,b in self.tab_buttons.items(): b.configure(fg=CYAN if key==name else MUTED,bg='#30251f' if key==name else BG)
-        titles={'Game':('Game library','Choose your game and manage your saved games.'),
+        for key,b in self.tab_buttons.items():
+            b.configure(fg=TEXT if key==name else MUTED,bg=FIELD if key==name else BG)
+            self.tab_indicators[key].configure(bg=CYAN if key==name else BG)
+        titles={'Game':('Your game','Set up your game, choose your perspective, and play.'),
                 'Graphics':('Graphics','Display, image quality and frame pacing.'),
                 'Controls':('Controls','Tune your controller and customize button mappings.'),
-                'Cheats':('Campaign cheats','Optional assists for your campaign.'),
+                'Cheats':('Cheats','Optional assists for your game.'),
                 'Advanced':('Advanced','Additional rendering options and session logs.')}
         title,description=titles[name]
         self.page_title.configure(text=title); self.page_description.configure(text=description)
 
-    def draw_banner(self,event=None):
-        c=self.banner; c.delete('all'); w=max(c.winfo_width(),140)
-        try:
-            from PIL import Image, ImageOps, ImageTk
-            with Image.open(ROOT/'launcher/killzone.png') as im:
-                im=ImageOps.contain(im.convert('RGBA'),(148,148))
-            self.art=ImageTk.PhotoImage(im); c.create_image(w/2,80,image=self.art,anchor='center')
-        except (OSError,ImportError):
-            c.create_text(w/2,80,text='KZ',fill=CYAN,font=('Segoe UI',36,'bold'))
-
     def build_game(self):
-        p=self.pages['Game']; self.heading(p,'Game library')
+        page=self.pages['Game']
+        canvas=tk.Canvas(page,bg=PANEL,highlightthickness=0,height=430)
+        scroll=ttk.Scrollbar(page,orient='vertical',command=canvas.yview)
+        scroll.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
+        canvas.configure(yscrollcommand=scroll.set)
+        p=tk.Frame(canvas,bg=PANEL)
+        window=canvas.create_window((0,0),window=p,anchor='nw')
+        p.bind('<Configure>',lambda event:canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>',lambda event:canvas.itemconfigure(window,width=event.width))
+        def wheel(event):
+            if canvas.winfo_ismapped() and event.widget.winfo_class()!='TCombobox':
+                canvas.yview_scroll(-int(event.delta/120),'units')
+        self.root.bind('<MouseWheel>',wheel,add='+')
+        self.heading(p,'Game library')
         row=tk.Frame(p,bg=PANEL); row.pack(fill='x')
         entry=tk.Entry(row,textvariable=self.vars['game_dir'],bg=FIELD,fg=TEXT,insertbackground=CYAN,relief='flat')
         entry.pack(side='left',fill='x',expand=True,ipady=9)
@@ -370,15 +510,53 @@ class Launcher:
         for name,path in [('Saved games',ROOT/'user/savedata/1/CUSA00190/KZ4'),('Screenshots',ROOT/'user/screenshots'),('Logs',ROOT/'out')]:
             self.button(row,name,lambda f=path:self.open_folder(f)).pack(side='left',padx=(0,9))
         self.label(p,'Both memory profiles use the same saved games. A separate log is kept for each session.',True).pack(fill='x',pady=15)
+        self.heading(p,'Camera & player model')
+        self.check(p,'Enable third-person controls · F8','third_person',lambda:self.player_feature_changed('third_person'))
+        self.check(p,'Enable freecam controls · F9','free_camera',lambda:self.player_feature_changed('free_camera'))
+        self.check(p,'Enable model switching · F7 / overlay','model_switching',lambda:self.player_feature_changed('model_switching'))
+        self.label(p,'Freecam and model switching also enable third-person controls. Changes apply on the next launch. F8 toggles third person; F9 toggles freecam. Select a model with Insert → Game → Player model, or hold F7 + Left/Right. F7 alone restores/toggles the selected model.',True).pack(fill='x',pady=(4,8))
+        self.label(p,'Freecam: WASD move, Q/E down/up, mouse/arrows look, Shift faster, Ctrl slower, F10 recenter. Check camera and model behavior when combining these options with frame generation.',True).pack(fill='x',pady=(0,8))
+
+    def player_feature_changed(self,key):
+        if key=='third_person' and not self.vars[key].get():
+            self.vars['free_camera'].set(False)
+            self.vars['model_switching'].set(False)
+        elif self.vars[key].get():
+            self.vars['third_person'].set(True)
 
     def build_graphics(self):
-        p=self.pages['Graphics']; self.heading(p,'Display')
+        page=self.pages['Graphics']
+        canvas=tk.Canvas(page,bg=PANEL,highlightthickness=0)
+        scroll=ttk.Scrollbar(page,orient='vertical',command=canvas.yview)
+        scroll.pack(side='right',fill='y'); canvas.pack(side='left',fill='both',expand=True)
+        canvas.configure(yscrollcommand=scroll.set)
+        p=tk.Frame(canvas,bg=PANEL)
+        window=canvas.create_window((0,0),window=p,anchor='nw')
+        p.bind('<Configure>',lambda event:canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>',lambda event:canvas.itemconfigure(window,width=event.width))
+        def wheel(event):
+            if canvas.winfo_ismapped() and event.widget.winfo_class()!='TCombobox':
+                canvas.yview_scroll(-int(event.delta/120),'units')
+        self.root.bind('<MouseWheel>',wheel,add='+')
+        self.heading(p,'Display')
         for label,key,options in [('Display mode','display_mode',('windowed','borderless','fullscreen')),
           ('Window size','window_size',('1280x720','1600x900','1920x1080','2560x1440','3840x2160')),
-          ('Frame rate limit','fps',('30','60','120')),('Anti-aliasing','upscaler',('none','fsr3','taa'))]: self.choice(p,label,key,options)
-        self.label(p,'Window size controls the display output. The game renders internally at 1920 × 1080.',True).pack(fill='x',pady=12)
+          ('Render resolution (FSR output)','render_output',RENDER_OUTPUTS),
+          ('Frame generation','frame_gen',('off','fsr3')),
+          ('Anisotropic filtering','anisotropy',('0','2','4','8','16')),
+          ('Distant texture sharpness','mip_lod_bias',tuple(OPTION_LABELS['mip_lod_bias'])),
+          ('Frame rate limit','fps',('30','60','120')),('Anti-aliasing (1080p, FG off)','upscaler',('none','fsr3','taa'))]: self.choice(p,label,key,options)
+        self.label(p,'Scene rendering stays at 1920 × 1080. Higher render resolutions use FSR 3.1 with the HUD drawn at that size. Window size is independent. Higher resolution or frame generation selects the FSR path regardless of the anti-aliasing choice. Changes apply on the next launch.',True).pack(fill='x',pady=12)
+        self.label(p,'Frame generation inserts an intermediate frame; it does not double game simulation FPS. Check for visual artifacts when enabling it. Texture sharpness affects distant material detail; sharper values may shimmer.',True).pack(fill='x',pady=8)
+        self.check(p,'FSR 1 spatial upscaling (when the window is larger than the game image)','fsr1')
         self.check(p,'VSync','vsync'); self.check(p,'Sharpening (RCAS)','rcas'); self.check(p,'Show FPS','show_fps')
+        self.choice(p,'RCAS sharpening strength (%)','rcas_strength',('0','25','50','75','100'))
         self.check(p,'Motion blur (restart required)','motion_blur')
+        self.choice(p,'Field of view (%)','fov_percent',('75','90','100','110','120','130','140','150'))
+        self.check(p,'Camera shake','camera_shake')
+        self.check(p,'Depth of field (restart required)','depth_of_field')
+        self.check(p,'Bloom (restart required)','bloom')
+        self.check(p,'Film grain (restart required)','film_grain')
         self.label(p,'Frame limits do not guarantee performance. FSR 3.1 AA and TAA use native resolution and may introduce trails on moving objects.',True).pack(fill='x',pady=15)
 
     def build_controls(self):
@@ -395,6 +573,7 @@ class Launcher:
             if canvas.winfo_ismapped() and event.widget.winfo_class()!='TCombobox':
                 canvas.yview_scroll(-int(event.delta/120),'units')
         self.root.bind('<MouseWheel>',wheel,add='+')
+        self.choice(p,'Button prompts','prompt_style',('0','1','2'))
         self.heading(p,'Mouse')
         gains=('50','75','100','125','150','175','200','250','300')
         self.check(p,'Enable mouse look','mouse_aim')
@@ -440,6 +619,14 @@ class Launcher:
             pv.trace_add('write',lambda *args,v=pv,d=display:d.set(PAD_LABELS[v.get()]))
             box.grid(row=row,column=col+2,padx=(0,20))
             if key in ('l2','r2'): box.configure(state='disabled')
+        def arrange_bindings(event):
+            columns=2 if event.width>=1040 else 1
+            for index in range(len(BUTTONS)):
+                for offset,widget in enumerate(table.winfo_children()[index*3:index*3+3]):
+                    row=index%9 if columns==2 else index
+                    col=(index//9)*3 if columns==2 else 0
+                    widget.grid_configure(row=row,column=col+offset)
+        table.bind('<Configure>',arrange_bindings)
         self.button(p,'Restore control defaults',self.reset_controls).pack(anchor='w',pady=20)
         self.label(p,'A blank controller field keeps the built-in mapping. Changes apply on the next launch.',True).pack(fill='x')
 
@@ -459,6 +646,7 @@ class Launcher:
             finish(value)
         popup.bind('<KeyPress>',press); popup.protocol('WM_DELETE_WINDOW',lambda:finish(old))
     def reset_controls(self):
+        self.vars['prompt_style'].set('0')
         self.vars['mouse_aim'].set(True)
         self.vars['mouse_sensitivity'].set('100')
         self.vars['mouse_ads_sensitivity'].set('100')
@@ -476,10 +664,10 @@ class Launcher:
 
     def build_advanced(self):
         page=self.pages['Advanced']
-        p=tk.Frame(page,bg=PANEL); p.pack(fill='both',expand=True)
+        p=self.scroll_content(page)
         self.heading(p,'Rendering')
         self.check(p,'Compile new shaders in the background','async_shaders')
-        note=self.label(p,'Experimental; may cause missing draws or instability.',True)
+        note=self.label(p,'May cause missing objects or instability.',True)
         note.configure(wraplength=420); note.pack(fill='x',pady=(0,12))
         self.check(p,'GPU readbacks without waiting','stale_readback')
         self.check(p,'Defer GPU readbacks','deferred_readback')
@@ -489,18 +677,24 @@ class Launcher:
         self.button(p,'Open latest session logs',lambda:self.open_folder(self.session or ROOT/'out')).pack(anchor='w')
 
     def build_cheats(self):
-        p=self.pages['Cheats']
-        self.heading(p,'Campaign cheats')
+        p=self.scroll_content(self.pages['Cheats'])
+        self.heading(p,'Cheats')
         self.check(p,'Unlimited player health','unlimited_health')
         self.label(p,'Protects the player from normal damage, including bullets and explosions.',True).pack(fill='x',pady=(0,12))
         self.check(p,'Infinite ammo / no reload','infinite_ammo')
         self.label(p,'Keep ammunition available and fire without reloading.',True).pack(fill='x',pady=(0,20))
+        self.check(p,'Unlimited sprint','unlimited_sprint')
+        self.label(p,'Prevents stamina exhaustion while sprinting. Start sprinting with your normal control.',True).pack(fill='x',pady=(0,12))
+        self.check(p,'Continuous Tactical Echo / orange enemy marks','continuous_scan')
+        self.label(p,'Activate Tactical Echo once after loading. Scans then repeat at the normal range and interval to refresh enemy marks.',True).pack(fill='x',pady=(0,12))
         self.label(p,'Changes apply on the next launch. Turn a cheat off and relaunch to restore normal play. Scripted deaths may still occur.',True).pack(fill='x',pady=12)
         self.button(p,'Disable all cheats',self.reset_cheats).pack(anchor='w',pady=12)
 
     def reset_cheats(self):
         self.vars['unlimited_health'].set(False)
         self.vars['infinite_ammo'].set(False)
+        self.vars['unlimited_sprint'].set(False)
+        self.vars['continuous_scan'].set(False)
 
     def gather(self):
         values={k:v.get() for k,v in self.vars.items()}
@@ -512,10 +706,13 @@ class Launcher:
         except OSError as exc: messagebox.showerror('Cannot save settings',str(exc),parent=self.root)
     def browse(self):
         folder=filedialog.askdirectory(initialdir=self.vars['game_dir'].get(),parent=self.root)
-        if folder: self.vars['game_dir'].set(folder); self.refresh_ready(); self.draw_banner()
+        if folder: self.vars['game_dir'].set(folder); self.refresh_ready()
     def refresh_ready(self):
         ok,text=validate_game(self.vars['game_dir'].get()); self.ready.configure(text=text,fg=GREEN if ok else CYAN)
         self.game_ok=ok
+        if self.monitor is None and self.preparing is None:
+            self.play_button.configure(text='PLAY GAME' if ok else 'SET UP GAME')
+            self.session_label.configure(text='Ready to play.' if ok else 'Select your game folder to get started.',fg=GREEN if ok else MUTED)
     def open_folder(self,path):
         path.mkdir(parents=True,exist_ok=True); os.startfile(str(path))
     def play(self):
@@ -527,7 +724,7 @@ class Launcher:
             if 'gow3-probe' in running.stdout.lower():
                 messagebox.showinfo('Game already running','Close the current Killzone game before starting another session.',parent=self.root); return
         self.refresh_ready()
-        if not self.game_ok: self.show_tab('Game'); return
+        if not self.game_ok: self.show_tab('Game'); self.browse(); return
         values=self.gather()
         exe=ROOT/executable_for(values)
         for path in (exe,ROOT/'out/renderer-stability-toggles.txt'):
@@ -561,7 +758,8 @@ class Launcher:
                 for key in ('KZSF_BETA_MEMORY_LAYOUT','GOW3_DMEM_MB','GOW3_DRAW_PIPE',
                             'GOW3_VK_RECORD_THREAD','GOW3_VK_VALIDATION','GOW3_ASYNC_SHADERS',
                             'GOW3_UPSCALER','GOW3_READBACK_LINEAR','GOW3_DEFERRED_READBACK','GOW3_STALE_READBACK',
-                            'KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO'):
+                            'KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO','KZSF_UNLIMITED_SPRINT','KZSF_CONTINUOUS_SCAN',
+                            'GOW3_OUTPUT_RES','GOW3_FRAME_GEN','GOW3_ANISOTROPY','GOW3_MIP_LOD_BIAS'):
                     log.write(f'{key}={spec["env"][key]}\n')
             self.monitor=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--run-session',str(folder/'session.json')],
                 env=spec['env'],cwd=ROOT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))

@@ -18,6 +18,8 @@ static std::string Read(const char* path) {
 }
 
 int main() {
+    assert(G::ParseAnisotropy(16) == 16 && G::ParseAnisotropy(3) == 0);
+    assert(G::TextureLodBias(-5.0f) == -2.0f && G::TextureLodBias(0.14f) == 0.125f);
     assert(G::ParseDisplayMode("borderless") == G::Borderless && G::ParseDisplayMode("bogus") == G::Windowed);
     assert(G::ParseFpsLimit(240) == 240 && G::ParseFpsLimit(75) == 0);
     assert(G::ParseResolution("1440p") == 3 && G::ParseResolution("8K") == 0);
@@ -38,19 +40,40 @@ int main() {
         std::ofstream out(path);
         out << "display_mode=borderless\nvsync=0\nfps_limit=240\nasync_shaders=0\n"
                "render_resolution=1440p\nengine_fps=240\ndeferred_readback=0\nstale_readback=1\n"
-               "fsr1=1\nrcas=0\nrcas_strength=40\nframes_queued=2\n";
+               "fsr1=1\nrcas=0\nrcas_strength=40\nframes_queued=2\n"
+               "anisotropy=16\nmip_lod_bias=-0.5\nframe_gen=fsr3\noutput_res=3200x1800\n"
+               "controller_look_gain=150\ncontroller_aim_gain=125\ncontroller_turn_speed=175\n"
+               "controller_pitch_speed=190\nmotion_blur=0\nbloom=0\nfilm_grain=0\nprompt_style=1\n"
+               "unlimited_sprint=1\ncontinuous_scan=1\n";
     }
     _putenv_s("GOW3_CONFIG", path);
     _putenv_s("GOW3_ASYNC_SHADERS", "");
     auto& v = Gow3Settings::Get();
     Gow3Settings::Load();
+    assert(v.controller_look_gain==150 && v.controller_aim_gain==125);
+    assert(v.controller_turn_speed==175);
+    assert(v.controller_pitch_speed==190);
+    assert(!v.motion_blur && !v.bloom && !v.film_grain);
+    assert(v.prompt_style==1);
+    assert(v.unlimited_sprint && v.continuous_scan);
     assert(v.display_mode == G::Borderless && !v.vsync && v.fps_limit == 240 && !v.async_shaders);
     assert(v.render_resolution == 3 && v.engine_fps == 240 && !v.deferred_readback && v.stale_readback);
-    // FSR 1 left the menus in 2.2.0: a saved fsr1=1 (or GOW3_FSR1) no longer turns it on.
-    assert(!v.fsr1 && !v.rcas && v.rcas_strength == 40 && v.frames_queued == 2);
-    _putenv_s("GOW3_FSR1", "1");
+    // Killzone supports spatial FSR independently of the temporal scene integration.
+    assert(v.fsr1 && !v.rcas && v.rcas_strength == 40 && v.frames_queued == 2);
+    assert(v.anisotropy == 16 && v.startup_anisotropy == 16 && v.mip_lod_bias == -0.5f);
+    assert(v.frame_gen == Gow3Settings::FrameGenFsr3 && v.output_res == 4);
+    v.anisotropy = 8;
+    assert(Gow3Settings::GraphicsNeedRestart());
+    v.anisotropy = 16;
+    v.mip_lod_bias = -1.0f;
+    assert(!Gow3Settings::GraphicsNeedRestart());
+    v.mip_lod_bias = -0.5f;
+    _putenv_s("GOW3_FSR1", "0");
     Gow3Settings::Load();
     assert(!v.fsr1);
+    _putenv_s("GOW3_FSR1", "1");
+    Gow3Settings::Load();
+    assert(v.fsr1);
     _putenv_s("GOW3_FSR1", "");
     assert(!Gow3Settings::GraphicsNeedRestart());
     assert(v.applied_engine_fps == 240);  // no GOW3_ENGINE_FPS: the configured rate
@@ -66,23 +89,32 @@ int main() {
 
     Gow3Settings::Save();
     const std::string saved = Read(path);
+    assert(saved.find("unlimited_sprint=1\n") != std::string::npos);
+    assert(saved.find("continuous_scan=1\n") != std::string::npos);
     for (const char* line : {"display_mode=borderless\n", "vsync=0\n", "fps_limit=60\n", "async_shaders=0\n",
                              "render_resolution=1440p\n", "engine_fps=240\n", "deferred_readback=0\n",
-                             "stale_readback=1\n", "fsr1=0\n", "rcas=0\n", "rcas_strength=40\n",
-                             "frames_queued=2\n"}) {
+                             "stale_readback=1\n", "fsr1=1\n", "rcas=0\n", "rcas_strength=40\n",
+                             "frames_queued=2\n", "controller_look_gain=150\n", "controller_aim_gain=125\n",
+                             "controller_turn_speed=175\n", "controller_pitch_speed=190\n",
+                             "motion_blur=0\n", "bloom=0\n", "film_grain=0\n", "prompt_style=1\n"}) {
         assert(saved.find(line) != std::string::npos);
     }
+    assert(saved.find("anisotropy=16\n") != std::string::npos);
+    assert(saved.find("mip_lod_bias=-0.500\n") != std::string::npos);
+    assert(saved.find("frame_gen=fsr3\n") != std::string::npos);
+    assert(saved.find("output_res=3200x1800\n") != std::string::npos);
 
     {
         std::ofstream out(path);
         out << "display_mode=huge\nfps_limit=7\nrender_resolution=8K\nengine_fps=1\n"
-               "rcas_strength=250\nframes_queued=9\n";
+               "rcas_strength=250\nframes_queued=9\nprompt_style=9\n";
     }
     _putenv_s("GOW3_ASYNC_SHADERS", "1");  // the environment still wins at start
     v.async_shaders = false;
     Gow3Settings::Load();
     assert(v.display_mode == G::Windowed && v.fps_limit == 0 && v.render_resolution == 0 && v.engine_fps == 120);
     assert(v.rcas_strength == 75 && v.frames_queued == 1);
+    assert(v.prompt_style==0);
     assert(v.async_shaders);
     {
         std::ofstream out(path);

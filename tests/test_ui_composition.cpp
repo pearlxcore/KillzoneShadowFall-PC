@@ -5,6 +5,12 @@
 
 int main() {
     using namespace Vulkan::UiComposition;
+    assert(CompleteAtDisplay(true, true, false, true, true)); // gameplay without HUD marker
+    assert(!CompleteAtDisplay(true, true, true, true, true)); // never run twice
+    assert(!CompleteAtDisplay(true, true, false, false, true)); // menu/missing camera
+    assert(!CompleteAtDisplay(true, true, false, true, false)); // unrelated last target
+    assert(!CompleteAtDisplay(false, true, false, true, true)); // stable native path
+    assert(!CompleteAtDisplay(true, false, false, true, true)); // disabled/failed FSR
     // Title/loading menus have no depth/camera. UI must still go to the native target.
     assert(Choose(true, true, false, true) == Background::Copy);
     assert(Choose(true, true, false, false) == Background::Copy);

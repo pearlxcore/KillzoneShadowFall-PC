@@ -84,7 +84,12 @@ void main() {
     imageStore(color_img, pixel, vec4(mix(current.rgb, mv_color, 0.75), current.a));
 #else
     vec2 result = motion;
-    if (mode == 1) {
+    if (mode == 2 && !sky) {
+        // Killzone velocity: current minus previous NDC; convert to previous-current pixels.
+        const vec2 velocity = texelFetch(object_tex, pixel, 0).xy;
+        if (!any(isnan(velocity)) && !any(isinf(velocity)))
+            result = vec2(-velocity.x, velocity.y) * size * 0.5;
+    } else if (mode == 1) {
         const vec4 object_motion = texelFetch(object_tex, pixel, 0);
         // A later ordinary draw may have covered this pixel without touching the motion
         // target. Its final depth then differs from the depth stored with the vector.

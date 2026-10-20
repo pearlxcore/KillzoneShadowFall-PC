@@ -5,6 +5,8 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
+#include <cmath>
 #include <string_view>
 
 namespace Gow3Graphics {
@@ -46,6 +48,14 @@ inline int ParseResolution(std::string_view text) {
 /// A listed ceiling, else 120 (the default patch).
 inline int ParseEngineFps(int value) {
     return IndexOf(EngineFps, value, -1) >= 0 ? value : 120;
+}
+
+inline constexpr std::array<int, 5> Anisotropy = {0, 2, 4, 8, 16};
+inline int ParseAnisotropy(int value) {
+    return IndexOf(Anisotropy, value, -1) >= 0 ? value : 0;
+}
+inline float TextureLodBias(float value) {
+    return std::isfinite(value) ? std::round(std::clamp(value, -2.0f, 2.0f) * 8.0f) / 8.0f : 0.0f;
 }
 
 /// Frames the GPU command thread may queue ahead of the GPU; 0 = unbounded.

@@ -9,6 +9,14 @@ namespace Vulkan::UiComposition {
 
 enum class Background { None, Copy, Temporal };
 
+// A hidden HUD must not prevent a finished gameplay frame from being reconstructed.
+// Menus, frames already composed at the HUD boundary and missing scene history cannot
+// take this fallback. Callers also validate the final target's format and dimensions.
+constexpr bool CompleteAtDisplay(bool scaled, bool active, bool composed, bool scene_ready,
+                                 bool final_scene_target) {
+    return scaled && active && !composed && scene_ready && final_scene_target;
+}
+
 // UI composition must not require scene depth/camera or an active FSR context.
 constexpr Background Choose(bool scaled, bool ui_draw, bool scene_ready, bool fsr_active) {
     if (!scaled || !ui_draw) {

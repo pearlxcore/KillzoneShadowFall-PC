@@ -8,6 +8,8 @@
 #include "runtime.h"
 #include "kzsf_timing.h"
 #include "kzsf_motion_blur.h"
+#include "kzsf_depth_of_field.h"
+#include "kzsf_post_effects.h"
 #include "cpu_check.h"
 #include "isa_rewrite.h"
 #include "orb_hook.h"
@@ -22,11 +24,30 @@
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include "kzsf_postfx_dump_win.h"
+#include "kzsf_prompt_trace_win.h"
+#include "kzsf_prompt_pc_win.h"
+#include "kzsf_free_camera_win.h"
+#include "kzsf_camera_observer_win.h"
+#include "kzsf_camera_call_bridge.h"
+#include "kzsf_character_render_bridge.h"
+#include "kzsf_checkpoint_handle_bridge.h"
+#include "kzsf_character_draw_proxy.h"
+#include "kzsf_character_face_bind.h"
+#include "kzsf_character_face_owner_bridge.h"
+#include "kzsf_character_bind_pose.h"
+#include "kzsf_camera_dispatch_win.h"
+#include "kzsf_third_person.h"
+#include "kzsf_camera_collision.h"
+#include "kzsf_execution_partner.h"
+#include "kzsf_model_view_win.h"
 #include "kzsf_cheats_win.h"
+#include "kzsf_campaign_cheats_win.h"
 #include "kzsf_turn_speed_win.h"
 #include "kzsf_player_turn_win.h"
 #include "kzsf_sprint_turn_win.h"
 #include "kzsf_aim_controls_win.h"
+#include "kzsf_camera_controls_win.h"
 #include <tlhelp32.h>
 #else
 #include <sys/mman.h>
@@ -50,14 +71,54 @@ static unsigned char *image;
 static unsigned char *kzsf_health_trace_site;
 static unsigned kzsf_health_trace_count;
 static int kzsf_player_protection;
+static int kzsf_unlimited_sprint, kzsf_continuous_scan;
+static unsigned kzsf_sprint_reported, kzsf_scan_reported;
 static unsigned kzsf_player_protection_reported;
 static int kzsf_turn_speed_enabled;
 static int kzsf_turn_log;
+/* Opt-in diagnostic: dump the per-view post-process object a few times. The
+ * breakpoint stays installed for the whole run because the handler also replays
+ * the displaced LEA; only the printing is bounded. */
+static int kzsf_postfx_dump_enabled;
+static unsigned kzsf_postfx_dump_hits;
+static int kzsf_prompt_trace_enabled;
+static uintptr_t kzsf_prompt_collections[KZSF_PROMPT_TRACE_SITES][4];
+static uint64_t kzsf_prompt_requests[KZSF_PROMPT_TRACE_SITES][32];
+static int kzsf_prompt_pc_enabled,kzsf_prompt_pc_state;
+static int kzsf_prompt_texture_smoke,kzsf_prompt_texture_smoked;
+static KzsfPromptPc kzsf_prompt_pc;
+static KzsfPromptPc kzsf_prompt_keyboard;
 static int kzsf_player_turn_enabled;
 static unsigned kzsf_player_turn_events;
 static unsigned kzsf_sprint_events;
 static _Thread_local KzsfSprintScope kzsf_sprint_scope;
 static unsigned kzsf_aim_events[3];
+static int kzsf_camera_controls_enabled;
+static int kzsf_free_camera_enabled;
+static int kzsf_camera_observer_enabled,kzsf_camera_observer_key;
+static unsigned kzsf_camera_observer_hits[3],kzsf_camera_observer_samples;
+static SRWLOCK kzsf_camera_observer_lock=SRWLOCK_INIT;
+static SRWLOCK kzsf_camera_follow_lock=SRWLOCK_INIT;
+static int kzsf_free_camera_body_test,kzsf_free_camera_body_active;
+static int kzsf_third_person_enabled;
+static int kzsf_third_person_hide_body;
+static int kzsf_character_body_should_show(void) {
+    return __atomic_load_n(&kzsf_free_camera_body_active,__ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&kzsf_third_person_hide_body,__ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&kzsf_character_level_transition,__ATOMIC_ACQUIRE);
+}
+static KzsfThirdPerson kzsf_third_person;
+static KzsfCameraBoom kzsf_third_person_boom;
+static int kzsf_third_person_collision_ready;
+static unsigned kzsf_third_person_sweeps,kzsf_third_person_hits;
+static unsigned kzsf_third_person_aim_traces;
+static unsigned kzsf_model_view_events[2];
+static unsigned kzsf_third_person_throw_contact_frames;
+static KzsfFreeCamera kzsf_free_camera;
+static uintptr_t kzsf_free_camera_view;
+static ULONGLONG kzsf_free_camera_tick;
+static int kzsf_free_camera_toggle_down,kzsf_free_camera_reset_down;
+static unsigned kzsf_camera_events[2];
 static unsigned kzsf_turn_speed_reported;
 /* Gameplay verification for the engine look-rate hooks: per-axis windowed maximum of the
  * engine's own value (before scaling) and of the value actually stored. The local-input
@@ -98,6 +159,67 @@ static int kzsf_turn_write(void *opaque,uintptr_t address,const void *data,size_
 static int kzsf_cheat_read(void *opaque,uintptr_t address,void *out,size_t size) {
     (void)opaque; SIZE_T got=0;
     return ReadProcessMemory(GetCurrentProcess(),(void *)address,out,size,&got) && got==size;
+}
+static void kzsf_camera_observer_summary(void) {
+    fprintf(stderr,"KILLZONE_CAMERA_OBSERVER summary selector_calls=%u bind_calls=%u view_calls=%u snapshots=%u\n",
+        __atomic_load_n(&kzsf_camera_observer_hits[0],__ATOMIC_RELAXED),
+        __atomic_load_n(&kzsf_camera_observer_hits[1],__ATOMIC_RELAXED),
+        __atomic_load_n(&kzsf_camera_observer_hits[2],__ATOMIC_RELAXED),kzsf_camera_observer_samples);
+    fflush(stderr);
+}
+
+/* Native construction mirrors generated-texture creator 31a540, with RGBA8888
+ * instead of its single-channel font format. Pixel storage uses the port's
+ * registered mapper; 2d0db0 receives it as externally owned memory. The engine's
+ * private font heap is not necessarily initialized when a prompt is first drawn.
+ * Both allocations are retained for this isolated test process's lifetime. */
+static uint64_t kzsf_prompt_native_create(void *opaque,const uint32_t *pixels,size_t bytes) {
+    (void)opaque;
+    typedef void *(ABI *NativeNew)(size_t);
+    typedef void (ABI *NativeCtor)(void *);
+    typedef uint64_t (ABI *NativeTexture)(void *,uint32_t,uint32_t,const uint32_t *,uint32_t,
+        uint32_t,uint16_t,uint32_t,uint32_t,uint32_t,uint64_t,uint64_t,uint32_t,char);
+    extern uint64_t runtime_memory_clamp(uintptr_t,uint64_t);
+    uintptr_t base=(uintptr_t)image;
+    if(bytes!=KZSF_PC_BYTES) return 0;
+    void *data=runtime_memory_map_host_pixels(bytes);
+    if(!data || (uintptr_t)data>=(UINT64_C(1)<<40) || ((uintptr_t)data&255) ||
+       runtime_memory_clamp((uintptr_t)data,bytes)!=bytes ||
+       !kzsf_turn_write(NULL,(uintptr_t)data,pixels,bytes)) {
+        runtime_memory_unmap_host_pixels(data,bytes);
+        fprintf(stderr,"KILLZONE_PROMPT_PC external pixel allocation unavailable; original prompts retained\n");return 0;
+    }
+    void *texture=((NativeNew)(base+0x321970))(0xc0);
+    if(!texture) return 0;
+    ((NativeCtor)(base+0x2cea70))(texture);
+    const uint32_t description[3]={KZSF_PC_WIDTH,KZSF_PC_HEIGHT,15}; /* native RGBA8888 */
+    uint64_t result=((NativeTexture)(base+0x2d0db0))(texture,0,1,description,0,0,1,0,0,2,
+        (uintptr_t)data,256,0,0);
+    unsigned char object[0xc0];uint32_t dims[2],pitch;uint64_t srd[4],data_address;
+    if(!result || !kzsf_cheat_read(NULL,(uintptr_t)texture,object,sizeof(object))) return 0;
+    memcpy(dims,object+0x18,8);memcpy(&pitch,object+0x8c,4);
+    memcpy(srd,object+0x90,32);memcpy(&data_address,object+0x30,8);
+    unsigned tile=(unsigned)(srd[1]>>52)&31;
+    if(dims[0]!=KZSF_PC_WIDTH || dims[1]!=KZSF_PC_HEIGHT || pitch!=KZSF_PC_WIDTH*4 ||
+       data_address!=(uintptr_t)data || ((srd[0]&UINT64_C(0x3fffffffff))<<8)!=(uintptr_t)data ||
+       ((srd[0]>>52)&63)!=10 || ((srd[0]>>58)&15)!=0 ||
+       (srd[1]&0x3fff)!=KZSF_PC_WIDTH-1 || ((srd[1]>>14)&0x3fff)!=KZSF_PC_HEIGHT-1 ||
+       (tile!=8 && tile!=31)) {
+        fprintf(stderr,"KILLZONE_PROMPT_PC native image refused pitch=%u tile=%u srd=%016llx %016llx %016llx %016llx\n",
+            pitch,tile,(unsigned long long)srd[0],(unsigned long long)srd[1],
+            (unsigned long long)srd[2],(unsigned long long)srd[3]);return 0;
+    }
+    fprintf(stderr,"KILLZONE_PROMPT_PC native RGBA atlas created texture=%p data=%p pitch=%u tile=%u\n",
+        texture,data,pitch,tile);
+    return (uintptr_t)texture;
+}
+static void kzsf_prompt_constructor_smoke(void) {
+    if(!kzsf_prompt_texture_smoke || __atomic_exchange_n(&kzsf_prompt_texture_smoked,1,__ATOMIC_RELAXED)) return;
+    uint32_t *empty=calloc(1,KZSF_PC_BYTES);
+    uint64_t texture=empty ? kzsf_prompt_native_create(NULL,empty,KZSF_PC_BYTES) : 0;
+    free(empty);
+    fprintf(stderr,"KILLZONE_PROMPT_PC constructor smoke=%s\n",texture ? "pass" : "refused");
+    fflush(stderr);
 }
 static int handle_kzsf_player_damage(CONTEXT *c) {
     int result=kzsf_handle_player_damage(c,(uintptr_t)image,kzsf_cheat_read,NULL);
@@ -286,6 +408,53 @@ static void describe_address(char *out, size_t size, uintptr_t address) {
     snprintf(out,size,"%p",(void *)address);
 }
 static int fatal_reported;
+static int kzsf_fault_read(uintptr_t address,void *out,size_t bytes) {
+    SIZE_T got=0;
+    return address>=0x10000 && bytes<=4096 && address<=UINTPTR_MAX-bytes &&
+        ReadProcessMemory(GetCurrentProcess(),(const void*)address,out,bytes,&got) && got==bytes;
+}
+/* Targeted evidence for the reproduced swapped-model animation crash.
+ * Only bounded reads after a fatal exception; never suppress/retry the fault. */
+static void dump_kzsf_animation_fault(const CONTEXT *c) {
+    if(!image || c->Rip-(uintptr_t)image!=0x308490)return;
+    fprintf(stderr,"KILLZONE_ANIMATION_FAULT r8=%016llx r9=%016llx r10=%016llx r11=%016llx r12=%016llx r13=%016llx r14=%016llx r15=%016llx\n",
+        c->R8,c->R9,c->R10,c->R11,c->R12,c->R13,c->R14,c->R15);
+    uintptr_t frame_pointer=c->Rbp;
+    for(unsigned depth=0;depth<6;depth++) {
+        uintptr_t frame[2];
+        if(!kzsf_fault_read(frame_pointer,frame,sizeof(frame)) || frame[0]<=frame_pointer ||
+           frame[0]-frame_pointer>0x100000)break;
+        if(frame[1]==(uintptr_t)image+0x5383e6) {
+            uintptr_t request=0,graph=0;unsigned char request_bytes[32];uint64_t header[16];
+            if(kzsf_fault_read(frame[0]+0x10,&request,8) && kzsf_fault_read(request,request_bytes,sizeof(request_bytes))) {
+                memcpy(&graph,request_bytes,8);
+                fprintf(stderr,"KILLZONE_ANIMATION_REQUEST caller_frame=%p request=%p graph=%p bytes=",
+                    (void*)frame[0],(void*)request,(void*)graph);
+                for(unsigned i=0;i<sizeof(request_bytes);i++)fprintf(stderr,"%02x",request_bytes[i]);
+                fputc('\n',stderr);
+                if(kzsf_fault_read(graph,header,sizeof(header))) {
+                    fputs("KILLZONE_ANIMATION_GRAPH",stderr);
+                    for(unsigned i=0;i<16;i++)fprintf(stderr," +%02x=%016llx",i*8,(unsigned long long)header[i]);
+                    fputc('\n',stderr);
+                    /* Record index/layout follows exact instructions53838a..5383d7. */
+                    uint32_t offset=0;memcpy(&offset,request_bytes+0x10,4);
+                    uint64_t index=(uint64_t)request_bytes[0xc]+offset;
+                    uintptr_t descriptors=(uintptr_t)header[5]&~(uintptr_t)15;
+                    unsigned char descriptor[96];
+                    if(index<4096 && descriptors<=UINTPTR_MAX-index*96 &&
+                       kzsf_fault_read(descriptors+index*96,descriptor,sizeof(descriptor))) {
+                        fprintf(stderr,"KILLZONE_ANIMATION_DESCRIPTOR index=%llu bytes=",(unsigned long long)index);
+                        for(unsigned i=0;i<sizeof(descriptor);i++)fprintf(stderr,"%02x",descriptor[i]);
+                        fputc('\n',stderr);
+                    }
+                }
+            }
+            break;
+        }
+        frame_pointer=frame[0];
+    }
+    fflush(stderr);
+}
 /* KZSF 01.81: the pool assertion compares a type-gated node value, not
  * necessarily a GPU fence. Use the fault registers, avoiding a guessed global chain. */
 static void dump_kzsf_pool(const CONTEXT *c) {
@@ -338,6 +507,7 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
         }
     }
     dump_kzsf_pool(c);
+    dump_kzsf_animation_fault(c);
     if (gpu_enabled) gow3gpu_dump_guest_writes(info);
     /* rbp chain (guest and host code keep frame pointers). */
     uintptr_t rbp=(uintptr_t)c->Rbp;
@@ -361,9 +531,1312 @@ static void isa_context_regs(CONTEXT *c, IsaRegs *regs, int to_context) {
     for (int i=0;i<16;++i) { if (to_context) *g[i]=regs->gpr[i]; else regs->gpr[i]=*g[i]; }
     if (to_context) c->EFlags=(DWORD)regs->rflags; else regs->rflags=c->EFlags;
 }
+static int kzsf_free_key(int key) {return (GetAsyncKeyState(key)&0x8000)!=0;}
+static void kzsf_free_input(int active) {
+    runtime_pad_free_camera(active);gow3gpu_free_camera_input(active);
+}
+static const float *kzsf_free_camera_update(CONTEXT *c,int combined) {
+    ULONGLONG now=GetTickCount64();
+    float seconds=kzsf_free_camera_elapsed(kzsf_free_camera_tick,now);
+    int clock_reset=kzsf_free_camera_tick && now<kzsf_free_camera_tick;
+    kzsf_free_camera_tick=now;
+    if(kzsf_free_camera_view!=c->Rbx || clock_reset) {
+        kzsf_free_camera.active=0;kzsf_free_input(0);
+        kzsf_free_camera_view=c->Rbx;
+    }
+    DWORD foreground_pid=0;
+    GetWindowThreadProcessId(GetForegroundWindow(),&foreground_pid);
+    int allowed=foreground_pid==GetCurrentProcessId() && !gow3gpu_overlay_captures_input();
+    int toggle=kzsf_free_key(combined ? VK_F9 : VK_F8),reset=kzsf_free_key(combined ? VK_F10 : VK_F7);
+    if(allowed && toggle && !kzsf_free_camera_toggle_down) {
+        if(kzsf_free_camera.active)kzsf_free_camera.active=0;
+        else {
+            float native[16];
+            if(c->Rbx<=UINTPTR_MAX-0x50 && kzsf_cheat_read(NULL,c->Rbx+0x10,native,64)) {
+                kzsf_free_camera_start(&kzsf_free_camera,native);
+                fprintf(stderr,"KILLZONE_FREE_NATIVE right=%.4f,%.4f,%.4f forward=%.4f,%.4f,%.4f up=%.4f,%.4f,%.4f pitch=%.4f\n",
+                    native[0],native[1],native[2],native[4],native[5],native[6],native[8],native[9],native[10],kzsf_free_camera.pitch);
+            }
+        }
+        kzsf_free_input(kzsf_free_camera.active);
+        fprintf(stderr,"KILLZONE_FREE_CAMERA active=%d view=%p\n",kzsf_free_camera.active,(void*)c->Rbx);
+        fflush(stderr);
+    }
+    if(allowed && reset && !kzsf_free_camera_reset_down && kzsf_free_camera.active) {
+        float native[16];
+        if(c->Rbx<=UINTPTR_MAX-0x50 && kzsf_cheat_read(NULL,c->Rbx+0x10,native,64))
+            kzsf_free_camera_start(&kzsf_free_camera,native);
+    }
+    kzsf_free_camera_toggle_down=toggle;kzsf_free_camera_reset_down=reset;
+    if(!kzsf_free_camera.active)return NULL;
+    float mouse_yaw=0,mouse_pitch=0;
+    gow3gpu_free_camera_mouse(&mouse_yaw,&mouse_pitch); // consume once, including on focus loss
+    if(allowed) {
+        float stick_x=0,stick_y=0,move_x=0,move_y=0,shoulder_forward=0;
+        runtime_pad_free_camera_axes(&move_x,&move_y,&stick_x,&stick_y,&shoulder_forward);
+        float stick_gain=gow3gpu_controller_aim_gain(0)/100.f;
+        KzsfFreeCameraInput input={
+            .right=kzsf_free_key('D')-kzsf_free_key('A')+move_x,
+            .up=combined ? kzsf_free_key('E')-kzsf_free_key('Q')+kzsf_free_key(VK_PRIOR)-kzsf_free_key(VK_NEXT)+shoulder_forward :
+                kzsf_free_key('W')-kzsf_free_key('S')+kzsf_free_key(VK_PRIOR)-kzsf_free_key(VK_NEXT)-move_y,
+            .forward=combined ? kzsf_free_key('W')-kzsf_free_key('S')-move_y : kzsf_free_key('E')-kzsf_free_key('Q')+shoulder_forward,
+            .yaw=(kzsf_free_key(VK_RIGHT)-kzsf_free_key(VK_LEFT))*1.5f+stick_x*2.5f*stick_gain,
+            .pitch=(kzsf_free_key(VK_UP)-kzsf_free_key(VK_DOWN))*1.5f-stick_y*2.5f*stick_gain,
+            .speed=kzsf_free_key(VK_SHIFT) ? 12.f : kzsf_free_key(VK_CONTROL) ? .5f : 3.f};
+        float pitch_before=kzsf_free_camera.pitch;
+        if(!kzsf_free_camera_step(&kzsf_free_camera,input,seconds) ||
+           !kzsf_free_camera_turn(&kzsf_free_camera,mouse_yaw,mouse_pitch)) {
+            kzsf_free_camera.active=0;kzsf_free_input(0);return NULL;
+        }
+        // Record both directions, including time spent at a pole, without
+        // flooding the render-thread log. Needed to diagnose input vs pose.
+        static ULONGLONG last_pitch_trace;
+        static unsigned pitch_trace_count;
+        if((mouse_pitch!=0 || input.pitch!=0) && now-last_pitch_trace>=500 && pitch_trace_count<240) {
+            last_pitch_trace=now;++pitch_trace_count;
+            fprintf(stderr,"KILLZONE_FREE_PITCH mouse=%.5f stick_y=%.4f rate=%.4f dt=%.4f before=%.4f after=%.4f forward_z=%.4f\n",
+                mouse_pitch,stick_y,input.pitch,seconds,pitch_before,kzsf_free_camera.pitch,kzsf_free_camera.matrix[6]);
+            fflush(stderr);
+        }
+        static unsigned look_sources;
+        unsigned sources=(mouse_yaw || mouse_pitch ? 1u : 0u) | (stick_x || stick_y ? 2u : 0u) |
+            (kzsf_free_key(VK_LEFT) || kzsf_free_key(VK_RIGHT) || kzsf_free_key(VK_UP) || kzsf_free_key(VK_DOWN) ? 4u : 0u);
+        if(sources&~look_sources) {
+            look_sources|=sources;
+            fprintf(stderr,"KILLZONE_FREE_LOOK sources=%u mouse=%.4f,%.4f stick=%.3f,%.3f eye=%.3f,%.3f,%.3f\n",
+                sources,mouse_yaw,mouse_pitch,stick_x,stick_y,kzsf_free_camera.matrix[12],
+                kzsf_free_camera.matrix[13],kzsf_free_camera.matrix[14]);fflush(stderr);
+        }
+    }
+    return kzsf_free_camera.matrix;
+}
+static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_call,uintptr_t original) {
+    DWORD foreground_pid=0;
+    GetWindowThreadProcessId(GetForegroundWindow(),&foreground_pid);
+    int key=foreground_pid==GetCurrentProcessId() &&
+        !gow3gpu_overlay_captures_input() && kzsf_free_key(VK_F6);
+    if((hit==1 || (key && !kzsf_camera_observer_key)) &&
+       kzsf_camera_observer_samples<KZSF_CAMERA_OBSERVER_LIMIT) {
+        fprintf(stderr,"KILLZONE_CAMERA_OBSERVER snapshot=%u tick=%llu reason=%s selector_calls=%u bind_calls=%u view_calls=%u\n",
+            ++kzsf_camera_observer_samples,(unsigned long long)GetTickCount64(),hit==1 ? "first-view" : "F6",
+            __atomic_load_n(&kzsf_camera_observer_hits[0],__ATOMIC_RELAXED),
+            __atomic_load_n(&kzsf_camera_observer_hits[1],__ATOMIC_RELAXED),hit);
+        fprintf(stderr,"  camera_execution context=%s original_rva=0x%llx physics_calls=%u pose_override=%d\n",
+            direct_call ? "direct-call" : "VEH",
+            (unsigned long long)(original>=(uintptr_t)image ? original-(uintptr_t)image : 0),
+            kzsf_third_person_sweeps,
+            kzsf_third_person_enabled && __atomic_load_n(&kzsf_free_camera_body_active,__ATOMIC_ACQUIRE));
+        kzsf_observer_snapshot(stderr,c,(uintptr_t)image,kzsf_cheat_read,NULL);
+        KzsfCameraEngineContext engine;
+        uintptr_t tcb=runtime_thread_tcb_peek();
+        if(kzsf_camera_engine_context(tcb,(uintptr_t)image,kzsf_cheat_read,NULL,&engine))
+            fprintf(stderr,"  camera_engine_context status=sampled tid=%lu tcb=%p router=%p heap=%p allocate_rva=0x%llx atomic=0 read_only=1\n",
+                (unsigned long)GetCurrentThreadId(),(void*)engine.tcb,(void*)engine.router,
+                (void*)engine.heap,(unsigned long long)(engine.allocate_method-(uintptr_t)image));
+        else fprintf(stderr,"  camera_engine_context status=unknown tid=%lu tcb=%p read_only=1\n",
+                     (unsigned long)GetCurrentThreadId(),(void*)tcb);
+        fputs("KILLZONE_CAMERA_OBSERVER end\n",stderr);fflush(stderr);
+    }
+    kzsf_camera_observer_key=key;
+    static int character_swap_test=-1,character_swap_key,character_selector_test;
+    if(character_swap_test<0) {
+        const char *value=getenv("KZSF_CHARACTER_SWAP_TEST");
+        character_swap_test=value && !strcmp(value,"1");
+        value=getenv("KZSF_CHARACTER_SELECTOR_TEST");
+        character_selector_test=value && !strcmp(value,"1");
+    }
+    if(character_swap_test && direct_call && !__atomic_load_n(&kzsf_character_level_transition,__ATOMIC_ACQUIRE)) {
+        int input_active=foreground_pid==GetCurrentProcessId() && !gow3gpu_overlay_captures_input();
+        int pressed=input_active && kzsf_free_key(VK_F7);
+        const char *overlay_keys_mode=getenv("KZSF_CHARACTER_OVERLAY_TEST");
+        int overlay_keys=overlay_keys_mode && !strcmp(overlay_keys_mode,"1");
+        static KzsfCharacterModelKeys model_keys;
+        int key_action=overlay_keys ? kzsf_character_model_keys(&model_keys,input_active,pressed,
+            kzsf_free_key(VK_LEFT),kzsf_free_key(VK_RIGHT)) : (pressed && !character_swap_key ? 2 : 0);
+        if(key_action==1 || key_action==-1)gow3gpu_character_cycle(key_action);
+        if(key_action==2) {
+            KzsfFollowBaseline baseline;const char *why=NULL;
+            if(kzsf_follow_baseline_read(c->R14,c->Rbx,(uintptr_t)image,kzsf_cheat_read,NULL,
+                    kzsf_observer_baseline_type,&baseline,&why) &&
+               kzsf_follow_model_state(kzsf_observer_baseline_type(baseline.state,(uintptr_t)image,kzsf_cheat_read,NULL),(uintptr_t)image)) {
+                const char *bundle_mode=getenv("KZSF_CHARACTER_BUNDLE_TEST");
+                if(overlay_keys && bundle_mode && !strcmp(bundle_mode,"1")) {
+                    int active=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
+                    if(__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE)!=baseline.owner)active=0;
+                    gow3gpu_character_select(active ? 0 : kzsf_character_last_model);
+                } else if(character_selector_test)
+                    kzsf_observer_character_cycle(stderr,baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),-1);
+                else kzsf_observer_commando_toggle(stderr,baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek());
+            }
+            else {fprintf(stderr,"KILLZONE_CHARACTER_SWAP status=refused reason=normal-gameplay-required baseline_reason=%s freecam=%d view=%p render=%p\n",
+                why ? why : "model-state",kzsf_free_camera.active,(void*)c->R14,(void*)c->Rbx);fflush(stderr);}
+        }
+        character_swap_key=pressed;
+        static int overlay_selector=-1;
+        static uint64_t overlay_pending,overlay_reply;
+        static int overlay_status,overlay_last_kind;
+        static unsigned level_epoch;
+        static uintptr_t overlay_discovery_owner;
+        static ULONGLONG bundle_started,bundle_polled;
+        static int bundle_result;
+        if(level_epoch!=kzsf_character_level_epoch) {
+            level_epoch=kzsf_character_level_epoch;overlay_pending=overlay_reply=0;
+            overlay_status=overlay_last_kind=0;overlay_discovery_owner=0;bundle_started=bundle_polled=0;bundle_result=0;
+            memset(&model_keys,0,sizeof(model_keys));character_swap_key=0;
+        }
+        if(overlay_selector<0) {
+            const char *value=getenv("KZSF_CHARACTER_OVERLAY_TEST");
+            overlay_selector=value && !strcmp(value,"1");
+        }
+        if(overlay_selector) {
+            uint64_t request=gow3gpu_character_request();
+            if(request){overlay_pending=request;overlay_reply=request;overlay_status=2;bundle_started=GetTickCount64();bundle_polled=0;bundle_result=0;}
+            KzsfFollowBaseline b;const char *reason=NULL;
+            int baseline_ready=kzsf_follow_baseline_read(c->R14,c->Rbx,(uintptr_t)image,kzsf_cheat_read,NULL,
+                kzsf_observer_baseline_type,&b,&reason);
+            int ready=baseline_ready &&
+                kzsf_follow_model_state(kzsf_observer_baseline_type(b.state,(uintptr_t)image,kzsf_cheat_read,NULL),(uintptr_t)image);
+            int kind=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
+            uint64_t available=kzsf_character_available_models;
+            if(!ready) {
+                static uint64_t reported_request;static const char *reported_reason;static unsigned blocked_reports;
+                const char *blocked=baseline_ready ? "model-state" : reason ? reason : "unknown";
+                if(overlay_pending && blocked_reports<64 &&
+                   (reported_request!=overlay_pending || !reported_reason || strcmp(reported_reason,blocked))) {
+                    reported_request=overlay_pending;reported_reason=blocked;++blocked_reports;
+                    fprintf(stderr,"KILLZONE_CHARACTER_REQUEST status=blocked request=%llu reason=%s freecam=%d view=%p render=%p owner=%p state_rva=0x%llx\n",
+                        (unsigned long long)overlay_pending,blocked,kzsf_free_camera.active,(void*)c->R14,(void*)c->Rbx,
+                        (void*)(baseline_ready ? b.owner : 0),
+                        (unsigned long long)(baseline_ready ? kzsf_observer_baseline_type(b.state,(uintptr_t)image,kzsf_cheat_read,NULL)-(uintptr_t)image : 0));
+                    fflush(stderr);
+                }
+                gow3gpu_character_publish(overlay_reply,kind,1,available);
+            } else {
+                if(__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE)!=b.owner)kind=0;
+                if(overlay_pending) {
+                    int wanted=(int)(uint32_t)overlay_pending-1;
+                    /* The default actor can already wear a listed outfit
+                     * (e.g. Chapter3 SpaceSuit). Selecting it restores default
+                     * instead of searching for a second copy of its body. */
+                    if(wanted>0) {
+                        KzsfCharacterInventory current_player;char default_name[128];
+                        if(kzsf_character_inventory_read(b.owner,kzsf_cheat_read,NULL,&current_player) &&
+                           kzsf_character_resource_name(current_player.resource,(uintptr_t)image,kzsf_cheat_read,NULL,default_name) &&
+                           !strcmp(default_name,kzsf_character_model_name(wanted)))wanted=0;
+                    }
+                    const char *bundle_mode=getenv("KZSF_CHARACTER_BUNDLE_TEST");
+                    int loading=0;
+                    if(wanted>0 && bundle_mode && !strcmp(bundle_mode,"1")) {
+                        ULONGLONG now=GetTickCount64();
+                        if(!bundle_polled || now-bundle_polled>=250) {
+                            KzsfCameraEngineContext context;const char *why="bundle-engine-context";
+                            bundle_polled=now;bundle_result=-1;
+                            if(kzsf_camera_engine_context(runtime_thread_tcb_peek(),(uintptr_t)image,kzsf_cheat_read,NULL,&context) &&
+                               context.allocate_method==(uintptr_t)image+0x4f67a0) {
+                                uintptr_t base=(uintptr_t)image;
+                                KzsfCharacterBundleApi api=kzsf_character_bundle_api(base);
+                                bundle_result=kzsf_character_bundle_request(wanted,base,kzsf_cheat_read,NULL,api,&kzsf_character_bundle_leases[wanted],&why);
+                            }
+                            if(bundle_result!=0) {
+                                fprintf(stderr,"KILLZONE_CHARACTER_BUNDLE model=%s result=%d reason=%s\n",kzsf_character_model_name(wanted),bundle_result,why);fflush(stderr);
+                            }
+                        }
+                        loading=bundle_result!=1;
+                        if(bundle_result<0 || now-bundle_started>30000) {
+                            fprintf(stderr,"KILLZONE_CHARACTER_BUNDLE status=refused model=%s reason=%s\n",kzsf_character_model_name(wanted),bundle_result<0 ? "native-loader-refused" : "load-timeout");fflush(stderr);
+                            overlay_pending=0;overlay_status=4;
+                        }
+                    }
+                    if(!overlay_pending || loading) { /* Wait for native resource initialization before touching the player. */ }
+                    else if(kind==wanted){overlay_pending=0;overlay_status=0;}
+                    else {
+                        int restoring_first=kind!=0;
+                        /* Validate the requested named appearance while the
+                         * old one is still active. A missing/rejected choice
+                         * must not strand the player on the default body. */
+                        if(restoring_first && wanted>0) {
+                            kzsf_observer_character_cycle(stderr,b.owner,(uintptr_t)image,kzsf_cheat_read,NULL,
+                                runtime_thread_tcb_peek(),-2);
+                            available=kzsf_character_available_owner==b.owner ? kzsf_character_available_models : 1;
+                            if(!(available&(UINT64_C(1)<<wanted))) {
+                                fprintf(stderr,"KILLZONE_CHARACTER_SWAP status=refused reason=requested-model-unavailable retained_model=%s\n",kzsf_character_model_name(kind));fflush(stderr);
+                                overlay_pending=0;overlay_status=3;
+                            }
+                        }
+                        if(overlay_pending)kzsf_observer_character_cycle(stderr,b.owner,(uintptr_t)image,kzsf_cheat_read,NULL,
+                            runtime_thread_tcb_peek(),restoring_first ? 0 : wanted);
+                        kind=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
+                        if(!overlay_pending) { /* Preflight refusal preserves active appearance. */ }
+                        else if(kind==wanted){overlay_pending=0;overlay_status=0;}
+                        else if(restoring_first && kind==0)overlay_status=2;
+                        else {
+                            available=kzsf_character_available_owner==b.owner ? kzsf_character_available_models : 1;
+                            overlay_status=(available&(UINT64_C(1)<<wanted)) ? 4 : 3;overlay_pending=0;
+                        }
+                    }
+                } else if(overlay_discovery_owner!=b.owner) {
+                    /* Full native discovery/rig validation is expensive. Run
+                     * once per actor/level, then revalidate on explicit model
+                     * requests above; never audit all models on an idle timer. */
+                    overlay_discovery_owner=b.owner;
+                    kzsf_observer_character_cycle(stderr,b.owner,(uintptr_t)image,kzsf_cheat_read,NULL,
+                        runtime_thread_tcb_peek(),-2);
+                }
+                if(!overlay_pending && kind!=overlay_last_kind)overlay_status=0;
+                overlay_last_kind=kind;
+                available=kzsf_character_available_owner==b.owner ? kzsf_character_available_models : 1;
+                gow3gpu_character_publish(overlay_reply,kind,overlay_status,available);
+            }
+        }
+        static unsigned visibility_tick;
+        /* These shared-body facial variants can expose the native default
+         * head when traversal re-enables a base-body slot. Check each normal
+         * camera callback rather than waiting for periodic maintenance. */
+        int visibility_kind=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
+        if(++visibility_tick%30==0 || visibility_kind>=5 ||
+           __atomic_load_n(&kzsf_free_camera_body_active,__ATOMIC_ACQUIRE)) {
+            KzsfFollowBaseline visibility_baseline;const char *visibility_reason=NULL;
+            if(kzsf_follow_baseline_read(c->R14,c->Rbx,(uintptr_t)image,kzsf_cheat_read,NULL,
+                    kzsf_observer_baseline_type,&visibility_baseline,&visibility_reason) &&
+                    kzsf_follow_model_state(kzsf_observer_baseline_type(visibility_baseline.state,(uintptr_t)image,kzsf_cheat_read,NULL),(uintptr_t)image))
+                kzsf_observer_body_visibility(stderr,visibility_baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek());
+        }
+    }
+    /* One resource capture after stable gameplay ownership. The explicit
+     * diagnostic may call the native loaded-object query, never a setter;
+     * allocator TLS/code checks apply and it never runs in the VEH path. */
+    static int resource_test=-1;
+    static uintptr_t resource_owner;
+    static unsigned resource_stable,resource_attempts;
+    if(resource_test<0) {
+        const char *value=getenv("KZSF_CHARACTER_RESOURCE_TEST");
+        resource_test=value && !strcmp(value,"1");
+    }
+    if(resource_test && direct_call && resource_attempts<3) {
+        KzsfFollowBaseline baseline;const char *why=NULL;
+        if(kzsf_follow_baseline_read(c->R14,c->Rbx,(uintptr_t)image,kzsf_cheat_read,NULL,
+                kzsf_observer_baseline_type,&baseline,&why)) {
+            if(resource_owner!=baseline.owner){resource_owner=baseline.owner;resource_stable=0;}
+            if(++resource_stable>=60) {
+                resource_stable=0;++resource_attempts;
+                if(kzsf_observer_character_resources(stderr,baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,
+                        runtime_thread_tcb_peek()))
+                    resource_attempts=3;
+                fflush(stderr);
+            }
+        } else resource_stable=0;
+    }
+}
+/* Direct SysV call site: original camera method runs exactly once before observation. */
+typedef struct {uintptr_t entity,type,partner;unsigned partner_hits;} KzsfCameraContact;
+static uintptr_t kzsf_camera_ignore_grenade(void *opaque,uintptr_t association) {
+    KzsfCameraContact *contact=opaque;contact->entity=contact->type=0;
+    uintptr_t base=(uintptr_t)image;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,association,0x50,&contact->entity,8))return 0;
+    contact->type=kzsf_observer_baseline_type(contact->entity,base,kzsf_cheat_read,NULL);
+    if(contact->partner && contact->entity==contact->partner && contact->type==base+0x3ca98b0) {
+        ++contact->partner_hits;return contact->entity;
+    }
+    /* World Grenade/GrenadeRep, not InventoryGrenade. Unknown objects stay
+     * solid. The native sorted exclusion list is extended before resweeping. */
+    if(contact->type!=base+0x3cbf2a8 && contact->type!=base+0x3cbf388)return 0;
+    static unsigned reports;
+    if(reports++<8) {
+        fprintf(stderr,"KILLZONE_THIRD_PERSON_PROJECTILE ignore=grenade entity=%p type_rva=0x%llx\n",
+            (void*)contact->entity,(unsigned long long)(contact->type-base));fflush(stderr);
+    }
+    if(reports<=12)kzsf_third_person_throw_contact_frames=12;
+    return contact->entity;
+}
+static void kzsf_third_person_update(uintptr_t render,uintptr_t view,unsigned frame) {
+    DWORD pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&pid);
+    int focused=pid==GetCurrentProcessId() && !gow3gpu_overlay_captures_input();
+    int key=focused && kzsf_free_key(VK_F8);const char *why="disabled";
+    KzsfFollowBaseline baseline;
+    int eligible=(kzsf_third_person.requested || key) &&
+        kzsf_follow_baseline_read(view,render,(uintptr_t)image,kzsf_cheat_read,NULL,
+                                 kzsf_observer_baseline_type,&baseline,&why);
+    uint64_t tick=GetTickCount64();
+    float native[16],pose[16];int readable=kzsf_zoom_read(kzsf_cheat_read,NULL,render,0x10,native,sizeof(native));
+    int previous=kzsf_third_person.requested;
+    uintptr_t previous_view=kzsf_third_person.view;uint64_t previous_tick=kzsf_third_person.tick;
+    int active=kzsf_third_person_step(&kzsf_third_person,view,tick,focused,key,
+                                     eligible,readable ? native : NULL,pose);
+    if(previous && !kzsf_third_person.requested)
+        why=previous_view && previous_view!=view ? "view-changed" :
+            previous_tick && tick<previous_tick ? "clock-reset" : "f8-disabled";
+    if(active) {
+        KzsfCameraEngineContext engine;uintptr_t world=0;float fraction=1;int hit=0;
+        uintptr_t base=(uintptr_t)image;
+        KzsfCameraPhysics api={(KzsfCameraExclude)(base+0x64ebb0),
+            (KzsfCameraSweep)(base+0x4f00e0),(KzsfCameraRelease)(base+0x3295d0)};
+        KzsfCameraContact contact={0};
+        contact.partner=kzsf_execution_partner(&baseline,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type);
+        KzsfCameraExtraIgnore extra={(KzsfCameraAddIgnore)(base+0x4ca390),
+            (KzsfCameraSortIgnore)(base+0x4ca450),kzsf_camera_ignore_grenade,&contact};
+        if(!kzsf_third_person_collision_ready ||
+           !kzsf_camera_engine_context(runtime_thread_tcb_peek(),base,kzsf_cheat_read,NULL,&engine) ||
+           engine.allocate_method!=base+0x4f67a0 ||
+           !kzsf_zoom_read(kzsf_cheat_read,NULL,base,0x3b490e0,&world,8) || !world) {
+            active=0;why="collision-context-unknown";
+        } else {
+            ++kzsf_third_person_sweeps;
+            if(kzsf_third_person_sweeps==1) {
+                fprintf(stderr,"KILLZONE_THIRD_PERSON_COLLISION phase=begin owner=%p world=%p tid=%lu\n",
+                    (void*)baseline.owner,(void*)world,(unsigned long)GetCurrentThreadId());fflush(stderr);
+            }
+            if(!kzsf_camera_collision_query_ex(base,world,baseline.owner,api,native+12,pose+12,&fraction,&hit,&extra)) {
+                active=0;why="collision-result-unknown";
+            } else {
+                static uintptr_t partner_report_layer;static unsigned partner_reports;
+                if(contact.partner_hits && partner_report_layer!=baseline.combat_layer && partner_reports<32) {
+                    partner_report_layer=baseline.combat_layer;++partner_reports;
+                    fprintf(stderr,"KILLZONE_THIRD_PERSON_EXECUTION_PARTNER layer=%p partner=%p ignored=%u fraction=%.3f wall_hit=%d\n",
+                        (void*)baseline.combat_layer,(void*)contact.partner,contact.partner_hits,fraction,hit);fflush(stderr);
+                }
+                static uintptr_t execution_view,execution_layer;
+                static int execution_candidate=-1;
+                if(execution_view!=view || execution_layer!=baseline.combat_layer) {
+                    execution_view=view;execution_layer=baseline.combat_layer;execution_candidate=-1;
+                }
+                float primary_clearance=kzsf_third_person_clearance(native,pose,fraction);
+                if(baseline.combat_layer && (execution_candidate>=0 || primary_clearance<.65f)) {
+                    float best[16],best_fraction=fraction,best_clearance=primary_clearance;
+                    int best_hit=hit,best_index=-1;KzsfCameraContact primary_contact=contact;
+                    /* Prefer the already chosen shoulder while it has room.
+                     * A different direction is a separately swept placement;
+                     * never interpolate between shoulders through scenery. */
+                    for(unsigned attempt=0;attempt<3;attempt++) {
+                        unsigned index=execution_candidate>=0 ? ((unsigned)execution_candidate+attempt)%3 : attempt;
+                        float candidate[16],candidate_fraction=1;int candidate_hit=0;
+                        if(!kzsf_third_person_combat_candidate(native,index,candidate))continue;
+                        ++kzsf_third_person_sweeps;
+                        if(!kzsf_camera_collision_query_ex(base,world,baseline.owner,api,native+12,candidate+12,
+                                &candidate_fraction,&candidate_hit,&extra))continue;
+                        float clearance=kzsf_third_person_clearance(native,candidate,candidate_fraction);
+                        if(clearance<.7f || clearance<best_clearance+.15f)continue;
+                        memcpy(best,candidate,sizeof(best));best_fraction=candidate_fraction;
+                        best_clearance=clearance;best_hit=candidate_hit;best_index=(int)index;
+                        if((int)index==execution_candidate)break;
+                    }
+                    static unsigned execution_reports;
+                    if(best_index>=0) {
+                        if(execution_candidate!=best_index)kzsf_third_person_boom.valid=0;
+                        memcpy(pose,best,sizeof(best));fraction=best_fraction;hit=best_hit;
+                    }
+                    if(execution_reports<48 && (execution_candidate!=best_index || primary_clearance<.3f)) {
+                        fprintf(stderr,"KILLZONE_THIRD_PERSON_EXECUTION frame=%u layer=%p candidate=%d primary_clearance=%.3f selected_clearance=%.3f contact=%p type_rva=0x%llx\n",
+                            frame,(void*)baseline.combat_layer,best_index,primary_clearance,best_clearance,
+                            (void*)primary_contact.entity,(unsigned long long)(primary_contact.type>=base ? primary_contact.type-base : 0));
+                        fflush(stderr);++execution_reports;
+                    }
+                    execution_candidate=best_index;
+                }
+                kzsf_third_person_hits+=(unsigned)hit;
+                if(kzsf_third_person_sweeps==1 || (hit && kzsf_third_person_hits==1)) {
+                    fprintf(stderr,"KILLZONE_THIRD_PERSON_COLLISION native_call=1 hit=%d fraction=%.3f sweeps=%u hits=%u\n",
+                        hit,fraction,kzsf_third_person_sweeps,kzsf_third_person_hits);fflush(stderr);
+                }
+                active=kzsf_camera_boom_apply(&kzsf_third_person_boom,view,tick,native,pose,fraction);
+                if(!active) {
+                    why="camera-arm-obstructed";
+                    static unsigned contacts;
+                    if(fraction<.15f && contacts++<16) {
+                        fprintf(stderr,"KILLZONE_THIRD_PERSON_CONTACT fraction=%.3f entity=%p type_rva=0x%llx\n",
+                            fraction,(void*)contact.entity,
+                            (unsigned long long)(contact.type>=base ? contact.type-base : 0));fflush(stderr);
+                    }
+                }
+                if(active) {
+                    /* Resolve the native eye's aim line against the world, then
+                     * converge the final collision-shortened shoulder camera.
+                     * This camera-solid filter is not a ballistic material test. */
+                    float end[3],aim_fraction=1;int aim_hit=0;
+                    for(int i=0;i<3;i++)end[i]=native[12+i]+250*native[4+i];
+                    ++kzsf_third_person_aim_traces;
+                    if(!kzsf_camera_collision_trace(base,world,baseline.owner,api,native+12,end,.01f,500,
+                            &aim_fraction,&aim_hit) ||
+                       !kzsf_third_person_converge(native,pose,250*aim_fraction)) {
+                        active=0;why="aim-target-unknown";
+                    } else if(kzsf_third_person_aim_traces==1) {
+                        fprintf(stderr,"KILLZONE_THIRD_PERSON_AIM native_call=1 hit=%d range=%.3f filter=camera-solid radius=0.01\n",
+                            aim_hit,250*aim_fraction);fflush(stderr);
+                    }
+                }
+            }
+        }
+    } else kzsf_third_person_boom.valid=0;
+    if(active && (render>UINTPTR_MAX-0x50 || !kzsf_turn_write(NULL,render+0x10,pose,sizeof(pose)))) {
+        active=0;kzsf_third_person.requested=0;why="pose-write-failed";
+    }
+    int was_hidden=__atomic_load_n(&kzsf_third_person_hide_body,__ATOMIC_RELAXED);
+    int hide=active && kzsf_third_person_body_hidden(was_hidden,native,pose);
+    __atomic_store_n(&kzsf_third_person_hide_body,hide,__ATOMIC_RELEASE);
+    if(hide!=was_hidden) {
+        fprintf(stderr,"KILLZONE_THIRD_PERSON_BODY hidden=%d reason=close-camera\n",hide);fflush(stderr);
+    }
+    int old=__atomic_exchange_n(&kzsf_free_camera_body_active,active,__ATOMIC_ACQ_REL);
+    static uintptr_t prior_combat_layer;static unsigned combat_reports;
+    uintptr_t combat_layer=eligible ? baseline.combat_layer : 0;
+    if(combat_layer && combat_layer!=prior_combat_layer && combat_reports<16) {
+        fprintf(stderr,"KILLZONE_THIRD_PERSON_COMBAT event=%u frame=%u active=%d component=%p layer=%p resource=%p transition=%p\n",
+            ++combat_reports,frame,active,(void*)baseline.combat_component,(void*)combat_layer,
+            (void*)baseline.combat_resource,(void*)baseline.combat_transition);fflush(stderr);
+    }
+    prior_combat_layer=combat_layer;
+    static uintptr_t prior_ladder;static unsigned ladder_reports;
+    uintptr_t ladder=eligible && baseline.ladder_controller ? baseline.camera_owner : 0;
+    if(ladder && ladder!=prior_ladder && ladder_reports<16) {
+        fprintf(stderr,"KILLZONE_THIRD_PERSON_INTERACTION event=%u frame=%u active=%d owner=%p actor=%p controller=%p\n",
+            ++ladder_reports,frame,active,(void*)ladder,(void*)baseline.owner,
+            (void*)baseline.ladder_controller);fflush(stderr);
+        kzsf_observer_object(stderr,"interaction-actor-controller",baseline.controller,
+                             (uintptr_t)image,kzsf_cheat_read,NULL);
+    }
+    prior_ladder=ladder;
+    /* Bounded release evidence, automatically paired with the frame that wrote
+     * the pose. Distinguishes eligibility loss from an animated native pose or
+     * model visibility change without another manual snapshot sequence. */
+    static uintptr_t prior_grenade;static unsigned throw_events,throw_frames;
+    uintptr_t grenade=eligible ? baseline.throwable : 0;
+    if(kzsf_third_person.requested && grenade!=prior_grenade && (grenade || prior_grenade) && throw_events<12) {
+        fprintf(stderr,"KILLZONE_THIRD_PERSON_THROW event=%u phase=%s frame=%u tick=%llu item=%p\n",
+            ++throw_events,grenade ? "equipped" : "released",frame,(unsigned long long)tick,(void*)grenade);
+        throw_frames=12;
+    }
+    prior_grenade=grenade;
+    if((throw_frames || kzsf_third_person_throw_contact_frames) && readable && kzsf_third_person.requested) {
+        if(throw_frames)--throw_frames;
+        if(kzsf_third_person_throw_contact_frames)--kzsf_third_person_throw_contact_frames;
+        fprintf(stderr,"KILLZONE_THIRD_PERSON_THROW_FRAME frame=%u tick=%llu active=%d eligible=%d reason=%s native=%.3f,%.3f,%.3f eye=%.3f,%.3f,%.3f fp_hooks=%u world_hooks=%u\n",
+            frame,(unsigned long long)tick,active,eligible,active ? "native-follow" : why,
+            native[12],native[13],native[14],active ? pose[12] : native[12],
+            active ? pose[13] : native[13],active ? pose[14] : native[14],
+            __atomic_load_n(&kzsf_model_view_events[0],__ATOMIC_RELAXED),
+            __atomic_load_n(&kzsf_model_view_events[1],__ATOMIC_RELAXED));fflush(stderr);
+    }
+    if(old!=active || previous!=kzsf_third_person.requested) {
+        fprintf(stderr,"KILLZONE_THIRD_PERSON requested=%d active=%d reason=%s collision=native-sphere sweeps=%u hits=%u arm=%.3f\n",
+            kzsf_third_person.requested,active,active ? "native-follow" : why,
+            kzsf_third_person_sweeps,kzsf_third_person_hits,kzsf_third_person_boom.fraction);fflush(stderr);
+    }
+        /* Capture distinct rejected actions even when already in first person.
+         * Collision collapse must not consume the action evidence budget. */
+        static unsigned action_reports;
+        static uintptr_t last_state,last_controller,last_override,last_source;
+        static const char *last_reason;static int32_t last_layers=-2;
+        if(kzsf_third_person.requested && !active && !eligible && action_reports<64) {
+            uintptr_t source=0,owner=0,state=0,controller=0,override=0;int32_t layers=-1;
+            kzsf_zoom_read(kzsf_cheat_read,NULL,view,0x18,&owner,8);
+            if(kzsf_observer_baseline_type(owner,(uintptr_t)image,kzsf_cheat_read,NULL)==(uintptr_t)image+0x3ca98b0) {
+                kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x900,&state,8);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x290,&controller,8);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x8b8,&override,8);
+            }
+            kzsf_zoom_read(kzsf_cheat_read,NULL,view,0x38,&source,8);
+            if(source>0x48 && kzsf_observer_baseline_type(source-0x48,(uintptr_t)image,kzsf_cheat_read,NULL)==(uintptr_t)image+0x3c8ebd0)
+                kzsf_zoom_read(kzsf_cheat_read,NULL,source-0x48,0x278,&layers,4);
+            if(!last_reason || strcmp(why,last_reason) || state!=last_state || controller!=last_controller ||
+               override!=last_override || source!=last_source || layers!=last_layers) {
+            last_reason=why;last_state=state;last_controller=controller;last_override=override;
+            last_source=source;last_layers=layers;
+            fprintf(stderr,"KILLZONE_THIRD_PERSON_ACTION sample=%u reason=%s override=%p layers=%d\n",
+                    ++action_reports,why,(void*)override,layers);fflush(stderr);
+            kzsf_observer_object(stderr,"action-state",state,(uintptr_t)image,kzsf_cheat_read,NULL);
+            kzsf_observer_object(stderr,"action-controller",controller,(uintptr_t)image,kzsf_cheat_read,NULL);
+            kzsf_observer_object(stderr,"action-override",override,(uintptr_t)image,kzsf_cheat_read,NULL);
+            if(kzsf_observer_baseline_type(override,(uintptr_t)image,kzsf_cheat_read,NULL)==(uintptr_t)image+0x3c74dc0) {
+                uintptr_t associated=0;kzsf_zoom_read(kzsf_cheat_read,NULL,override,0x38,&associated,8);
+                kzsf_observer_object(stderr,"action-associated",associated,(uintptr_t)image,kzsf_cheat_read,NULL);
+            }
+            kzsf_observer_object(stderr,"action-owner",owner,(uintptr_t)image,kzsf_cheat_read,NULL);
+            uintptr_t interaction_type=kzsf_observer_baseline_type(owner,(uintptr_t)image,kzsf_cheat_read,NULL);
+            if(interaction_type==(uintptr_t)image+0x3c9a390 || interaction_type==(uintptr_t)image+0x3c99180 ||
+               interaction_type==(uintptr_t)image+0x3c9e7c0 || interaction_type==(uintptr_t)image+0x3c9c150) {
+                uintptr_t actor=0,ladder_control=0,control_owner=0,control_source=0,user=0,stack=0;
+                int32_t count=-1;
+                kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x598,&actor,8);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x290,&ladder_control,8);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,ladder_control,0x40,&control_owner,8);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,ladder_control,0x28,&control_source,8);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,view,0x10,&user,8);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,user,0xc8,&count,4);
+                kzsf_zoom_read(kzsf_cheat_read,NULL,user,0xd0,&stack,8);
+                fprintf(stderr,"  ladder_owner actor_interface=%p controller=%p controller_owner=%p camera_interface=%p stack_count=%d\n",
+                    (void*)actor,(void*)ladder_control,(void*)control_owner,(void*)control_source,count);
+                kzsf_observer_object(stderr,"ladder-controller",ladder_control,(uintptr_t)image,kzsf_cheat_read,NULL);
+                if(actor>0x48) {
+                    uintptr_t use=0,associated=0,actor_state=0;
+                    kzsf_zoom_read(kzsf_cheat_read,NULL,actor-0x48,0x8b8,&use,8);
+                    kzsf_zoom_read(kzsf_cheat_read,NULL,use,0x38,&associated,8);
+                    kzsf_zoom_read(kzsf_cheat_read,NULL,actor-0x48,0x900,&actor_state,8);
+                    fprintf(stderr,"  ladder_actor use=%p associated=%p\n",(void*)use,(void*)associated);
+                    kzsf_observer_object(stderr,"ladder-actor",actor-0x48,(uintptr_t)image,kzsf_cheat_read,NULL);
+                    kzsf_observer_object(stderr,"ladder-state",actor_state,(uintptr_t)image,kzsf_cheat_read,NULL);
+                    uintptr_t actor_control=0,actor_inventory=0,actor_item=0;
+                    kzsf_zoom_read(kzsf_cheat_read,NULL,actor-0x48,0x290,&actor_control,8);
+                    kzsf_observer_object(stderr,"interaction-actor-controller",actor_control,(uintptr_t)image,kzsf_cheat_read,NULL);
+                    if(kzsf_zoom_read(kzsf_cheat_read,NULL,actor-0x48,0xa48,&actor_inventory,8) &&
+                       kzsf_zoom_read(kzsf_cheat_read,NULL,actor_inventory,0x68,&actor_item,8) && actor_item>0x48)
+                        kzsf_observer_object(stderr,"interaction-actor-item",actor_item-0x48,(uintptr_t)image,kzsf_cheat_read,NULL);
+                    if(kzsf_observer_baseline_type(actor_state,(uintptr_t)image,kzsf_cheat_read,NULL)==(uintptr_t)image+0x3cac7a8) {
+                        uintptr_t pose_actor=0,pose_owner=0;
+                        kzsf_zoom_read(kzsf_cheat_read,NULL,actor_state,0x28,&pose_actor,8);
+                        kzsf_zoom_read(kzsf_cheat_read,NULL,actor_state,0x40,&pose_owner,8);
+                        fprintf(stderr,"  interaction_pose actor=%p owner=%p\n",(void*)pose_actor,(void*)pose_owner);
+                    }
+                }
+                if(count>0 && count<=4)for(int i=0;i<count;i++) {
+                    uintptr_t entry=0;kzsf_zoom_read(kzsf_cheat_read,NULL,stack,(size_t)i*0x18,&entry,8);
+                    fprintf(stderr,"  ladder_stack index=%d interface=%p\n",i,(void*)entry);
+                }
+            }
+            if(source>0x48)kzsf_observer_object(stderr,"action-source",source-0x48,(uintptr_t)image,kzsf_cheat_read,NULL);
+            if(source>0x48)kzsf_observer_layers(stderr,source-0x48,
+                kzsf_observer_baseline_type(source-0x48,(uintptr_t)image,kzsf_cheat_read,NULL),
+                (uintptr_t)image,kzsf_cheat_read,NULL);
+            uintptr_t inventory=0,item=0;
+            if(kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0xa48,&inventory,8) &&
+               kzsf_zoom_read(kzsf_cheat_read,NULL,inventory,0x68,&item,8) && item>0x48)
+                kzsf_observer_object(stderr,"action-item",item-0x48,(uintptr_t)image,kzsf_cheat_read,NULL);
+            fflush(stderr);
+            }
+        }
+        if(active)last_reason=NULL;
+}
+typedef struct {uintptr_t render,view,original;unsigned hit;} KzsfCameraVisit;
+static void kzsf_camera_follow_task(void *opaque) {
+    KzsfCameraVisit *v=opaque;kzsf_third_person_update(v->render,v->view,v->hit);
+    static int combined=-1;
+    if(combined<0){const char *value=getenv("KZSF_FOLLOW_FREE_CAMERA");combined=value && !strcmp(value,"1");}
+    if(combined) {
+        CONTEXT context;memset(&context,0,sizeof(context));context.Rbx=v->render;
+        const float *pose=kzsf_free_camera_update(&context,1);
+        if(pose) {
+            if(!kzsf_turn_write(NULL,v->render+0x10,pose,64)) {
+                kzsf_free_camera.active=0;kzsf_free_input(0);
+            } else {
+                __atomic_store_n(&kzsf_free_camera_body_active,1,__ATOMIC_RELEASE);
+                __atomic_store_n(&kzsf_third_person_hide_body,0,__ATOMIC_RELEASE);
+            }
+        }
+    }
+}
+static void kzsf_camera_observer_task(void *opaque) {
+    KzsfCameraVisit *v=opaque;CONTEXT c;memset(&c,0,sizeof(c));c.Rbx=v->render;c.R14=v->view;
+    kzsf_camera_observe_view(&c,v->hit,1,v->original);
+}
+static ABI void kzsf_camera_bridge_visit(uintptr_t render,uintptr_t view,uintptr_t original) {
+    ((void (ABI *)(uintptr_t))original)(render);
+    unsigned hit=__atomic_add_fetch(&kzsf_camera_observer_hits[2],1,__ATOMIC_RELAXED);
+    KzsfCameraVisit visit={render,view,original,hit};
+    kzsf_camera_dispatch(&kzsf_camera_follow_lock,&kzsf_camera_observer_lock,
+        kzsf_third_person_enabled ? kzsf_camera_follow_task : NULL,kzsf_camera_observer_task,&visit);
+}
+static uintptr_t kzsf_character_level_exit_original;
+/* Enter before d65530 destroys player actors or the section lump table.
+ * Balance only imported counts through native61d210/61d350. */
+static ABI void kzsf_character_level_exit_visit(uintptr_t state) {
+    void (ABI *original)(uintptr_t)=(void (ABI *)(uintptr_t))kzsf_character_level_exit_original;
+    if(__atomic_exchange_n(&kzsf_character_level_transition,1,__ATOMIC_ACQ_REL)){original(state);return;}
+    gow3gpu_character_selector_enable(0);
+    uintptr_t base=(uintptr_t)image;KzsfCameraEngineContext context;
+    int engine=kzsf_camera_engine_context(runtime_thread_tcb_peek(),base,kzsf_cheat_read,NULL,&context) &&
+        context.allocate_method==base+0x4f67a0 && kzsf_character_bundle_guards(base,kzsf_cheat_read,NULL);
+    fprintf(stderr,"KILLZONE_CHARACTER_LEVEL_EXIT phase=begin engine_context=%d\n",engine);fflush(stderr);
+    if(engine) {
+        KzsfCharacterBundleApi api=kzsf_character_bundle_api(base);
+        uintptr_t manager=0,worker=0;unsigned char busy=0;
+        if(kzsf_zoom_read(kzsf_cheat_read,NULL,base,0x3c67760,&manager,8) && manager &&
+           kzsf_zoom_read(kzsf_cheat_read,NULL,manager,0xd8,&worker,8) && worker &&
+           kzsf_zoom_read(kzsf_cheat_read,NULL,worker,0x88,&busy,1) && busy==1)api.wait(worker);
+        uintptr_t owner=__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE);
+        if(owner && kzsf_observer_baseline_type(owner,base,kzsf_cheat_read,NULL)==base+0x3ca98b0)
+            kzsf_observer_character_cycle(stderr,owner,base,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),0);
+        for(int kind=1;kind<KZSF_CHARACTER_MODEL_COUNT;kind++) {
+            if(!kzsf_character_bundle_leases[kind].queued)continue;
+            int result=kzsf_character_bundle_release(kind,base,kzsf_cheat_read,NULL,api,&kzsf_character_bundle_leases[kind]);
+            fprintf(stderr,"KILLZONE_CHARACTER_LEVEL_EXIT model=%s release=%d\n",kzsf_character_model_name(kind),result);fflush(stderr);
+        }
+    }
+    original(state);
+    /* Actors and old render nodes are now gone. Drop host identity tokens,
+     * including cached discovery results, before the next level can use them. */
+    kzsf_character_render_publish(0,0,-1,0,0,0);
+    __atomic_store_n(&kzsf_character_face_source_soldier,0,__ATOMIC_RELEASE);
+    memset(&kzsf_character_selected_face,0,sizeof(kzsf_character_selected_face));
+    memset(kzsf_character_bundle_leases,0,sizeof(kzsf_character_bundle_leases));
+    for(int kind=0;kind<KZSF_CHARACTER_MODEL_COUNT;kind++)__atomic_store_n(&kzsf_character_known_parts[kind],0,__ATOMIC_RELEASE);
+    kzsf_character_available_models=1;kzsf_character_available_owner=0;
+    kzsf_character_level_epoch++;
+    gow3gpu_character_reset();
+    __atomic_store_n(&kzsf_character_level_transition,0,__ATOMIC_RELEASE);
+    gow3gpu_character_selector_enable(1);
+    fputs("KILLZONE_CHARACTER_LEVEL_EXIT phase=complete host_state=reset\n",stderr);fflush(stderr);
+}
+static uintptr_t kzsf_character_draw_original;
+/* Keep the unverified revision11 body omission/native103 path separate from
+ * the face-only experiment. Baseline revision10 routing remains the default. */
+static int kzsf_character_body_route_test;
+static int kzsf_character_generic_leaf(uintptr_t part,uintptr_t skeleton,uintptr_t base,KzsfCharacterMeshLeaf *out);
+static ABI uintptr_t kzsf_character_face_animation_owner(uintptr_t owner,uintptr_t face) {
+    static _Thread_local int player_control=-1;
+    if(player_control<0) {
+        const char *value=getenv("KZSF_CHARACTER_FACE_PLAYER_ANIMATION_CONTROL");
+        player_control=value && !strcmp(value,"1");
+    }
+    if(player_control) {
+        uintptr_t original=0;
+        kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x1d0,&original,8);return original;
+    }
+    uintptr_t source=kzsf_character_face_animation_source(owner,face,
+        __atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE),
+        __atomic_load_n(&kzsf_character_render_part,__ATOMIC_RELAXED),
+        __atomic_load_n(&kzsf_character_face_source_soldier,__ATOMIC_ACQUIRE),
+        (uintptr_t)image,kzsf_cheat_read,NULL,kzsf_observer_baseline_type);
+    uintptr_t original=0;
+    if(kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x1d0,&original,8) && source && source!=original) {
+        fprintf(stderr,"KILLZONE_CHARACTER_FACE_ANIMATION source=selected-character soldier=%p player_resource=%p\n",(void*)source,(void*)original);
+        fflush(stderr);
+    }
+    return source;
+}
+static uintptr_t kzsf_character_face_source_variant(uintptr_t variant,uintptr_t rep,uintptr_t face,unsigned sequence) {
+    uintptr_t base=(uintptr_t)image,node=0,table=0,getter=0,pose=0,actual=0,expected=0;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,rep,0x1a0,&node,8) || node<8)return 0;
+    node-=8; /* native661ca0, used by e46889 before its pose getter */
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,node,0,&table,8) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,table,0x48,&getter,8) || getter<base || getter-base>=0x1190000)return 0;
+    pose=((uintptr_t (ABI *)(uintptr_t))getter)(node);
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,pose,0x20,&actual,8) || !actual ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,variant,0x60,&expected,8))return 0;
+    static _Thread_local _Alignas(16) unsigned char prepared[0xf0];
+    static _Thread_local _Alignas(16) float corrected[512][16];
+    static _Thread_local int32_t remapped[512];
+    static _Thread_local uintptr_t cached_variant,cached_actual;
+    static _Thread_local unsigned cached_sequence;
+    if(cached_variant==variant && cached_actual==actual && cached_sequence==sequence)return (uintptr_t)prepared;
+    cached_variant=0;
+    int bind_correct=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE)>=3 &&
+        face==__atomic_load_n(&kzsf_character_selected_face.face,__ATOMIC_ACQUIRE);
+    if(actual==expected && !bind_correct)return variant;
+    int ready=0;
+    if(bind_correct) {
+        KzsfCharacterMeshLeaf original,target;
+        static _Thread_local KzsfCharacterGenericPlan plan;
+        uintptr_t original_part=__atomic_load_n(&kzsf_character_known_parts[0],__ATOMIC_ACQUIRE);
+        uintptr_t selected_part=__atomic_load_n(&kzsf_character_render_part,__ATOMIC_RELAXED);
+        ready=kzsf_character_generic_leaf(original_part,0,base,&original) &&
+            kzsf_character_generic_leaf(selected_part,0,base,&target) &&
+            kzsf_character_face_bind_variant(variant,actual,&original,&target,kzsf_cheat_read,NULL,
+                prepared,remapped,corrected,&plan);
+    } else ready=kzsf_character_face_reindex(variant,actual,kzsf_cheat_read,NULL,prepared,remapped);
+    if(!ready) {
+        static _Thread_local unsigned refused_sequence;
+        if(refused_sequence!=sequence) {
+            refused_sequence=sequence;
+            fprintf(stderr,"KILLZONE_CHARACTER_FACE_MAP status=native-fallback reason=joint-reindex-refused\n");
+        }
+        return variant;
+    }
+    if(sequence!=__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE))return 0;
+    cached_variant=variant;cached_actual=actual;cached_sequence=sequence;
+    fprintf(stderr,"KILLZONE_CHARACTER_FACE_MAP status=reindexed body_bind_corrected=%d expected=%p actual=%p\n",bind_correct,(void*)expected,(void*)actual);
+    return (uintptr_t)prepared;
+}
+static ABI uintptr_t kzsf_character_face_mapping_variant(uintptr_t face) {
+    uintptr_t base=(uintptr_t)image,rep=0,owner=0,resource=0,soldier=0,array=0;
+    int32_t count=0,index=0;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,face,0x20,&rep,8) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,rep,0x198,&owner,8) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,face,0x18,&resource,8))return 0;
+    uintptr_t selected_owner=__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE);
+    uintptr_t selected_part=__atomic_load_n(&kzsf_character_render_part,__ATOMIC_RELAXED);
+    if(owner==selected_owner && selected_part) {
+        soldier=__atomic_load_n(&kzsf_character_face_source_soldier,__ATOMIC_ACQUIRE);
+        KzsfCharacterInventory inventory;
+        if(kzsf_character_resource_variants_read(soldier,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&inventory))
+            for(int i=0;i<inventory.count;i++)if(inventory.variants[i].part==selected_part) {
+                uintptr_t variant=inventory.array+(size_t)i*0xf0;
+                if(kzsf_character_face_mapping(variant,resource,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type))
+                    return kzsf_character_face_source_variant(variant,rep,face,__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE));
+            }
+    }
+    /* Preserve the original path for NPCs and other native animators. Their
+     * prepared mapping belongs to the engine; experimental player preflight
+     * must neither reject it nor traverse all bones every NPC frame. */
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x1d0,&soldier,8) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x98c,&index,4) || index<0 ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,soldier,0x648,&count,4) || count<1 || count>64 || index>=count ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,soldier,0x650,&array,8) || !array)return 0;
+    uintptr_t variant=array+(size_t)index*0xf0;
+    return variant;
+}
+/* Read-only visibility evidence, bounded to changes on owned draw nodes. The
+ * native draw skips runtime parts with index==-1 or enabled==0 (703e10). */
+static void kzsf_character_draw_visibility(uintptr_t node,uintptr_t source,unsigned sequence) {
+    int32_t count=0;uintptr_t parts=0;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,node,0x70,&count,4) || count<0 || count>128 ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,node,0x78,&parts,8) || (count && !parts))return;
+    uintptr_t tagged[128];int32_t state[128][2];uint64_t hash=1469598103934665603ULL;
+    for(int i=0;i<count;i++) {
+        if(!kzsf_zoom_read(kzsf_cheat_read,NULL,parts,(size_t)i*8,&tagged[i],8) ||
+           !kzsf_zoom_read(kzsf_cheat_read,NULL,tagged[i]&~(uintptr_t)3,0x90,state[i],8))return;
+        hash=(hash^(uint64_t)tagged[i])*1099511628211ULL;
+        hash=(hash^(uint32_t)state[i][0])*1099511628211ULL;
+        hash=(hash^(uint32_t)state[i][1])*1099511628211ULL;
+    }
+    static _Thread_local struct {uintptr_t node;uint64_t hash;unsigned sequence;} samples[16];
+    static _Thread_local unsigned emitted;
+    if(emitted>=32)return;
+    unsigned slot=0;for(;slot<16;slot++)if(samples[slot].node==node || !samples[slot].node)break;
+    if(slot==16)return;
+    if(samples[slot].node==node && samples[slot].hash==hash && samples[slot].sequence==sequence)return;
+    samples[slot].node=node;samples[slot].hash=hash;samples[slot].sequence=sequence;emitted++;
+    fprintf(stderr,"KILLZONE_CHARACTER_DRAW_PART_STATE sequence=%u node=%llx parts=%d state=",sequence,(unsigned long long)node,count);
+    for(int i=0;i<count;i++)fprintf(stderr,"%s%d:%d:%d",i ? "," : "",i,state[i][0],state[i][1]);
+    uintptr_t scalars=0,end=0;float values[4];
+    if(kzsf_zoom_read(kzsf_cheat_read,NULL,source,0x50,&scalars,8) && scalars &&
+       kzsf_zoom_read(kzsf_cheat_read,NULL,source,0x58,&end,8) && end>=scalars && end-scalars>=sizeof(values) &&
+       kzsf_zoom_read(kzsf_cheat_read,NULL,scalars,0,values,sizeof(values)))
+        fprintf(stderr," scalars=%.6g,%.6g,%.6g,%.6g",values[0],values[1],values[2],values[3]);
+    fputc('\n',stderr);fflush(stderr);
+}
+/* Experimental soldier rigs use a bounded named/bind-space conversion via
+ * the original98 body. Every draw keeps native ownership and record order. */
+static int kzsf_character_generic_leaf(uintptr_t part,uintptr_t skeleton,uintptr_t base,KzsfCharacterMeshLeaf *out) {
+    KzsfCharacterPart resource;KzsfCharacterMeshTree tree;
+    if(!part || !kzsf_character_part_read(part,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&resource) ||
+       !resource.is_skinned || !kzsf_character_mesh_read(resource.mesh,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&tree) ||
+       !tree.count || tree.unknown_count)return 0;
+    for(int i=0;i<tree.count;i++)if(!skeleton || tree.leaves[i].skeleton==skeleton){*out=tree.leaves[i];return 1;}
+    return 0;
+}
+static int kzsf_character_generic_draw(uintptr_t node,uintptr_t render,uintptr_t source,uintptr_t previous,
+        uintptr_t owner,uintptr_t model,uintptr_t selected,unsigned sequence,int restoring) {
+    uintptr_t base=(uintptr_t)image,source_rig=0,previous_rig=0;
+    KzsfCharacterInventory inventory;KzsfCharacterMeshLeaf from,canonical,target;
+    if(!kzsf_character_inventory_read(owner,kzsf_cheat_read,NULL,&inventory) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,source,0x20,&source_rig,8) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,previous,0x20,&previous_rig,8))return 0;
+    if(previous_rig!=source_rig)previous=source;
+    uintptr_t original=inventory.variants[inventory.current].part,desired=restoring ? original : selected;
+    if(!kzsf_character_generic_leaf(original,0,base,&canonical) || canonical.binding_count!=98 ||
+       !kzsf_character_generic_leaf(desired,0,base,&target))return 0;
+    /* Native named pose mapping copies Lucas's animated worlds, even when
+     * weapon/model rebuilds leave a larger NPC skeleton on the render node.
+     * Its layout does not imply that NPC bind corrections were applied. */
+    from=canonical;from.skeleton=source_rig;
+    static _Thread_local KzsfCharacterGenericPlan to_base,to_target;
+    static _Thread_local uintptr_t cached_source,cached_source_binding,cached_target,cached_target_binding,cached_base_binding;
+    static _Thread_local unsigned cached_sequence;
+    if(cached_sequence!=sequence || cached_source!=source_rig || cached_source_binding!=from.bindings ||
+       cached_target!=target.skeleton || cached_target_binding!=target.bindings || cached_base_binding!=canonical.bindings) {
+        if(!kzsf_character_generic_plan(&from,&canonical,kzsf_cheat_read,NULL,&to_base) ||
+           !kzsf_character_generic_plan(&canonical,&target,kzsf_cheat_read,NULL,&to_target))return 0;
+        if(source_rig!=canonical.skeleton && !kzsf_character_generic_rebuild_player_helpers(&to_base))return 0;
+        int selected_kind=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
+        const char *selected_name=kzsf_character_model_name(selected_kind);
+        if(!restoring && (!strcmp(selected_name,"ISA_Echo") || !strcmp(selected_name,"ISA_Lamb_Echo")) &&
+           !kzsf_character_generic_anchor_wrists(&to_target,target.skeleton,kzsf_cheat_read,NULL))return 0;
+        cached_sequence=sequence;cached_source=source_rig;cached_source_binding=from.bindings;
+        cached_target=target.skeleton;cached_target_binding=target.bindings;cached_base_binding=canonical.bindings;
+    }
+    float source_world[2][KZSF_CHARACTER_GENERIC_MAX][16],base_world[2][KZSF_CHARACTER_GENERIC_MAX][16],target_world[2][KZSF_CHARACTER_GENERIC_MAX][16];
+    for(int i=0;i<2;i++)if(!kzsf_character_generic_read_worlds(i ? previous : source,to_base.from_count,kzsf_cheat_read,NULL,source_world[i]) ||
+        !kzsf_character_generic_worlds(&to_base,source_world[i],base_world[i]) ||
+        !kzsf_character_generic_draw_worlds(&to_target,base_world[i],target_world[i]))return 0;
+    KzsfCharacterDrawPart parts[KZSF_CHARACTER_MAX_DRAW_PARTS];int32_t count=0;
+    if(!kzsf_character_draw_parts(node,model,desired,target.skeleton,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,parts,&count))return 0;
+    KzsfCharacterNativeMap maps[2]={{0}},views[2];KzsfCharacterJointMap joints[2][KZSF_CHARACTER_GENERIC_MAX];int32_t channels[2][128];
+    _Alignas(16) unsigned char poses[4][0x70]={{0}};
+    KzsfCharacterRenderContext contexts[2]={
+        {.source=source,.current=(uintptr_t)poses[0],.previous=(uintptr_t)poses[1]},
+        {.source=(uintptr_t)poses[0],.current=(uintptr_t)poses[2],.previous=(uintptr_t)poses[3]}};
+    int drawn=0;
+    ((KzsfCharacterBuildMap)(base+0x5d8dd0))(source_rig,canonical.skeleton,&maps[0]);
+    if(maps[0].source!=source_rig || maps[0].destination!=canonical.skeleton ||
+       !kzsf_character_generic_map_prepare(&maps[0],source,to_base.from_count,98,kzsf_cheat_read,NULL,joints[0],channels[0],&views[0]))goto cleanup;
+    kzsf_character_render_pair(&contexts[0],canonical.skeleton,&views[0],(KzsfCharacterPoseAssign)(base+0x5d1d10),
+        (KzsfCharacterPoseApply)(base+0x5d2ae0),(KzsfCharacterPoseCopy)(base+0x5d2fb0));
+    for(int i=0;i<2;i++)if(!kzsf_character_generic_write_worlds(i ? contexts[0].previous : contexts[0].current,98,
+        kzsf_cheat_read,kzsf_turn_write,NULL,base_world[i]))goto cleanup;
+    ((KzsfCharacterBuildMap)(base+0x5d8dd0))(canonical.skeleton,target.skeleton,&maps[1]);
+    if(maps[1].source!=canonical.skeleton || maps[1].destination!=target.skeleton ||
+       !kzsf_character_generic_map_prepare(&maps[1],contexts[0].current,98,to_target.to_count,kzsf_cheat_read,NULL,joints[1],channels[1],&views[1]))goto cleanup;
+    kzsf_character_render_pair(&contexts[1],target.skeleton,&views[1],(KzsfCharacterPoseAssign)(base+0x5d1d10),
+        (KzsfCharacterPoseApply)(base+0x5d2ae0),(KzsfCharacterPoseCopy)(base+0x5d2fb0));
+    for(int i=0;i<2;i++)if(!kzsf_character_generic_write_worlds(i ? contexts[1].previous : contexts[1].current,to_target.to_count,
+        kzsf_cheat_read,kzsf_turn_write,NULL,target_world[i]))goto cleanup;
+    KzsfCharacterDrawProxy proxy;uintptr_t methods[11];
+    if(!kzsf_character_draw_proxy(node,contexts[1].current,contexts[1].previous,kzsf_cheat_read,NULL,&proxy,methods) ||
+       sequence!=__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE))goto cleanup;
+    uintptr_t draw_tags[KZSF_CHARACTER_MAX_DRAW_PARTS];int32_t draw_count=0;
+    if(!kzsf_character_draw_native_batch(parts,count,original,desired,draw_tags,&draw_count))goto cleanup;
+    for(int i=0;i<draw_count;i++) {
+        uintptr_t head=__atomic_load_n(&kzsf_character_render_head_part,__ATOMIC_RELAXED);
+        int selected=parts[i].selected || (head && parts[i].resource==head && (parts[i].tagged&2));
+        proxy.current=contexts[selected ? 1 : 0].current;proxy.previous=contexts[selected ? 1 : 0].previous;
+        proxy.fields[14]=1;proxy.fields[15]=(uintptr_t)&draw_tags[i];
+        ((void (ABI *)(uintptr_t,uintptr_t))kzsf_character_draw_original)((uintptr_t)&proxy,render);
+    }
+    drawn=1;
+    static unsigned reported;
+    if(__atomic_exchange_n(&reported,sequence,__ATOMIC_RELAXED)!=sequence) {
+        fprintf(stderr,"KILLZONE_CHARACTER_GENERIC status=drawn source_bones=%d target_bones=%d records=%d matched=%d omitted=0 restoring=%d\n",
+            to_base.from_count,to_target.to_count,count,to_target.matched,restoring);fflush(stderr);
+    }
+cleanup:
+    for(int i=3;i>=0;i--)((KzsfCharacterPoseAssign)(base+0x5d1d10))((uintptr_t)poses[i],0);
+    for(int i=0;i<2;i++) {
+        if(maps[i].channels.data && maps[i].channels.data!=maps[i].joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(maps[i].channels.data);
+        if(maps[i].joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(maps[i].joints.data);
+    }
+    return drawn;
+}
+static ABI void kzsf_character_draw_visit(uintptr_t node,uintptr_t render) {
+    typedef void (ABI *Draw)(uintptr_t,uintptr_t);
+    Draw original=(Draw)kzsf_character_draw_original;uintptr_t base=(uintptr_t)image;
+    static int hook_seen;
+    if(!__atomic_exchange_n(&hook_seen,1,__ATOMIC_RELAXED)) {
+        fputs("KILLZONE_CHARACTER_DRAW stage=hook-live\n",stderr);fflush(stderr);
+    }
+    unsigned sequence=__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE);
+    uintptr_t selected_owner=__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_RELAXED);
+    uintptr_t selected_part=__atomic_load_n(&kzsf_character_render_part,__ATOMIC_RELAXED);
+    uintptr_t selected_head=__atomic_load_n(&kzsf_character_render_head_part,__ATOMIC_RELAXED);
+    int restoring=0;uintptr_t restore_model=0;
+    if(!selected_owner && kzsf_character_body_route_test) {
+        selected_owner=__atomic_load_n(&kzsf_character_restore_owner,__ATOMIC_RELAXED);
+        selected_part=__atomic_load_n(&kzsf_character_restore_part,__ATOMIC_RELAXED);
+        restore_model=__atomic_load_n(&kzsf_character_restore_model,__ATOMIC_RELAXED);
+        restoring=1;
+    }
+    uintptr_t model=0,owner=0,owned=0,array=0,table=0,getter=0,source=0,skeleton=0;
+    int32_t count=0,bones=0;int found=0;
+    if(!selected_owner || (sequence&1) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,node,0x18,&model,8) ||
+       (restoring && model!=restore_model) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,model,0x38,&owner,8) || owner!=selected_owner ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0x200,&owned,8) || owned!=model ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,model,0x58,&count,4) || count<=0 || count>128 ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,model,0x60,&array,8))goto native_draw;
+    for(int32_t i=0;i<count;i++) {uintptr_t part=0;
+        if(!kzsf_zoom_read(kzsf_cheat_read,NULL,array,(size_t)i*0xf0+0xc8,&part,8))goto native_draw;
+        found+=part==selected_part;
+    }
+    if((!found && !restoring) || sequence!=__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE))goto native_draw;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,node,0,&table,8) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,table,0x48,&getter,8) || getter<base || getter-base>=0x1190000)goto native_draw;
+    source=((uintptr_t (ABI *)(uintptr_t))getter)(node);
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,source,0x20,&skeleton,8) ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,skeleton,0x30,&bones,4))goto native_draw;
+    static int observed;
+    if(!__atomic_exchange_n(&observed,1,__ATOMIC_RELAXED)) {
+        fprintf(stderr,"KILLZONE_CHARACTER_DRAW stage=owned-node source_bones=%d getter_rva=0x%llx\n",bones,(unsigned long long)(getter-base));fflush(stderr);
+    }
+    const char *generic_mode=getenv("KZSF_CHARACTER_ALL_MODELS_TEST");
+    int generic_test=generic_mode && !strcmp(generic_mode,"1");
+    int generic_needed=generic_test && (__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE)>=3 || (bones!=98 && bones!=103));
+    if(!generic_needed && bones!=98 && (!kzsf_character_body_route_test || bones!=103))goto native_draw;
+    if(restoring && bones==98)goto native_draw;
+    kzsf_character_draw_visibility(node,source,sequence);
+    KzsfCharacterDrawPart draw_parts[KZSF_CHARACTER_MAX_DRAW_PARTS];int32_t draw_count=0;
+    uintptr_t previous_getter=0,previous_source=0;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,table,0x50,&previous_getter,8) || previous_getter<base || previous_getter-base>=0x1190000)goto native_draw;
+    previous_source=((uintptr_t (ABI *)(uintptr_t))previous_getter)(node);
+    if(!previous_source)goto native_draw;
+    /* Weapon rebuilds can replace the render rig without changing selection.
+     * Report layout changes, rather than only the first draw of a selection. */
+    static _Thread_local uintptr_t traced_node,traced_rig,traced_previous,traced_weapon;
+    static _Thread_local unsigned traced_sequence,layout_reports;
+    uintptr_t previous_rig=0,inventory_ptr=0,weapon_handle=0;
+    kzsf_zoom_read(kzsf_cheat_read,NULL,previous_source,0x20,&previous_rig,8);
+    if(kzsf_zoom_read(kzsf_cheat_read,NULL,owner,0xa48,&inventory_ptr,8))
+        kzsf_zoom_read(kzsf_cheat_read,NULL,inventory_ptr,0x68,&weapon_handle,8);
+    if(layout_reports<96 && (traced_sequence!=sequence || traced_node!=node || traced_rig!=skeleton ||
+       traced_previous!=previous_rig || traced_weapon!=weapon_handle)) {
+        traced_sequence=sequence;traced_node=node;traced_rig=skeleton;traced_previous=previous_rig;traced_weapon=weapon_handle;++layout_reports;
+        fprintf(stderr,"KILLZONE_CHARACTER_DRAW_LAYOUT sequence=%u owner=%p model=%p node=%p selected=%p kind=%d source=%p rig=%p bones=%d previous=%p previous_rig=%p weapon_handle=%p generic=%d restoring=%d freecam=%d\n",
+            sequence,(void*)owner,(void*)model,(void*)node,(void*)selected_part,
+            __atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE),(void*)source,(void*)skeleton,bones,
+            (void*)previous_source,(void*)previous_rig,(void*)weapon_handle,generic_needed,restoring,kzsf_free_camera.active);
+        KzsfCharacterDrawPart report_parts[KZSF_CHARACTER_MAX_DRAW_PARTS];int32_t report_count=0;
+        if(kzsf_character_draw_parts(node,model,selected_part,skeleton,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,report_parts,&report_count)) {
+            for(int i=0;i<report_count && i<16;i++)
+                fprintf(stderr,"  draw_record index=%d tagged=%p resource=%p mesh=%p source_rig_match=%d combined=%d\n",
+                    i,(void*)report_parts[i].tagged,(void*)report_parts[i].resource,(void*)report_parts[i].mesh,
+                    report_parts[i].selected,report_parts[i].combined);
+        }
+        fflush(stderr);
+    }
+    if(generic_needed) {
+        if(kzsf_character_generic_draw(node,render,source,previous_source,owner,model,selected_part,sequence,restoring))return;
+        static unsigned refused_generic;
+        if(__atomic_exchange_n(&refused_generic,sequence,__ATOMIC_RELAXED)!=sequence) {
+            fprintf(stderr,"KILLZONE_CHARACTER_GENERIC status=refused source_bones=%d\n",bones);fflush(stderr);
+        }
+        goto native_draw;
+    }
+    KzsfCharacterPart body;KzsfCharacterMeshTree tree;
+    if(!kzsf_character_part_read(selected_part,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&body) ||
+       !kzsf_character_mesh_read(body.mesh,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&tree) || !tree.count)goto native_draw;
+    uintptr_t target=tree.leaves[0].skeleton;int32_t target_count=0;int compatible98=0;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,target,0x30,&target_count,4))goto native_draw;
+    if(target_count==98 && bones==103 &&
+       __atomic_load_n(&kzsf_character_restore_owner,__ATOMIC_ACQUIRE)==owner &&
+       __atomic_load_n(&kzsf_character_restore_model,__ATOMIC_RELAXED)==model) {
+        uintptr_t recovery=__atomic_load_n(&kzsf_character_restore_part,__ATOMIC_RELAXED);
+        if(!kzsf_character_part_read(recovery,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&body) ||
+           !kzsf_character_mesh_read(body.mesh,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&tree) || !tree.count)goto native_draw;
+        target=tree.leaves[0].skeleton;compatible98=1;
+        if(!kzsf_zoom_read(kzsf_cheat_read,NULL,target,0x30,&target_count,4))goto native_draw;
+    }
+    if(target_count!=103)goto native_draw;
+    if(!kzsf_character_draw_parts(node,model,selected_part,target,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,draw_parts,&draw_count)) {
+        static int refused;
+        if(!__atomic_exchange_n(&refused,1,__ATOMIC_RELAXED))fputs("KILLZONE_CHARACTER_DRAW stage=part-route-refused\n",stderr);
+        goto native_draw;
+    }
+    KzsfCharacterInventory body_inventory;uintptr_t original_body=0;
+    if(kzsf_character_inventory_read(owner,kzsf_cheat_read,NULL,&body_inventory))
+        original_body=body_inventory.variants[body_inventory.current].part;
+    if(!original_body || original_body==selected_part)goto native_draw;
+    if(restoring) {
+        int base_present=0;
+        for(int i=0;i<draw_count;i++)base_present+=draw_parts[i].resource==original_body;
+        if(!base_present)goto native_draw;
+    }
+    /* Weapon rebuilds adopt103 render joints and can re-add the original98
+     * body. Retain every record: revision14 crashed after omitting one.
+     * Only the original body consumes a reverse-corrected scratch pose. */
+    if(bones==103) {
+        if(skeleton!=target)goto native_draw;
+        uintptr_t previous_skeleton=0;
+        if(!kzsf_zoom_read(kzsf_cheat_read,NULL,previous_source,0x20,&previous_skeleton,8))goto native_draw;
+        if(previous_skeleton!=target)previous_source=source;
+        KzsfCharacterPart original_part;KzsfCharacterMeshTree original_tree;
+        if(!kzsf_character_part_read(original_body,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&original_part) ||
+           !kzsf_character_mesh_read(original_part.mesh,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&original_tree) ||
+           !original_tree.count || original_tree.unknown_count)goto native_draw;
+        uintptr_t original_rig=original_tree.leaves[0].skeleton;int original_bones=0;
+        if(!kzsf_zoom_read(kzsf_cheat_read,NULL,original_rig,0x30,&original_bones,4) || original_bones!=98)goto native_draw;
+        for(int i=0;i<original_tree.count;i++)if(original_tree.leaves[i].skeleton!=original_rig ||
+            original_tree.leaves[i].binding_count!=98)goto native_draw;
+        static _Thread_local KzsfCharacterReverseBindPlan reverse_plan;
+        static _Thread_local KzsfCharacterBindPlan repair_plan;
+        static _Thread_local unsigned reverse_sequence;
+        static _Thread_local uintptr_t reverse_rig,reverse_target,reverse_binding,reverse_target_binding;
+        int ready=reverse_sequence==sequence && reverse_rig==original_rig && reverse_target==target &&
+            reverse_binding==original_tree.leaves[0].bindings && reverse_target_binding==tree.leaves[0].bindings;
+        KzsfCharacterNativeMap forward={0},reverse={0},reverse_view;
+        KzsfCharacterJointMap forward_joints[103],reverse_joints[98];int32_t reverse_channels[4];
+        if(!ready) {
+            KzsfCharacterBindPlan plan;
+            ((KzsfCharacterBuildMap)(base+0x5d8dd0))(original_rig,target,&forward);
+            if(forward.source==original_rig && forward.destination==target && forward.joints.count==103 &&
+               forward.joints.capacity>=103 && forward.joints.data &&
+               kzsf_zoom_read(kzsf_cheat_read,NULL,forward.joints.data,0,forward_joints,sizeof(forward_joints)) &&
+               kzsf_character_bind_plan(&original_tree.leaves[0],&tree.leaves[0],forward_joints,kzsf_cheat_read,NULL,&plan) &&
+               kzsf_character_reverse_bind_plan(&plan,&reverse_plan)) {
+                repair_plan=plan;reverse_sequence=sequence;reverse_rig=original_rig;reverse_target=target;
+                reverse_binding=original_tree.leaves[0].bindings;reverse_target_binding=tree.leaves[0].bindings;ready=1;
+            }
+        }
+        int routed=0;
+        _Alignas(16) unsigned char native_poses[2][0x70]={{0}};
+        uintptr_t clean_current=(uintptr_t)native_poses[0],clean_previous=(uintptr_t)native_poses[1];
+        int repaired_current=0,repaired_previous=0;
+        if(ready) {
+            ((KzsfCharacterPoseAssign)(base+0x5d1d10))(clean_current,target);
+            ((KzsfCharacterPoseCopy)(base+0x5d2fb0))(clean_current,source,7,0);
+            ((KzsfCharacterPoseAssign)(base+0x5d1d10))(clean_previous,target);
+            ((KzsfCharacterPoseCopy)(base+0x5d2fb0))(clean_previous,previous_source,7,0);
+            ready=kzsf_character_repair103_pose(&repair_plan,source,clean_current,kzsf_cheat_read,kzsf_turn_write,NULL,&repaired_current) &&
+                kzsf_character_repair103_pose(&repair_plan,previous_source,clean_previous,kzsf_cheat_read,kzsf_turn_write,NULL,&repaired_previous);
+        }
+        if(ready) {
+            ((KzsfCharacterBuildMap)(base+0x5d8dd0))(target,original_rig,&reverse);
+            if(reverse.source==target && reverse.destination==original_rig &&
+               kzsf_character_reverse_map_prepare(&reverse,clean_current,kzsf_cheat_read,NULL,reverse_joints,reverse_channels,&reverse_view)) {
+                _Alignas(16) unsigned char poses[2][0x70]={{0}};
+                KzsfCharacterRenderContext context={.source=clean_current,.current=(uintptr_t)poses[0],.previous=(uintptr_t)poses[1]};
+                kzsf_character_render_pair(&context,original_rig,&reverse_view,(KzsfCharacterPoseAssign)(base+0x5d1d10),
+                    (KzsfCharacterPoseApply)(base+0x5d2ae0),(KzsfCharacterPoseCopy)(base+0x5d2fb0));
+                KzsfCharacterDrawProxy proxy;uintptr_t methods[11];
+                if(kzsf_character_reverse_bind_pose(&reverse_plan,clean_current,context.current,kzsf_cheat_read,kzsf_turn_write,NULL) &&
+                   kzsf_character_reverse_bind_pose(&reverse_plan,clean_previous,context.previous,kzsf_cheat_read,kzsf_turn_write,NULL) &&
+                   kzsf_character_draw_proxy(node,clean_current,clean_previous,kzsf_cheat_read,NULL,&proxy,methods) &&
+                   sequence==__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE)) {
+                    int adapted=0;
+                    for(int i=0;i<draw_count;i++) {
+                        int body98=(draw_parts[i].resource==original_body || (compatible98 && draw_parts[i].resource==selected_part)) && (draw_parts[i].tagged&2);
+                        proxy.fields[14]=1;proxy.fields[15]=(uintptr_t)&draw_parts[i].tagged;
+                        proxy.current=body98 ? context.current : clean_current;
+                        proxy.previous=body98 ? context.previous : clean_previous;
+                        original((uintptr_t)&proxy,render);adapted+=body98;
+                    }
+                    routed=1;
+                    static unsigned native_sequence;
+                    if(__atomic_exchange_n(&native_sequence,sequence,__ATOMIC_RELAXED)!=sequence) {
+                        fprintf(stderr,"KILLZONE_CHARACTER_DRAW status=native-engineer-reverse source_bones=103 records=%d reverse98=%d repaired=%d,%d omitted=0 restoring=%d\n",draw_count,adapted,repaired_current,repaired_previous,restoring);fflush(stderr);
+                    }
+                }
+                ((KzsfCharacterPoseAssign)(base+0x5d1d10))(context.previous,0);
+                ((KzsfCharacterPoseAssign)(base+0x5d1d10))(context.current,0);
+            }
+        }
+        ((KzsfCharacterPoseAssign)(base+0x5d1d10))(clean_previous,0);
+        ((KzsfCharacterPoseAssign)(base+0x5d1d10))(clean_current,0);
+        if(forward.channels.data && forward.channels.data!=forward.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(forward.channels.data);
+        if(forward.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(forward.joints.data);
+        if(reverse.channels.data && reverse.channels.data!=reverse.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(reverse.channels.data);
+        if(reverse.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(reverse.joints.data);
+        if(routed)return;
+        static unsigned refused_sequence;
+        if(__atomic_exchange_n(&refused_sequence,sequence,__ATOMIC_RELAXED)!=sequence) {
+            fprintf(stderr,"KILLZONE_CHARACTER_DRAW stage=reverse98-refused plan_ready=%d\n",ready);fflush(stderr);
+        }
+        goto native_draw;
+    }
+    for(int32_t i=0;i<draw_count;i++)if(selected_head && draw_parts[i].resource==selected_head && (draw_parts[i].tagged&2))draw_parts[i].selected=1;
+    static int head_sampled;
+    if(!__atomic_exchange_n(&head_sampled,1,__ATOMIC_RELAXED)) {
+        uintptr_t world=0;
+        if(kzsf_zoom_read(kzsf_cheat_read,NULL,source,0x40,&world,8))
+            for(unsigned joint=7;joint<=14;joint++) {
+                float matrix[16];
+                if(!kzsf_zoom_read(kzsf_cheat_read,NULL,world,(size_t)joint*64,matrix,64))continue;
+                fprintf(stderr,"KILLZONE_CHARACTER_HEAD_POSE joint=%u matrix=",joint);
+                for(unsigned k=0;k<16;k++)fprintf(stderr,"%s%.9g",k ? "," : "",matrix[k]);
+                fputc('\n',stderr);
+            }
+        fflush(stderr);
+    }
+    KzsfCharacterNativeMap map={0},view;KzsfCharacterJointMap joints[103];int32_t channels[4];
+    ((KzsfCharacterBuildMap)(base+0x5d8dd0))(skeleton,target,&map);
+    int drawn=0;
+    if(map.source==skeleton && map.destination==target &&
+       kzsf_character_render_map_prepare(&map,source,kzsf_cheat_read,NULL,joints,channels,&view)) {
+        /* Cache only copied host matrices for one selection epoch. Reacquired
+         * resource identities invalidate the cache without retaining resources. */
+        static _Thread_local KzsfCharacterBindPlan bind_plan;
+        static _Thread_local unsigned bind_sequence;
+        static _Thread_local uintptr_t bind_skeleton,bind_resource,bind_source_skeleton,bind_source_resource;
+        int bind_ready=bind_sequence==sequence && bind_skeleton==target && bind_source_skeleton==skeleton && bind_resource==tree.leaves[0].bindings;
+        if(!bind_ready) {
+            KzsfCharacterInventory inventory;KzsfCharacterMeshTree source_tree;int found_source=0;
+            if(kzsf_character_inventory_read(selected_owner,kzsf_cheat_read,NULL,&inventory))
+                for(int32_t i=0;i<inventory.count && !found_source;i++)if(inventory.variants[i].part && inventory.variants[i].part!=selected_part) {
+                    KzsfCharacterPart candidate;KzsfCharacterMeshTree candidate_tree;
+                    if(!kzsf_character_part_read(inventory.variants[i].part,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&candidate) ||
+                       !kzsf_character_mesh_read(candidate.mesh,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&candidate_tree) || candidate_tree.unknown_count)continue;
+                    for(int32_t j=0;j<candidate_tree.count;j++)if(candidate_tree.leaves[j].skeleton==skeleton && candidate_tree.leaves[j].binding_count==98) {
+                        source_tree=candidate_tree;found_source=1;break;
+                    }
+                }
+            if(found_source && kzsf_character_bind_plan(&source_tree.leaves[0],&tree.leaves[0],joints,kzsf_cheat_read,NULL,&bind_plan)) {
+                bind_sequence=sequence;bind_skeleton=target;bind_source_skeleton=skeleton;bind_resource=tree.leaves[0].bindings;
+                bind_source_resource=source_tree.leaves[0].bindings;bind_ready=1;
+            }
+        }
+        _Alignas(16) unsigned char poses[2][0x70]={{0}};
+        KzsfCharacterRenderContext context={.source=source,.current=(uintptr_t)poses[0],.previous=(uintptr_t)poses[1]};
+        kzsf_character_render_pair(&context,target,&view,(KzsfCharacterPoseAssign)(base+0x5d1d10),
+            (KzsfCharacterPoseApply)(base+0x5d2ae0),(KzsfCharacterPoseCopy)(base+0x5d2fb0));
+        KzsfCharacterDrawProxy proxy;uintptr_t methods[11];
+        if(bind_ready && kzsf_character_bind_pose(&bind_plan,source,context.current,context.previous,kzsf_cheat_read,kzsf_turn_write,NULL) &&
+           kzsf_character_draw_proxy(node,context.current,context.previous,kzsf_cheat_read,NULL,&proxy,methods)) {
+            /* Preserve record order and use each record's actual rig. Other
+             * pieces in this node (including player attachments) retain the
+             * native pose instead of receiving the Engineer's 103-bone pose. */
+            int adapted=0;
+            for(int32_t i=0;i<draw_count;i++) {
+                proxy.fields[14]=1;proxy.fields[15]=(uintptr_t)&draw_parts[i].tagged;
+                proxy.current=draw_parts[i].selected ? context.current : source;
+                proxy.previous=draw_parts[i].selected ? context.previous : previous_source;
+                original((uintptr_t)&proxy,render);adapted+=draw_parts[i].selected;
+            }
+            drawn=1;
+            static unsigned reported;
+            if(__atomic_exchange_n(&reported,sequence,__ATOMIC_RELAXED)!=sequence) {
+                fprintf(stderr,"KILLZONE_CHARACTER_DRAW status=retargeted target_bones=103 scratch_pose=1 bind_pose_corrected=103 source_binding=%llx adapted_parts=%d native_parts=%d\n",(unsigned long long)bind_source_resource,adapted,draw_count-adapted);fflush(stderr);
+            }
+            static _Thread_local uint64_t last_parts_hash;
+            static _Thread_local unsigned part_reports;
+            uint64_t parts_hash=(uint64_t)draw_count;
+            for(int32_t i=0;i<draw_count;i++)parts_hash=parts_hash*1099511628211ULL^(uint64_t)(draw_parts[i].resource^draw_parts[i].mesh)^draw_parts[i].selected;
+            if(parts_hash!=last_parts_hash && part_reports<12) {
+                last_parts_hash=parts_hash;part_reports++;
+                fprintf(stderr,"KILLZONE_CHARACTER_DRAW_ROUTES sequence=%u",sequence);
+                for(int32_t i=0;i<draw_count;i++)fprintf(stderr," part%d=%llx:mesh%llx:type%llx:%s:%s",i,(unsigned long long)draw_parts[i].resource,
+                    (unsigned long long)draw_parts[i].mesh,(unsigned long long)(kzsf_observer_baseline_type(draw_parts[i].mesh,base,kzsf_cheat_read,NULL)-base),
+                    draw_parts[i].combined ? "combined" : "owned",draw_parts[i].selected ? "engineer" : "native");
+                fputc('\n',stderr);fflush(stderr);
+            }
+        } else {
+            static unsigned refused;
+            if(__atomic_exchange_n(&refused,sequence,__ATOMIC_RELAXED)!=sequence) {
+                fprintf(stderr,"KILLZONE_CHARACTER_DRAW stage=bind-pose-refused plan_ready=%d\n",bind_ready);fflush(stderr);
+            }
+        }
+        ((KzsfCharacterPoseAssign)(base+0x5d1d10))(context.previous,0);
+        ((KzsfCharacterPoseAssign)(base+0x5d1d10))(context.current,0);
+    } else {
+        static int warned;
+        if(!__atomic_exchange_n(&warned,1,__ATOMIC_RELAXED)) {
+            fprintf(stderr,"KILLZONE_CHARACTER_DRAW stage=map-preparation-refused joints=%d channels=%d\n",map.joints.count,map.channels.count);fflush(stderr);
+        }
+    }
+    if(map.channels.data && map.channels.data!=map.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(map.channels.data);
+    if(map.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(map.joints.data);
+    if(drawn)return;
+native_draw:
+    original(node,render);
+}
+static ABI void kzsf_character_render_visit(uintptr_t node) {
+    uintptr_t base=(uintptr_t)image;
+    ((void (ABI *)(uintptr_t))(base+0x711ba0))(node);
+    unsigned sequence=__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE);
+    uintptr_t selected_owner=__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_RELAXED);
+    uintptr_t selected_part=__atomic_load_n(&kzsf_character_render_part,__ATOMIC_RELAXED);
+    int32_t slot=__atomic_load_n(&kzsf_character_render_slot,__ATOMIC_RELAXED);
+    if((sequence&1) || !selected_owner || slot<0 ||
+       sequence!=__atomic_load_n(&kzsf_character_render_sequence,__ATOMIC_ACQUIRE))return;
+    KzsfCharacterRenderContext context;
+    if(!kzsf_character_render_context(node,selected_owner,selected_part,slot,kzsf_cheat_read,NULL,&context)) {
+        static unsigned misses;
+        if(__atomic_add_fetch(&misses,1,__ATOMIC_RELAXED)<=3) {
+            uintptr_t model=0,owner=0;
+            kzsf_zoom_read(kzsf_cheat_read,NULL,node,0x18,&model,8);
+            kzsf_zoom_read(kzsf_cheat_read,NULL,model,0x38,&owner,8);
+            fprintf(stderr,"KILLZONE_CHARACTER_RENDER stage=context-miss node=%p model=%p owner=%p selected_owner=%p selected_part=%p slot_hint=%d\n",
+                (void*)node,(void*)model,(void*)owner,(void*)selected_owner,(void*)selected_part,slot);fflush(stderr);
+        }
+        return;
+    }
+    static int context_seen;
+    if(!__atomic_exchange_n(&context_seen,1,__ATOMIC_RELAXED)) {
+        fprintf(stderr,"KILLZONE_CHARACTER_RENDER stage=context-matched node=%p model=%p part=%p\n",(void*)node,(void*)context.model,(void*)context.part);fflush(stderr);
+    }
+    KzsfCharacterPart body;KzsfCharacterMeshTree tree;
+    if(!kzsf_character_part_read(context.part,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&body) ||
+       !kzsf_character_mesh_read(body.mesh,base,kzsf_cheat_read,NULL,kzsf_observer_baseline_type,&tree) || !tree.count)return;
+    uintptr_t source=context.source,source_skeleton=context.source_skeleton,target_skeleton=tree.leaves[0].skeleton;
+    int32_t source_count=0,target_count=0,state=0;
+    if(!kzsf_zoom_read(kzsf_cheat_read,NULL,source,0x28,&state,4) || state!=3 ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,source_skeleton,0x30,&source_count,4) || source_count!=98 ||
+       !kzsf_zoom_read(kzsf_cheat_read,NULL,target_skeleton,0x30,&target_count,4) || target_count!=103) {
+        static int pose_warned;
+        if(!__atomic_exchange_n(&pose_warned,1,__ATOMIC_RELAXED)) {
+            fprintf(stderr,"KILLZONE_CHARACTER_RENDER stage=source-pose-refused state=%d source_count=%d target_count=%d\n",state,source_count,target_count);fflush(stderr);
+        }
+        return;
+    }
+    KzsfCharacterNativeMap map={0};
+    ((KzsfCharacterBuildMap)(base+0x5d8dd0))(source_skeleton,target_skeleton,&map);
+    KzsfCharacterJointMap joints[103];int32_t channels[4];KzsfCharacterNativeMap view;
+    int valid=map.source==source_skeleton && map.destination==target_skeleton &&
+        kzsf_character_render_map_prepare(&map,source,kzsf_cheat_read,NULL,joints,channels,&view);
+    if(valid) {
+        kzsf_character_render_pair(&context,target_skeleton,&view,(KzsfCharacterPoseAssign)(base+0x5d1d10),
+            (KzsfCharacterPoseApply)(base+0x5d2ae0),(KzsfCharacterPoseCopy)(base+0x5d2fb0));
+        static unsigned reported;
+        if(__atomic_exchange_n(&reported,sequence,__ATOMIC_RELAXED)!=sequence) {
+            fprintf(stderr,"KILLZONE_CHARACTER_RENDER status=retargeted name=VSA_Engineer source_bones=98 target_bones=103 native_pose=1 node=%p\n",(void*)node);fflush(stderr);
+        }
+    } else {
+        /* Keep a full target-sized pose even if the temporary map is invalid;
+         * rendering a103-bone mesh from98 matrices would read past the pose. */
+        KzsfCharacterJointMap missing[103];memset(missing,0,sizeof(missing));
+        for(unsigned i=0;i<103;i++)missing[i].source=-1;
+        KzsfCharacterNativeMap fallback={0};fallback.joints.count=fallback.joints.capacity=103;
+        fallback.joints.data=(uintptr_t)missing;
+        kzsf_character_render_pair(&context,target_skeleton,&fallback,(KzsfCharacterPoseAssign)(base+0x5d1d10),
+            (KzsfCharacterPoseApply)(base+0x5d2ae0),(KzsfCharacterPoseCopy)(base+0x5d2fb0));
+        static int warned;
+        if(!__atomic_exchange_n(&warned,1,__ATOMIC_RELAXED)) {
+            fprintf(stderr,"KILLZONE_CHARACTER_RENDER status=identity-fallback reason=native-map-shape\n");fflush(stderr);
+        }
+    }
+    if(map.channels.data && map.channels.data!=map.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(map.channels.data);
+    if(map.joints.data)((KzsfCharacterQueryFree)(base+0x3295d0))(map.joints.data);
+}
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
+    if(code==EXCEPTION_BREAKPOINT && kzsf_camera_observer_enabled) {
+        CONTEXT *c=info->ContextRecord;int kind=-1;
+        if(record->ExceptionAddress==image+KZSF_CAMERA_SELECT_ENTRY+1)kind=0;
+        else if(record->ExceptionAddress==image+KZSF_CAMERA_BIND_ENTRY+1)kind=1;
+        else if(record->ExceptionAddress==image+KZSF_FREE_CAMERA_SITE)kind=2;
+        if(kind>=0) {
+            unsigned hit=__atomic_add_fetch(&kzsf_camera_observer_hits[kind],1,__ATOMIC_RELAXED);
+            if(TryAcquireSRWLockExclusive(&kzsf_camera_observer_lock)) {
+                if(kind==2) {
+                    kzsf_camera_observe_view(c,hit,0,0);
+                } else if(hit<=2) {
+                    fprintf(stderr,"KILLZONE_CAMERA_OBSERVER callback=%s hit=%u arg1=%p arg2=%p\n",
+                        kind ? "bind" : "select",hit,(void*)c->Rdi,(void*)c->Rsi);fflush(stderr);
+                }
+                ReleaseSRWLockExclusive(&kzsf_camera_observer_lock);
+            }
+            if(kzsf_observer_replay(c,(uintptr_t)image,(unsigned)kind,kzsf_cheat_read,NULL))
+                return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_free_camera_body_test) {
+        CONTEXT *c=info->ContextRecord;
+        int kind=-1,changed=0,ok=0;
+        int active=__atomic_load_n(&kzsf_free_camera_body_active,__ATOMIC_ACQUIRE);
+        if(record->ExceptionAddress==image+KZSF_MODEL_FP_SITE) {
+            kind=0;ok=kzsf_model_fp(c,(uintptr_t)image,active,kzsf_cheat_read,NULL,&changed);
+        } else if(record->ExceptionAddress==image+KZSF_MODEL_WORLD_SITE) {
+            kind=1;
+            if(active && __atomic_load_n(&kzsf_third_person_hide_body,__ATOMIC_ACQUIRE))
+                kzsf_model_world_hidden(c,(uintptr_t)image,&changed);
+            else kzsf_model_world(c,(uintptr_t)image,active,&changed);
+            ok=1;
+        }
+        if(ok) {
+            if(changed && __atomic_add_fetch(&kzsf_model_view_events[kind],1,__ATOMIC_RELAXED)==1) {
+                fprintf(stderr,"KILLZONE_MODEL_VIEW %s reached during free camera\n",
+                    kind ? "native-world-model" : "first-person-suppressed");fflush(stderr);
+            }
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_free_camera_enabled &&
+       record->ExceptionAddress==image+KZSF_FREE_CAMERA_SITE) {
+        CONTEXT *c=info->ContextRecord;
+        const float *matrix=kzsf_free_camera_update(c,0);
+        __atomic_store_n(&kzsf_free_camera_body_active,kzsf_free_camera_body_test && matrix!=NULL,__ATOMIC_RELEASE);
+        if(kzsf_free_camera_store(c,(uintptr_t)image,matrix,kzsf_cheat_read,kzsf_turn_write,NULL))
+            return EXCEPTION_CONTINUE_EXECUTION;
+        kzsf_free_camera.active=0;kzsf_free_input(0);
+        __atomic_store_n(&kzsf_free_camera_body_active,0,__ATOMIC_RELEASE);
+        if(kzsf_free_camera_store(c,(uintptr_t)image,NULL,kzsf_cheat_read,kzsf_turn_write,NULL))
+            return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_camera_controls_enabled) {
+        int kind=-1,ok=0;
+        float fov=0;
+        if(record->ExceptionAddress==image+KZSF_FOV_SITE) {
+            kind=0;
+            ok=kzsf_camera_fov_store(info->ContextRecord,(uintptr_t)image,
+                gow3gpu_fov_percent(),kzsf_turn_write,NULL,&fov);
+        } else if(record->ExceptionAddress==image+KZSF_SHAKE_SITE) {
+            kind=1;
+            ok=kzsf_camera_shake_result(info->ContextRecord,(uintptr_t)image,
+                gow3gpu_camera_shake(),kzsf_cheat_read,kzsf_turn_write,NULL);
+        }
+        if(kind>=0 && ok) {
+            if(__atomic_add_fetch(&kzsf_camera_events[kind],1,__ATOMIC_RELAXED)==1)
+                fprintf(stderr,"KILLZONE_CAMERA %s reached: fov=%d%% shake=%d stored_fov=%.2f\n",
+                    kind==0?"FOV":"shake",gow3gpu_fov_percent(),gow3gpu_camera_shake(),fov);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
     if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled) {
         CONTEXT *c=info->ContextRecord;int ok=0,changed=0,kind=-1;
         if(record->ExceptionAddress==image+KZSF_RESPONSE_SITE) {
@@ -420,6 +1893,93 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         }
         fprintf(stderr,"Killzone: player turn hook memory access failed\n");fflush(stderr);
     }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_prompt_trace_enabled) {
+        for(unsigned i=0;i<KZSF_PROMPT_TRACE_SITES;++i) {
+            if(record->ExceptionAddress!=image+kzsf_prompt_sites[i].site) continue;
+            CONTEXT *c=info->ContextRecord;
+            if(i==3) kzsf_prompt_constructor_smoke();
+            if(kzsf_prompt_pc_enabled && i==2 && !__atomic_load_n(&kzsf_prompt_pc_state,__ATOMIC_ACQUIRE)) {
+                int32_t count=0;
+                if(kzsf_prompt_read(kzsf_cheat_read,NULL,c->Rdi,0x18,&count,4) && count==27) {
+                    int expected=0;
+                    if(__atomic_compare_exchange_n(&kzsf_prompt_pc_state,&expected,1,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
+                        int ready=kzsf_pc_prepare(&kzsf_prompt_pc,(uintptr_t)image,c->Rdi,
+                            1,kzsf_cheat_read,NULL,runtime_pad_prompt_binding,
+                            kzsf_prompt_native_create,NULL);
+                        if(ready)ready=kzsf_pc_prepare(&kzsf_prompt_keyboard,(uintptr_t)image,c->Rdi,
+                            0,kzsf_cheat_read,NULL,runtime_pad_prompt_binding,
+                            kzsf_prompt_native_create,NULL);
+                        __atomic_store_n(&kzsf_prompt_pc_state,ready ? 2 : 3,__ATOMIC_RELEASE);
+                        fprintf(stderr,"KILLZONE_PROMPT_PC preparation=%s supported=%04x\n",
+                            ready ? "ready" : "refused",kzsf_prompt_pc.supported);fflush(stderr);
+                    }
+                }
+            }
+            /* Claim bounded distinct collections and requests; repeated prompts
+             * keep replaying the MOV without flooding the log. */
+            int collection=0,request=0;
+            for(unsigned j=0;j<4;++j) {
+                uintptr_t expected=0;
+                if(__atomic_compare_exchange_n(&kzsf_prompt_collections[i][j],&expected,
+                    (uintptr_t)c->Rdi,0,__ATOMIC_RELAXED,__ATOMIC_RELAXED)) {collection=1;break;}
+                if(expected==(uintptr_t)c->Rdi) break;
+            }
+            uint64_t caller=0;
+            kzsf_prompt_read(kzsf_cheat_read,NULL,c->Rsp,8,&caller,8);
+            /* The same action may be used by both a contextual widget and a
+             * tutorial. Preserve that distinction in the bounded request set. */
+            uint64_t key=(((uint64_t)(uint32_t)(caller-(uintptr_t)image)<<32) |
+                          (uint32_t)c->Rsi)+1;
+            if(!key) key=UINT64_MAX;
+            for(unsigned j=0;j<32;++j) {
+                uint64_t expected=0;
+                if(__atomic_compare_exchange_n(&kzsf_prompt_requests[i][j],&expected,key,
+                    0,__ATOMIC_RELAXED,__ATOMIC_RELAXED)) {request=1;break;}
+                if(expected==key) break;
+            }
+            if(collection || request) {
+                kzsf_prompt_trace_dump(stderr,c,(uintptr_t)image,i,collection,kzsf_cheat_read,NULL);
+                fflush(stderr);
+            }
+            if(kzsf_prompt_trace_replay(c,(uintptr_t)image,i,kzsf_cheat_read,NULL))
+                return EXCEPTION_CONTINUE_EXECUTION;
+            /* Replay failed only if the original MOV's operand is unreadable;
+             * let the normal fault reporting terminate instead of retrying INT3. */
+            fprintf(stderr,"Killzone: native prompt diagnostic replay failed\n");
+            break;
+        }
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_prompt_pc_enabled) {
+        for(unsigned i=0;i<sizeof(kzsf_pc_calls)/sizeof(*kzsf_pc_calls);++i) {
+            if(record->ExceptionAddress!=image+kzsf_pc_calls[i]) continue;
+            CONTEXT *c=info->ContextRecord;
+            if(__atomic_load_n(&kzsf_prompt_pc_state,__ATOMIC_ACQUIRE)==2 && gow3gpu_pc_prompts_active()) {
+                KzsfPromptPc *art=gow3gpu_mouse_aim_enabled() ? &kzsf_prompt_pc : &kzsf_prompt_keyboard;
+                int glyph=kzsf_pc_draw_caller(art,c,kzsf_pc_calls[i]+5,
+                    kzsf_cheat_read,kzsf_turn_write,NULL);
+                unsigned draws=__atomic_load_n(&art->draws,__ATOMIC_RELAXED);
+                if(glyph && (draws==1 || draws%512==0)) {
+                    fprintf(stderr,"KILLZONE_PROMPT_PC native draw glyph=%d count=%u\n",glyph-1,draws);
+                    fflush(stderr);
+                }
+            }
+            if(kzsf_pc_replay_call(c,(uintptr_t)image,i,kzsf_turn_write,NULL))
+                return EXCEPTION_CONTINUE_EXECUTION;
+            fprintf(stderr,"Killzone: native PC prompt CALL replay failed\n");break;
+        }
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_postfx_dump_enabled &&
+       record->ExceptionAddress==image+KZSF_POSTFX_SITE) {
+        int report=__atomic_fetch_add(&kzsf_postfx_dump_hits,1,__ATOMIC_RELAXED)<3;
+        CONTEXT scratch=*info->ContextRecord;
+        if(kzsf_postfx_dump(&scratch,(uintptr_t)image,kzsf_cheat_read,NULL,report ? stderr : NULL)) {
+            info->ContextRecord->Rdx=scratch.Rdx;
+            info->ContextRecord->Rip=scratch.Rip;
+            if(report) fflush(stderr);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        if(report) fprintf(stderr,"Killzone: postfx dump hook at an unexpected site\n");
+    }
     if(code==EXCEPTION_BREAKPOINT && kzsf_turn_speed_enabled &&
        (record->ExceptionAddress==image+KZSF_TURN_SITE ||
         record->ExceptionAddress==image+KZSF_PITCH_SITE)) {
@@ -442,6 +2002,27 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         }
         fprintf(stderr,"Killzone: engine %s-rate store failed\n",pitch ? "pitch" : "heading");
         fflush(stderr);
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_unlimited_sprint &&
+       (record->ExceptionAddress==image+KZSF_STAMINA_SITE_A ||
+        record->ExceptionAddress==image+KZSF_STAMINA_SITE_B)) {
+        int changed=0;
+        if(kzsf_stamina_store(info->ContextRecord,(uintptr_t)image,kzsf_cheat_read,kzsf_turn_write,NULL,&changed)) {
+            info->ContextRecord->Rip=(uintptr_t)record->ExceptionAddress+sizeof(kzsf_stamina_original);
+            if(changed && !__atomic_exchange_n(&kzsf_sprint_reported,1,__ATOMIC_RELAXED))
+                fprintf(stderr,"Killzone: unlimited sprint reached local player stamina store\n");
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+    if(code==EXCEPTION_BREAKPOINT && kzsf_continuous_scan &&
+       record->ExceptionAddress==image+KZSF_CONTINUOUS_SCAN_SITE) {
+        CONTEXT *c=info->ContextRecord;
+        if(kzsf_continue_scan(c->Rdi,(uintptr_t)image,kzsf_cheat_read,kzsf_turn_write,NULL) &&
+           !__atomic_exchange_n(&kzsf_scan_reported,1,__ATOMIC_RELAXED))
+            fprintf(stderr,"Killzone: continuous Tactical Echo reached active local-player scan\n");
+        c->R14=c->Rdi; /* replay mov r14,rdi, even for idle or non-player abilities */
+        c->Rip=(uintptr_t)image+KZSF_CONTINUOUS_SCAN_SITE+3;
+        return EXCEPTION_CONTINUE_EXECUTION;
     }
     if(code==EXCEPTION_BREAKPOINT && kzsf_player_protection &&
        record->ExceptionAddress==image+KZSF_DAMAGE_SITE && handle_kzsf_player_damage(info->ContextRecord))
@@ -987,6 +2568,27 @@ static int install_jump(uint64_t at, unsigned length, unsigned char *stub) {
  * the stubs read the menu's floats directly, so changes apply on the next hit or pickup. */
 static void install_kzsf_cheats(Segment *segments, uint64_t count, uint64_t size) {
     const char *health=getenv("KZSF_UNLIMITED_HEALTH"), *ammo=getenv("KZSF_INFINITE_AMMO");
+#ifdef _WIN32
+    const char *sprint=getenv("KZSF_UNLIMITED_SPRINT"), *scan=getenv("KZSF_CONTINUOUS_SCAN");
+    if(sprint && sprint[0]=='1') {
+        const size_t sites[]={KZSF_STAMINA_SITE_A,KZSF_STAMINA_SITE_B};
+        for(unsigned i=0;i<2;++i)
+            if(!mapped(segments,count,sites[i],sizeof(kzsf_stamina_original)) ||
+               !kzsf_patch_match(image,size,sites[i],kzsf_stamina_original,sizeof(kzsf_stamina_original)))
+                fail("Killzone stamina signature mismatch; refusing to patch this build");
+        kzsf_unlimited_sprint=1;
+        for(unsigned i=0;i<2;++i)image[sites[i]]=0xcc;
+        printf("Killzone: unlimited sprint enabled (local-player stamina, experimental)\n");
+    }
+    if(scan && scan[0]=='1') {
+        if(!mapped(segments,count,KZSF_CONTINUOUS_SCAN_SITE,sizeof(kzsf_scan_original)) ||
+           !kzsf_patch_match(image,size,KZSF_CONTINUOUS_SCAN_SITE,kzsf_scan_original,sizeof(kzsf_scan_original)))
+            fail("Killzone Tactical Echo signature mismatch; refusing to patch this build");
+        kzsf_continuous_scan=1;
+        image[KZSF_CONTINUOUS_SCAN_SITE]=0xcc;
+        printf("Killzone: continuous Tactical Echo enabled; activate scan once after loading (experimental)\n");
+    }
+#endif
     if (health && health[0]=='1') {
 #ifdef _WIN32
         const char *capture=getenv("KZSF_HEALTH_TRACE");
@@ -1403,7 +3005,19 @@ int main(int argc, char **argv) {
     if (!isa_table && cpu_missing_sets) { printf("STOP: this CPU lacks %s and no rewrite table matches the image\n", missing); return 20; }
     /* The stubs follow the image in the same low mapping (rel32 jmps reach them). */
     size_t stub_area = isa_table ? round_page(isa_stub_area_size(isa_table)) : 0;
-    image = allocate(round_page(size) + stub_area);
+    size_t camera_bridge_area=0;
+#ifdef _WIN32
+    int camera_bridge_requested=getenv("KZSF_CAMERA_CALL_BRIDGE") &&
+        !strcmp(getenv("KZSF_CAMERA_CALL_BRIDGE"),"1");
+    int third_person_requested=getenv("KZSF_THIRD_PERSON_TEST") && !strcmp(getenv("KZSF_THIRD_PERSON_TEST"),"1");
+    if(third_person_requested && !camera_bridge_requested)fail("Third-person prototype requires the direct-call bridge");
+    if(camera_bridge_requested) {
+        if(cpu_only || !getenv("KZSF_CAMERA_OBSERVER") || strcmp(getenv("KZSF_CAMERA_OBSERVER"),"1"))
+            fail("Camera call bridge requires the isolated camera observer");
+        camera_bridge_area=page_size;
+    }
+#endif
+    image = allocate(round_page(size) + stub_area + camera_bridge_area);
     unsigned char *stubs = image + round_page(size);
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
@@ -1504,7 +3118,207 @@ int main(int argc, char **argv) {
             fail("Killzone motion-blur signature mismatch; refusing to patch");
         printf("Killzone motion blur: engine mask %08x -> %08x; native off path selected\n",before,after);
     }
+    if(gpu_enabled && getenv("KZSF_DISABLE_DOF") && getenv("KZSF_DISABLE_DOF")[0]=='1') {
+        uint32_t before=0,after=0;
+        if(!mapped(segments,ns,KZSF_DOF_FLAGS,4) ||
+           !mapped(segments,ns,KZSF_DOF_GUARD,sizeof(kzsf_dof_signature)) ||
+           !kzsf_disable_depth_of_field(image,size,&before,&after))
+            fail("Killzone depth-of-field signature mismatch; refusing to patch");
+        printf("Killzone depth of field: engine mask %08x -> %08x; native off path selected\n",before,after);
+    }
+    /* These run after motion blur and DOF: their guards tolerate bits 0..3. */
+    if (gpu_enabled && getenv("KZSF_DISABLE_FILM_GRAIN") && getenv("KZSF_DISABLE_FILM_GRAIN")[0]=='1') {
+        uint32_t before=0,after=0;
+        if (!mapped(segments,ns,KZSF_FF_FLAGS,4) ||
+            !mapped(segments,ns,KZSF_GRAIN_GUARD,sizeof(kzsf_grain_signature)) ||
+            !kzsf_disable_film_grain(image,size,&before,&after))
+            fail("Killzone film-grain signature mismatch; refusing to patch");
+        printf("Killzone film grain: engine mask %08x -> %08x; native off path selected\n",before,after);
+    }
+    if (gpu_enabled && getenv("KZSF_DISABLE_BLOOM") && getenv("KZSF_DISABLE_BLOOM")[0]=='1') {
+        uint32_t before=0,after=0;
+        if (!mapped(segments,ns,KZSF_FF_FLAGS,4) ||
+            !mapped(segments,ns,KZSF_BLOOM_GUARD,sizeof(kzsf_bloom_signature)) ||
+            !kzsf_disable_bloom(image,size,&before,&after))
+            fail("Killzone bloom signature mismatch; refusing to patch");
+        printf("Killzone bloom: engine mask %08x -> %08x; native off path selected\n",before,after);
+    }
 #ifdef _WIN32
+    const int pc_prompt_test=(getenv("KZSF_NATIVE_PROMPTS") && !strcmp(getenv("KZSF_NATIVE_PROMPTS"),"1")) ||
+        (getenv("KZSF_PROMPT_PC_TEST") && !strcmp(getenv("KZSF_PROMPT_PC_TEST"),"1"));
+    if(gpu_enabled && (pc_prompt_test ||
+       (getenv("KZSF_PROMPT_TRACE") && !strcmp(getenv("KZSF_PROMPT_TRACE"),"1")))) {
+        /* Validate every signature before installing any trap. */
+        for(unsigned i=0;i<KZSF_PROMPT_TRACE_SITES;++i)
+            if(!mapped(segments,ns,kzsf_prompt_sites[i].entry,kzsf_prompt_sites[i].length) ||
+               !kzsf_prompt_trace_signature(image,size,i))
+                fail("Killzone native prompt diagnostic signature mismatch; refusing to patch");
+        for(unsigned i=0;i<KZSF_PROMPT_TRACE_SITES;++i) image[kzsf_prompt_sites[i].site]=0xcc;
+        kzsf_prompt_trace_enabled=1;
+        printf("Killzone: native prompt collection trace enabled%s\n",pc_prompt_test ? "" : "; no prompt replacement");
+    }
+    if(gpu_enabled && pc_prompt_test) {
+        if(!mapped(segments,ns,0xfc4d90,sizeof(kzsf_pc_draw_signature)) || !kzsf_pc_signature(image,size))
+            fail("Killzone native PC prompt prototype signature mismatch; refusing to patch");
+        for(unsigned i=0;i<sizeof(kzsf_pc_calls)/sizeof(*kzsf_pc_calls);++i) image[kzsf_pc_calls[i]]=0xcc;
+        kzsf_prompt_pc_enabled=1;
+        kzsf_prompt_texture_smoke=getenv("KZSF_PROMPT_TEXTURE_SMOKE") &&
+            !strcmp(getenv("KZSF_PROMPT_TEXTURE_SMOKE"),"1");
+        printf("Killzone: native gameplay PC prompt artwork enabled; live device/style selection\n");
+    }
+    if (gpu_enabled && getenv("KZSF_POSTFX_DUMP") && getenv("KZSF_POSTFX_DUMP")[0]=='1') {
+        if (!mapped(segments,ns,KZSF_POSTFX_GUARD,sizeof(kzsf_postfx_signature)) ||
+            !kzsf_patch_match(image,size,KZSF_POSTFX_GUARD,kzsf_postfx_signature,sizeof(kzsf_postfx_signature)))
+            fail("Killzone post-process dump signature mismatch; refusing to patch");
+        image[KZSF_POSTFX_SITE]=0xcc;
+        kzsf_postfx_dump_enabled=1;
+        printf("Killzone: post-process diagnostic dump installed (KZSF_POSTFX_DUMP)\n");
+    }
+#endif
+#ifdef _WIN32
+    if(gpu_enabled && getenv("KZSF_CAMERA_OBSERVER") && !strcmp(getenv("KZSF_CAMERA_OBSERVER"),"1")) {
+        if(getenv("KZSF_FREE_CAMERA_TEST") && !strcmp(getenv("KZSF_FREE_CAMERA_TEST"),"1"))
+            fail("Killzone camera observer and free camera must run separately");
+        const struct {size_t address;const unsigned char *bytes;size_t count;} guards[]={
+            {KZSF_CAMERA_SELECT_ENTRY,kzsf_camera_select_guard,sizeof(kzsf_camera_select_guard)},
+            {KZSF_CAMERA_BIND_ENTRY,kzsf_camera_bind_guard,sizeof(kzsf_camera_bind_guard)},
+            {KZSF_FREE_CAMERA_GUARD,kzsf_free_camera_signature,sizeof(kzsf_free_camera_signature)}};
+        for(unsigned i=0;i<3;i++)
+            if(!mapped(segments,ns,guards[i].address,guards[i].count) ||
+               !kzsf_patch_match(image,size,guards[i].address,guards[i].bytes,guards[i].count))
+                fail("Killzone camera observer signature mismatch; refusing to patch");
+        image[KZSF_CAMERA_SELECT_ENTRY+1]=0xcc;image[KZSF_CAMERA_BIND_ENTRY+1]=0xcc;
+        if(camera_bridge_requested) {
+            unsigned char *bridge=stubs+stub_area,patch[12];
+            const unsigned char native_return=0xc3;
+            if(!mapped(segments,ns,0x5fdb30,1) || image[0x5fdb30]!=native_return ||
+               !kzsf_camera_call_bridge(bridge,camera_bridge_area,(uintptr_t)bridge,patch,
+                    (uintptr_t)image+KZSF_CAMERA_CALL_SITE,image+KZSF_CAMERA_CALL_SITE,
+                    (uintptr_t)kzsf_camera_bridge_visit))
+                fail("Camera direct-call bridge guard/range mismatch; refusing to patch");
+            if(getenv("KZSF_CHARACTER_ENGINEER_TEST") && !strcmp(getenv("KZSF_CHARACTER_ENGINEER_TEST"),"1")) {
+                unsigned char render_patch[5];
+                kzsf_character_body_route_test=getenv("KZSF_CHARACTER_BODY_ROUTE_TEST") &&
+                    !strcmp(getenv("KZSF_CHARACTER_BODY_ROUTE_TEST"),"1");
+                if(!third_person_requested || !kzsf_character_pose_guards((uintptr_t)image,kzsf_cheat_read,NULL))
+                    fail("Character render-pose guard mismatch");
+                if(getenv("KZSF_CHARACTER_ENGINEER_DRAW_TEST") && !strcmp(getenv("KZSF_CHARACTER_ENGINEER_DRAW_TEST"),"1")) {
+                    unsigned char draw_patch[20];
+                    if(!mapped(segments,ns,KZSF_CHARACTER_DRAW_ENTRY,20) ||
+                       !kzsf_character_draw_bridge(bridge+64,camera_bridge_area-64,(uintptr_t)bridge+64,draw_patch,
+                            (uintptr_t)image+KZSF_CHARACTER_DRAW_ENTRY,image+KZSF_CHARACTER_DRAW_ENTRY,(uintptr_t)kzsf_character_draw_visit))
+                        fail("Character draw bridge guard/range mismatch");
+                    kzsf_character_draw_original=(uintptr_t)bridge+64;
+                    memcpy(image+KZSF_CHARACTER_DRAW_ENTRY,draw_patch,20);
+                    printf("Killzone: Engineer draw-time scratch pose bridge installed\n");
+                } else {
+                    if(!mapped(segments,ns,KZSF_CHARACTER_RENDER_SITE,5) ||
+                       !kzsf_character_render_bridge(bridge+64,camera_bridge_area-64,(uintptr_t)bridge+64,render_patch,
+                           (uintptr_t)image+KZSF_CHARACTER_RENDER_SITE,image+KZSF_CHARACTER_RENDER_SITE,(uintptr_t)kzsf_character_render_visit))
+                        fail("Character render-pose bridge guard/range mismatch");
+                    memcpy(image+KZSF_CHARACTER_RENDER_SITE,render_patch,5);
+                }
+                if(!mapped(segments,ns,0xb57adc,sizeof(kzsf_character_face_lookup_guard)) ||
+                   !kzsf_patch_match(image,size,0xb57adc,kzsf_character_face_lookup_guard,sizeof(kzsf_character_face_lookup_guard)) ||
+                   !kzsf_character_face_guards((uintptr_t)image,kzsf_cheat_read,NULL))
+                    fail("Character native facial animator guard mismatch");
+                /* b57ac0 must use the active animator's own resource (+18).
+                 * The original player's shared BodyVariant has no face. */
+                memset(image+0xb57adc,0x90,sizeof(kzsf_character_face_lookup_guard));
+                const unsigned char face_resource_lookup[]={0x4c,0x8b,0x7f,0x18};
+                memcpy(image+0xb57adc,face_resource_lookup,sizeof(face_resource_lookup));
+                unsigned char face_mapping_patch[55];
+                if(!mapped(segments,ns,0xe46a4d,sizeof(kzsf_character_face_mapping_guard)) ||
+                   !kzsf_patch_match(image,size,0xe46a4d,kzsf_character_face_mapping_guard,sizeof(kzsf_character_face_mapping_guard)) ||
+                   !kzsf_character_face_mapping_patch(face_mapping_patch,(uintptr_t)kzsf_character_face_mapping_variant))
+                    fail("Character face-to-body mapping guard mismatch");
+                memcpy(image+0xe46a4d,face_mapping_patch,sizeof(face_mapping_patch));
+                unsigned char face_offsets_patch[47];
+                if(!mapped(segments,ns,0xe465cc,sizeof(kzsf_character_face_offsets_guard)) ||
+                   !kzsf_patch_match(image,size,0xe465cc,kzsf_character_face_offsets_guard,sizeof(kzsf_character_face_offsets_guard)) ||
+                   !kzsf_character_face_offsets_bridge(bridge+512,camera_bridge_area-512,(uintptr_t)bridge+512,
+                       face_offsets_patch,(uintptr_t)image,(uintptr_t)kzsf_character_face_mapping_variant))
+                    fail("Character facial offset map guard mismatch");
+                memcpy(image+0xe465cc,face_offsets_patch,sizeof(face_offsets_patch));
+                unsigned char face_owner_patch[7];
+                if(!mapped(segments,ns,KZSF_CHARACTER_FACE_OWNER_SITE,sizeof(face_owner_patch)) ||
+                   !kzsf_character_face_owner_bridge(bridge+1024,camera_bridge_area-1024,(uintptr_t)bridge+1024,
+                       face_owner_patch,(uintptr_t)image+KZSF_CHARACTER_FACE_OWNER_SITE,
+                       image+KZSF_CHARACTER_FACE_OWNER_SITE,(uintptr_t)kzsf_character_face_animation_owner))
+                    fail("Character facial animation owner guard/range mismatch");
+                memcpy(image+KZSF_CHARACTER_FACE_OWNER_SITE,face_owner_patch,sizeof(face_owner_patch));
+                kzsf_character_render_installed=1;
+                if(getenv("KZSF_CHARACTER_BUNDLE_TEST") && !strcmp(getenv("KZSF_CHARACTER_BUNDLE_TEST"),"1")) {
+                    unsigned char exit_patch[20];
+                    if(!mapped(segments,ns,KZSF_CHARACTER_LEVEL_EXIT,sizeof(exit_patch)) ||
+                       !kzsf_character_bundle_guards((uintptr_t)image,kzsf_cheat_read,NULL) ||
+                       !kzsf_character_level_exit_bridge(bridge+768,camera_bridge_area-768,(uintptr_t)bridge+768,
+                            exit_patch,(uintptr_t)image+KZSF_CHARACTER_LEVEL_EXIT,image+KZSF_CHARACTER_LEVEL_EXIT,
+                            (uintptr_t)kzsf_character_level_exit_visit))fail("Character level exit bridge guard mismatch");
+                    kzsf_character_level_exit_original=(uintptr_t)bridge+768;
+                    memcpy(image+KZSF_CHARACTER_LEVEL_EXIT,exit_patch,sizeof(exit_patch));
+                    printf("Killzone: character bundle level-exit cleanup installed\n");
+                    unsigned char handle_patch[KZSF_CHECKPOINT_HANDLE_BYTES];
+                    if(!mapped(segments,ns,KZSF_CHECKPOINT_HANDLE_SITE,sizeof(handle_patch)) ||
+                       !kzsf_checkpoint_handle_guards(image,size) ||
+                       !kzsf_checkpoint_handle_bridge(bridge+832,camera_bridge_area-832,(uintptr_t)bridge+832,
+                            handle_patch,(uintptr_t)image+KZSF_CHECKPOINT_HANDLE_SITE,image+KZSF_CHECKPOINT_HANDLE_SITE))
+                        fail("Checkpoint slot bridge guard mismatch");
+                    memcpy(image+KZSF_CHECKPOINT_HANDLE_SITE,handle_patch,sizeof(handle_patch));
+                    printf("Killzone: checkpoint pool/index/object guard installed\n");
+                }
+                if(getenv("KZSF_CHARACTER_OVERLAY_TEST") && !strcmp(getenv("KZSF_CHARACTER_OVERLAY_TEST"),"1"))
+                    gow3gpu_character_selector_enable(1);
+                printf("Killzone: isolated Engineer render-pose adapter installed; experimental F7 appearance\n");
+            }
+            protect(bridge,camera_bridge_area,5);
+            memcpy(image+KZSF_CAMERA_CALL_SITE,patch,sizeof(patch));
+            if(third_person_requested) {
+                if(!mapped(segments,ns,0xa69c70,sizeof(kzsf_model_fp_signature)) ||
+                   !mapped(segments,ns,0xa69dc0,sizeof(kzsf_model_world_signature)) ||
+                   !kzsf_patch_match(image,size,0xa69c70,kzsf_model_fp_signature,sizeof(kzsf_model_fp_signature)) ||
+                   !kzsf_patch_match(image,size,0xa69dc0,kzsf_model_world_signature,sizeof(kzsf_model_world_signature)))
+                    fail("Third-person model-view guard mismatch");
+                image[KZSF_MODEL_FP_SITE]=0xcc;image[KZSF_MODEL_WORLD_SITE]=0xcc;
+                kzsf_free_camera_body_test=1;kzsf_third_person_enabled=1;
+                kzsf_third_person_collision_ready=kzsf_camera_collision_guards((uintptr_t)image,kzsf_cheat_read,NULL);
+                if(!kzsf_third_person_collision_ready)fail("Third-person native collision signature mismatch");
+                printf("Killzone: third-person follow prototype installed; F8 toggle, native controls, ADS fallback; guarded native sphere collision\n");
+            }
+            printf("Killzone: camera direct-call bridge installed; physics disabled; follow prototype=%d\n",third_person_requested);
+        } else image[KZSF_FREE_CAMERA_SITE]=0xcc;
+        kzsf_camera_observer_enabled=1;
+        atexit(kzsf_camera_observer_summary);
+        printf("Killzone: camera observer installed; F6 snapshots, native controls active (maximum 64 snapshots)\n");
+    }
+    if(gpu_enabled && getenv("KZSF_FREE_CAMERA_TEST") && !strcmp(getenv("KZSF_FREE_CAMERA_TEST"),"1")) {
+        if(!mapped(segments,ns,KZSF_FREE_CAMERA_GUARD,sizeof(kzsf_free_camera_signature)) ||
+           !kzsf_patch_match(image,size,KZSF_FREE_CAMERA_GUARD,kzsf_free_camera_signature,sizeof(kzsf_free_camera_signature)))
+            fail("Killzone free camera signature mismatch; refusing to patch");
+        image[KZSF_FREE_CAMERA_SITE]=0xcc;kzsf_free_camera_enabled=1;
+        if(getenv("KZSF_FREE_CAMERA_BODY") && !strcmp(getenv("KZSF_FREE_CAMERA_BODY"),"1")) {
+            if(!mapped(segments,ns,0xa69c70,sizeof(kzsf_model_fp_signature)) ||
+               !mapped(segments,ns,0xa69dc0,sizeof(kzsf_model_world_signature)) ||
+               !kzsf_patch_match(image,size,0xa69c70,kzsf_model_fp_signature,sizeof(kzsf_model_fp_signature)) ||
+               !kzsf_patch_match(image,size,0xa69dc0,kzsf_model_world_signature,sizeof(kzsf_model_world_signature)))
+                fail("Killzone model-view signatures mismatch; refusing to patch");
+            image[KZSF_MODEL_FP_SITE]=0xcc;image[KZSF_MODEL_WORLD_SITE]=0xcc;
+            kzsf_free_camera_body_test=1;
+            printf("Killzone: free-camera native model-view test enabled (active only with F8)\n");
+        }
+        printf("Killzone: isolated free camera installed; F8 toggle, F7 recenter, WASD/QE, arrows\n");
+    }
+    if(gpu_enabled && getenv("KZSF_CAMERA_CONTROLS") && getenv("KZSF_CAMERA_CONTROLS")[0]=='1') {
+        if(!mapped(segments,ns,KZSF_FOV_GUARD,sizeof(kzsf_fov_signature)) ||
+           !mapped(segments,ns,KZSF_SHAKE_GUARD,sizeof(kzsf_shake_signature)) ||
+           !kzsf_patch_match(image,size,KZSF_FOV_GUARD,kzsf_fov_signature,sizeof(kzsf_fov_signature)) ||
+           !kzsf_patch_match(image,size,KZSF_SHAKE_GUARD,kzsf_shake_signature,sizeof(kzsf_shake_signature)))
+            fail("Killzone camera controls signature mismatch; refusing to patch");
+        image[KZSF_FOV_SITE]=0xcc;
+        image[KZSF_SHAKE_SITE]=0xcc;
+        kzsf_camera_controls_enabled=1;
+        printf("Killzone camera controls: GameViewGame FOV and evaluated shake hooks installed\n");
+    }
     if(gpu_enabled && getenv("KZSF_PLAYER_TURN") && getenv("KZSF_PLAYER_TURN")[0]=='1') {
         if(!mapped(segments,ns,KZSF_PLAYER_TURN_GUARD,sizeof(kzsf_player_turn_signature)) ||
            !kzsf_patch_match(image,size,KZSF_PLAYER_TURN_GUARD,kzsf_player_turn_signature,sizeof(kzsf_player_turn_signature)))

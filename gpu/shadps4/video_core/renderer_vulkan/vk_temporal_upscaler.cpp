@@ -4,6 +4,7 @@
 #include "video_core/renderer_vulkan/motion_history.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/ui_composition.h"
+#include "video_core/renderer_vulkan/upscale_formats.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,6 +26,7 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/vk_frame_generation.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -331,7 +333,9 @@ bool TemporalUpscaler::OnFrameStart() {
     const bool active = Active();
     const bool jitter_on = !camera_motion.KillzoneNative() && active && settings.jitter && !Gow3Toggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
-    const int output = camera_motion.KillzoneNative() ? 1 : settings.output_res.load();
+    // Killzone's scene/HUD integration is chosen by the launcher. Save menu changes for restart.
+    const int output = std::clamp(camera_motion.KillzoneNative() ? settings.startup_output_res :
+                                 settings.output_res.load(), 0, Gow3Settings::OutputCount - 1);
     const bool output_changed = !scaled_session && applied_output != output;
     if (output_changed) {
         target_width = Gow3Settings::OutputWidths[output];
@@ -351,7 +355,17 @@ bool TemporalUpscaler::OnFrameStart() {
     if (applied_upscaler != upscaler) fsr4_failed = false; // retry after a menu change
     // Dynamic scene resolution scaling (live preset switching) works on all GPUs.
     // On GPUs without D32S8 blit support, UI depth is cleared instead of copied from scene.
-    if (!scaled_session) {
+    // Killzone (GOW3_SCENE_NATIVE=1): the scene stays at the game's own 1920x1080, without host
+    // proxies (its shaders read many targets at exact pixels: each proxy round trip lost
+    // detail, foliage lighting broke); the temporal upscaler alone reaches the output size.
+    static const bool scene_native = [] {
+        const char* v = std::getenv("GOW3_SCENE_NATIVE");
+        return v && v[0] == '1';
+    }();
+    if (!scaled_session && scene_native) {
+        scene_targets.SetSize({});
+        render_width = 1920; render_height = 1080;
+    } else if (!scaled_session) {
         scene_targets.SetSize(SceneResolution::ForPreset(active ? preset : 0,
                                                         {target_width, target_height}));
         render_width = scene_targets.Size().width;
@@ -413,7 +427,7 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
 void TemporalUpscaler::OnKillzonePost(u64 vs_hash,u64 ps_hash,VideoCore::ImageId color,
                                      VideoCore::ImageId secondary,bool has_depth,bool native_viewport) {
     if(!camera_motion.KillzoneNative() || !Active() || done_this_frame || failed ||
-       vs_hash!=0x3de7685c || ps_hash!=0x857a8dc0 || !native_viewport || has_depth ||
+       Scaled() || vs_hash!=0x3de7685c || ps_hash!=0x857a8dc0 || !native_viewport || has_depth ||
        !color || !secondary || !scene_color) return;
     const auto& destination=texture_cache.GetImage(color);
     const auto& auxiliary=texture_cache.GetImage(secondary);
@@ -835,10 +849,10 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
     vk::ImageView target_view = *output_view;
     if (ldr) {
         if (!ui_storage_view) {
-            // The UI image's own format may be sRGB; FSR 3 writes it through a UNORM view too.
+            // Match FSR's storage view, preserving packed float targets used by Killzone.
             ui_storage_view = Check(device.createImageViewUnique({
                 .image = target, .viewType = vk::ImageViewType::e2D,
-                .format = vk::Format::eR8G8B8A8Unorm,
+                .format = vk::Format(UpscaleFormats::StorageView(VkFormat(ui_format))),
                 .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
             }));
         }
@@ -1383,7 +1397,46 @@ float TemporalUpscaler::SceneMipBias() const {
 }
 
 bool TemporalUpscaler::Scaled() const {
-    return scaled_session || target_width != 1920 || target_height != 1080;
+    // GOW3_NATIVE_AA=1: FSR / DLSS at the game's own 1920x1080 (anti-aliasing only, like DLAA),
+    // through the same path as an upscale (frame generation takes its inputs there).
+    static const bool native_aa = [] {
+        const char* v = std::getenv("GOW3_NATIVE_AA");
+        return v && v[0] == '1';
+    }();
+    return scaled_session || native_aa || target_width != 1920 || target_height != 1080;
+}
+
+void TemporalUpscaler::OnCompletedFrame(VideoCore::ImageId color) {
+    if (!camera_motion.KillzoneNative() || !color) return;
+    const auto& image = texture_cache.GetImage(color);
+    const bool final_scene = color == ldr_target &&
+        image.info.pixel_format == vk::Format::eB10G11R11UfloatPack32 &&
+        RenderTarget(image.info.size.width, image.info.size.height) &&
+        !FrameCapture::IsDisplayBuffer(image.info.guest_address);
+    if (Scaled() && Active()) {
+        static u32 frames = 0, temporal = 0, copy = 0, missing_hud = 0, fallback_eligible = 0;
+        ++frames;
+        temporal += dispatched_last_frame;
+        copy += ui_phase && !dispatched_last_frame;
+        missing_hud += !ui_phase;
+        fallback_eligible += !ui_phase && camera_motion.Ready() && final_scene;
+        if (frames % 120 == 0) {
+            std::printf("Killzone upscale boundaries: frames=%u temporal=%u spatial_only=%u no_hud=%u fallback_eligible=%u\n",
+                        frames, temporal, copy, missing_hud, fallback_eligible);
+            std::fflush(stdout);
+        }
+    }
+    if (!UiComposition::CompleteAtDisplay(Scaled(), Active(), ui_phase,
+                                          camera_motion.Ready(), final_scene)) return;
+    RunScaled();
+    if (dispatched_last_frame) {
+        static u32 fallback_frames = 0;
+        if (++fallback_frames == 1 || fallback_frames % 120 == 0) {
+            std::printf("Killzone upscale: completed-frame fallback=%u (HUD trigger absent; final-frame UI may be interpolated)\n",
+                        fallback_frames);
+            std::fflush(stdout);
+        }
+    }
 }
 
 void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
@@ -1392,7 +1445,9 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
     }
     const auto& image = texture_cache.GetImage(color);
     const auto& depth = texture_cache.GetImage(camera_motion.Depth());
-    if (image.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
+    // Killzone: its finished scene (post-processed, before the HUD) is B10G11R11.
+    if ((image.info.pixel_format == vk::Format::eR8G8B8A8Unorm ||
+         image.info.pixel_format == vk::Format::eB10G11R11UfloatPack32) &&
         image.info.size.width == depth.info.size.width &&
         image.info.size.height == depth.info.size.height) {
         ldr_target = color;
@@ -1418,9 +1473,12 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
     const auto& image = texture_cache.GetImage(color);
     const bool movie = vs_hash == ui_trigger_vs || UiComposition::MovieShader(vs_hash) ||
                        (scaled_session && native_viewport);
+    // Killzone draws its HUD, menus and movies into the B10G11R11 scene color it then copies to
+    // the display buffer (at the start of the next frame, like God of War III's display pass).
     const bool ui_draw = movie &&
         (image.info.pixel_format == vk::Format::eR8G8B8A8Unorm ||
-         image.info.pixel_format == vk::Format::eR8G8B8A8Srgb) &&
+         image.info.pixel_format == vk::Format::eR8G8B8A8Srgb ||
+         image.info.pixel_format == vk::Format::eB10G11R11UfloatPack32) &&
         RenderTarget(image.info.size.width, image.info.size.height) &&
         !FrameCapture::IsDisplayBuffer(image.info.guest_address);
     switch (UiComposition::Choose(Scaled(), ui_draw,
@@ -1570,8 +1628,10 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     vk::Image source = color.GetImage();
     auto source_layout = vk::ImageLayout::eTransferSrcOptimal;
     u32 source_width = color.info.size.width, source_height = color.info.size.height;
-    if (!scaled_session && camera_motion.Depth() && scene_targets.Reduced() &&
-        scene_targets.EligibleScene(color)) {
+    // Killzone: no camera depth is identified yet; the scene proxy (raster size, also above
+    // 1080p) is the background whenever it holds the current content.
+    if (!scaled_session && scene_targets.Reduced() && scene_targets.EligibleScene(color) &&
+        (camera_motion.Depth() || scene_targets.ProxyCurrent(color))) {
         VideoCore::ImageViewInfo view;
         view.format = color.info.pixel_format;
         const auto proxy = scene_targets.Read(color_id, view,
@@ -1648,9 +1708,9 @@ void TemporalUpscaler::RunScaled() {
     const auto depth_format = depth.info.pixel_format;
     // Views kept across frames: FSR 4 registers images by view in a registry of eight.
     vk::Image depth_image = depth.GetImage(), color_image = color.GetImage();
-    vk::ImageView depth_view{}, color_view{};
+    vk::ImageView depth_view{}, color_view{}, velocity_view{};
     u32 source_width = iw, source_height = ih;
-    if (!scaled_session) {
+    if (!scaled_session && scene_targets.Reduced()) {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
         di.format = depth_format;
@@ -1669,6 +1729,27 @@ void TemporalUpscaler::RunScaled() {
                         vk::AccessFlagBits2::eShaderRead);
         runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
+        // Killzone: the game's own velocity target replaces the camera reprojection wherever
+        // the scene was drawn (its first-person weapon has its own camera). GOW3_KZ_VELOCITY=0:
+        // camera reprojection only.
+        static const bool use_velocity = [] {
+            const char* v = std::getenv("GOW3_KZ_VELOCITY");
+            return !v || v[0] != '0';
+        }();
+        if (const auto velocity_id = camera_motion.Velocity(); use_velocity && velocity_id) {
+            auto& velocity = texture_cache.GetImage(velocity_id);
+            if (velocity.info.size.width == iw && velocity.info.size.height == ih) {
+                velocity_view = CachedView(velocity, velocity.info.pixel_format,
+                                           vk::ImageAspectFlagBits::eColor);
+                runtime.Transit(&velocity, vk::ImageLayout::eGeneral,
+                                vk::PipelineStageFlagBits2::eComputeShader,
+                                vk::AccessFlagBits2::eShaderRead);
+                static bool reported = false;
+                if (!std::exchange(reported, true)) {
+                    std::printf("Camera motion: Killzone's velocity target for the motion vectors\n");
+                }
+            }
+        }
         runtime.FlushBarriers();
     }
 
@@ -1700,10 +1781,19 @@ void TemporalUpscaler::RunScaled() {
     barrier(vk::Image(motion_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined,
             all, vk::AccessFlagBits2::eNone, vk::ImageLayout::eGeneral,
             vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite);
-    camera_motion.RecordMotion(cmdbuf, depth_view, *motion_view, w, h);
+    camera_motion.RecordMotion(cmdbuf, depth_view, *motion_view, w, h, velocity_view);
     barrier(vk::Image(motion_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral,
             vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
             vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
+    // Frame generation: its own copy of the depth and motion (the presenter uses them after the
+    // next frame has started here).
+    if (frame_generator) {
+        if (const vk::ImageView fg_motion = frame_generator->BeginCapture(cmdbuf, depth_view, w, h)) {
+            camera_motion.RecordMotion(cmdbuf, depth_view, fg_motion, w, h, velocity_view);
+            frame_generator->EndCapture(cmdbuf, jitter, camera_motion.Ready(),
+                                        {camera_motion.Near(), camera_motion.VerticalFov()});
+        }
+    }
 
     const auto now = std::chrono::steady_clock::now();
     float frame_ms = std::chrono::duration<float, std::milli>(now - last_frame).count();
@@ -1757,6 +1847,10 @@ void TemporalUpscaler::RunScaled() {
                     vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eBlit,
                     vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits2::eColorAttachmentOutput, color_access);
+            if (frame_generator) {
+                frame_generator->CaptureHudless(cmdbuf, vk::Image(ui_image), ow, oh,
+                                                display_format, ow, oh);
+            }
             reset = false;
             dispatched_last_frame = true;
             if (const int dump = DumpFrame(); dump >= 0) {
@@ -1805,7 +1899,8 @@ void TemporalUpscaler::RunScaled() {
                                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
                                   vk::ImageAspectFlagBits::eColor,
                                   FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
-    info.output = Describe(vk::Image(ui_image), vk::Format::eR8G8B8A8Unorm, ow, oh,
+    const auto storage_format = vk::Format(UpscaleFormats::StorageView(VkFormat(ui_format)));
+    info.output = Describe(vk::Image(ui_image), storage_format, ow, oh,
                            vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
                                vk::ImageUsageFlagBits::eColorAttachment,
                            vk::ImageAspectFlagBits::eColor,
@@ -1848,6 +1943,13 @@ void TemporalUpscaler::RunScaled() {
         failed = true;
     } else {
         ok = true;
+        static bool reported_output_format = false;
+        if (!reported_output_format) {
+            reported_output_format = true;
+            std::printf("Killzone upscale output: image=%s FSR storage=%s (matching numeric encoding)\n",
+                        vk::to_string(ui_format).c_str(), vk::to_string(storage_format).c_str());
+            std::fflush(stdout);
+        }
         reset = false;
         dispatched_last_frame = true;
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
@@ -1855,6 +1957,10 @@ void TemporalUpscaler::RunScaled() {
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
             rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             color_access);
+    if (ok && frame_generator) {
+        frame_generator->CaptureHudless(cmdbuf, vk::Image(ui_image), ow, oh, display_format, ow,
+                                        oh);
+    }
 
     done_this_frame = true; // the UI is not jittered
     if (ok) {
@@ -1906,13 +2012,29 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
         display.valid = false; // not upscaled: the presenter shows the guest buffer
         return false;
     }
-    if (!display.image || display.format != image.info.pixel_format ||
+    // Killzone: its display copy (the first pass of a frame) reads the scene color with integer
+    // coordinates of the 1920x1080 guest image, so on the output-size UI image it showed only the
+    // top-left part, stretched (1.33x zoom at 1440p). The port blits the UI image (format
+    // conversion included) and sends the game's draw to a sink. GOW3_DISPLAY_BLIT=0: old way.
+    static const bool display_blit = [] {
+        const char* v = std::getenv("GOW3_DISPLAY_BLIT");
+        return !v || v[0] != '0';
+    }();
+    // A BGRA scan-out read through the guest's RGBA buffer: the blit writes BGRA bytes.
+    extern std::atomic<bool> g_gow3_display_bgra;
+    auto host_format = image.info.pixel_format;
+    if (display_blit && g_gow3_display_bgra.load(std::memory_order_relaxed)) {
+        if (host_format == vk::Format::eR8G8B8A8Srgb) host_format = vk::Format::eB8G8R8A8Srgb;
+        else if (host_format == vk::Format::eR8G8B8A8Unorm) host_format = vk::Format::eB8G8R8A8Unorm;
+    }
+    if (!display.image || display.format != host_format ||
         display.width != ui_width || display.height != ui_height) {
         const auto device = instance.GetDevice();
         scheduler.Finish();
         display.views.clear();
-        std::printf("Display: host buffer %ux%u (live)\n", ui_width, ui_height);
-        display.format = image.info.pixel_format;
+        std::printf("Display: host buffer %ux%u %s (live)\n", ui_width, ui_height,
+                    vk::to_string(host_format).c_str());
+        display.format = host_format;
         display.width = ui_width;
         display.height = ui_height;
         display.image = VideoCore::UniqueImage(device, instance.GetAllocator());
@@ -1946,6 +2068,102 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
         cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
     });
     display.valid = true;
+    display_format = display.format;
+    // Frame generation: the frame captured last is the one copied into this display buffer.
+    if (frame_generator) {
+        frame_generator->TagDisplay(address);
+    }
+    if (display_blit && ui_image) {
+        if (!display.sink || display.sink_width != ui_width || display.sink_height != ui_height ||
+            display.sink_format != display.format) {
+            scheduler.Finish();
+            display.sink_views.clear();
+            display.sink = VideoCore::UniqueImage(instance.GetDevice(), instance.GetAllocator());
+            display.sink.Create(vk::ImageCreateInfo{
+                .flags = vk::ImageCreateFlagBits::eMutableFormat,
+                .imageType = vk::ImageType::e2D,
+                .format = display.format,
+                .extent = {ui_width, ui_height, 1},
+                .mipLevels = 1,
+                .arrayLayers = 1,
+                .samples = vk::SampleCountFlagBits::e1,
+                .tiling = vk::ImageTiling::eOptimal,
+                .usage = vk::ImageUsageFlagBits::eColorAttachment,
+                .initialLayout = vk::ImageLayout::eUndefined,
+            });
+            display.sink_width = ui_width;
+            display.sink_height = ui_height;
+            display.sink_format = display.format;
+            const vk::ImageMemoryBarrier2 sb{
+                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+                .oldLayout = vk::ImageLayout::eUndefined,
+                .newLayout = vk::ImageLayout::eGeneral,
+                .image = vk::Image(display.sink),
+                .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+            };
+            scheduler.Record([sb](vk::CommandBuffer cmd) {
+                cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &sb});
+            });
+        }
+        const vk::Image src = vk::Image(ui_image), dst = vk::Image(display.image);
+        const u32 w = ui_width, h = ui_height;
+        scheduler.Record([src, dst, w, h](vk::CommandBuffer cmd) {
+            const vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+            const std::array before{
+                vk::ImageMemoryBarrier2{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput |
+                                    vk::PipelineStageFlagBits2::eTransfer,
+                    .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite |
+                                     vk::AccessFlagBits2::eTransferWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                    .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+                    .oldLayout = vk::ImageLayout::eGeneral,
+                    .newLayout = vk::ImageLayout::eGeneral,
+                    .image = src, .subresourceRange = range},
+                vk::ImageMemoryBarrier2{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                    .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                    .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                    .oldLayout = vk::ImageLayout::eGeneral,
+                    .newLayout = vk::ImageLayout::eGeneral,
+                    .image = dst, .subresourceRange = range},
+            };
+            cmd.pipelineBarrier2({.imageMemoryBarrierCount = 2, .pImageMemoryBarriers = before.data()});
+            const vk::ImageBlit region{
+                .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(w), s32(h), 1}},
+                .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(w), s32(h), 1}},
+            };
+            cmd.blitImage(src, vk::ImageLayout::eGeneral, dst, vk::ImageLayout::eGeneral, region,
+                          vk::Filter::eNearest);
+            const std::array after{
+                vk::ImageMemoryBarrier2{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                    .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                    .dstAccessMask = vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead,
+                    .oldLayout = vk::ImageLayout::eGeneral,
+                    .newLayout = vk::ImageLayout::eGeneral,
+                    .image = src, .subresourceRange = range},
+                vk::ImageMemoryBarrier2{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                    .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                    .dstAccessMask = vk::AccessFlagBits2::eMemoryRead,
+                    .oldLayout = vk::ImageLayout::eGeneral,
+                    .newLayout = vk::ImageLayout::eGeneral,
+                    .image = dst, .subresourceRange = range},
+            };
+            cmd.pipelineBarrier2({.imageMemoryBarrierCount = 2, .pImageMemoryBarriers = after.data()});
+        });
+        target = {Mirror(vk::Image(display.sink), display.sink_views, view_info.format, {}),
+                  vk::ImageLayout::eGeneral, ui_width, ui_height};
+        return true;
+    }
     target = {Mirror(vk::Image(display.image), display.views, view_info.format, {}),
               vk::ImageLayout::eGeneral, ui_width, ui_height};
     return true;

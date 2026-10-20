@@ -18,20 +18,28 @@ enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, Upsca
 inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
 }
+enum FrameGen : int { FrameGenOff = 0, FrameGenFsr3 = 1 };
+
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 
 /// Live output resolutions: the upscaler's output and the UI host targets.
-inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
-inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
-inline constexpr int OutputCount = 4;
+inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840, 3200};
+inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160, 1800};
+inline constexpr int OutputCount = 5;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
 
 struct Values {
+    std::atomic<int> prompt_style{0}; // Automatic / keyboard and mouse / PlayStation
     std::atomic<bool> mouse_aim{true}, mouse_invert_y{false};
     std::atomic<int> mouse_sensitivity{100}, mouse_ads_sensitivity{100};
     std::atomic<int> mouse_horizontal_speed{100}, mouse_vertical_speed{100};
     std::atomic<bool> motion_blur{true}, unlimited_health{false}, infinite_ammo{false};
+    std::atomic<bool> unlimited_sprint{false}, continuous_scan{false}; // startup hooks
+    /// Post-process feature mask bits 2/3 (bloom, film grain). Restart required.
+    std::atomic<bool> bloom{true}, film_grain{true};
+    std::atomic<int> fov_percent{100};
+    std::atomic<bool> camera_shake{true}, depth_of_field{true};
     std::atomic<int> controller_look_gain{100};
     std::atomic<int> controller_drift_deadzone{8};
     std::atomic<int> controller_aim_gain{100};
@@ -78,6 +86,14 @@ struct Values {
     std::atomic<bool> vsync{true};
     std::atomic<int> fps_limit{0};
     std::atomic<bool> async_shaders{true};
+    std::atomic<int> frame_gen{FrameGenOff};
+    int startup_frame_gen = FrameGenOff;
+    std::atomic<const char*> frame_gen_problem{nullptr};
+    std::atomic<bool> frame_gen_active{false};
+    std::atomic<float> game_frame_ms{0.0f}; // real game frames, excludes generated presents
+    std::atomic<int> anisotropy{0}; // 0 retains game samplers; restart required
+    int startup_anisotropy = 0;
+    std::atomic<float> mip_lod_bias{0.0f}; // scene material texture detail; live
     std::atomic<bool> fsr1{false};
     std::atomic<bool> rcas{true};
     std::atomic<int> rcas_strength{75};

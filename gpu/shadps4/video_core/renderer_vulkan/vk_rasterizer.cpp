@@ -21,6 +21,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "gow3_settings.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/kzsf_cpu_profile.h"
 #include "gow3_threads.h"
@@ -276,6 +277,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     }
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
+        if (camera_motion->KillzoneNative()) camera_motion->OnGBufferVelocity(cb_descs[3].first);
     }
     if (upscaler->Enabled() && cb_descs[0].first) {
         upscaler->OnColorTarget(cb_descs[0].first);
@@ -1003,6 +1005,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if ((camera_motion->Enabled() || GpuProfiler::Get()) && regs.color_buffers[0] &&
         FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address())) {
         scene_started = false;
+        upscaler->OnCompletedFrame(cb_descs[0].first);
         camera_motion->OnDisplayPass(cb_descs[0].first);
         if (upscaler->OnFrameStart()) {
             object_motion->InvalidateHistory();
@@ -1639,11 +1642,13 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     // gow3: G-buffer passes sample material textures for a scene rendered below the output
     // size; the temporal upscaler restores the detail of the output's mip level (FSR guide:
     // log2(render / output)). Shadows, post-processing and UI keep the guest's bias.
-    sampler_lod_bias = 0.0f;
+    const bool material_draw = !pipeline->IsCompute() &&
+        std::popcount(static_cast<const GraphicsPipeline*>(pipeline)->GetGraphicsKey().mrt_mask & 0xff) >= 5;
+    sampler_lod_bias = material_draw ? Gow3Settings::Get().mip_lod_bias.load() : 0.0f;
     if (!pipeline->IsCompute() && !Gow3Toggle::Disabled(Gow3Toggle::SceneMipBias) &&
         std::popcount(static_cast<const GraphicsPipeline*>(pipeline)->GetGraphicsKey().mrt_mask &
                       0xff) >= 5) {
-        sampler_lod_bias = upscaler->SceneMipBias();
+        sampler_lod_bias += upscaler->SceneMipBias();
         static float reported = 0.0f;
         if (sampler_lod_bias != reported) {
             reported = sampler_lod_bias;
@@ -2600,7 +2605,9 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
         auto ssharp =
             prepared ? prepared->sampler_sharps[sampler_index] : sampler.GetSharp(stage);
         const auto vk_sampler = texture_cache.GetSampler(
-            ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias);
+            ssharp, Regs().ta_bc_base, sampler.is_depth,
+            !sampler.is_depth && ssharp.mip_filter != AmdGpu::MipFilter::None && ssharp.MaxLod() > 0
+                ? sampler_lod_bias : 0.0f);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
         auto& set_write = set_writes[write_index++];
         set_write.dstSet = VK_NULL_HANDLE;

@@ -28,6 +28,7 @@ MINGW*|MSYS*)
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
     fi
     cp out/gpu/gow3-probe.exe out/gpu/gow3-gpu-capabilities.exe out/gpu/gow3-play.exe out/
+    cp out/gpu/gow3-probe.exe out/gow3-probe-launcher.exe
     cp 'out/gpu/Killzone Launcher.exe' './Killzone Launcher.exe'
     echo "Built $PWD/out/gow3-probe.exe"
     exit 0

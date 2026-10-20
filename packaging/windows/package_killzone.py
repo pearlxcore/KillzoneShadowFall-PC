@@ -26,7 +26,9 @@ def main():
     import PIL
     import tkinter  # Require the complete launcher runtime before staging.
     runtime = Path(sys.base_prefix)
-    name = 'KillzoneShadowFall-PC-Windows-' + time.strftime('%Y%m%d-%H%M%S')
+    launcher_source = (ROOT / 'launcher/kzsf_local.py').read_text(encoding='utf-8')
+    version = re.search(r"^LAUNCHER_VERSION = '([^']+)'", launcher_source, re.MULTILINE).group(1)
+    name = 'KillzoneShadowFall-PC-Windows-v' + version
     dest = ROOT / 'dist' / name
     dest.mkdir(parents=True, exist_ok=False)
 
@@ -42,11 +44,12 @@ def main():
         subprocess.run([str(strip), '--strip-debug', '-o', str(dest / target),
                         str(ROOT / 'out' / binary)], check=True)
     copy(ROOT / 'Killzone Launcher.exe', 'Killzone Launcher.exe')
-    for filename in ('kzsf_local.py', 'killzone.png', 'killzone.ico'):
+    for filename in ('kzsf_local.py', 'killzone.png', 'killzone.ico', 'kofi.png'):
         copy(ROOT / 'launcher' / filename, 'launcher/' + filename)
     for filename in ('prepare.py', 'link_modules.py', 'link_libc.py',
-                     'content_profile.py', 'graphics_options.py'):
+                     'content_profile.py', 'graphics_options.py', 'kzsf_catalog.py'):
         copy(ROOT / 'scripts' / filename, 'scripts/' + filename)
+    copy(ROOT / 'catalogs/CUSA00190-01.81.json', 'catalogs/CUSA00190-01.81.json')
     copy(ROOT / 'packaging/windows/prepare_killzone.py', 'packaging/windows/prepare_killzone.py')
     copy(ROOT / 'LICENSE', 'LICENSE')
     copy(ROOT / 'README.md', 'SOURCE-README.md')
@@ -94,7 +97,7 @@ def main():
         '@echo off\ncd /d "%~dp0"\n"runtime\\python.exe" "packaging\\windows\\prepare_killzone.py" %*\npause\n',
         encoding='ascii')
     (dest / 'README.txt').write_text(
-        'KILLZONE SHADOW FALL PC - Windows preview\n\n'
+        f'KILLZONE SHADOW FALL PC - v{version}\n\n'
         '1. Extract this entire folder to a writable location.\n'
         '2. Open Killzone Launcher.exe and select your decrypted CUSA00190 / 01.81 dump folder.\n'
         '   The dump must include all_programs.prx, sce_module and sce_sys.\n'
@@ -107,7 +110,7 @@ def main():
         'Keep user/ for saves/settings; session logs are under out/.\n'
         'Offline Botzone loading has been tested on The Divide; extended combat\n'
         'and other maps remain unverified. Online multiplayer is unsupported.\n'
-        'Temporal AA options are experimental; shader compilation can stutter.\n\n'
+        'See SOURCE-README.md for features, controls and known limitations.\n\n'
         'Source: https://github.com/pearlxcore/KillzoneShadowFall-PC/tree/main\n'
         'See LICENSE and licenses/ for redistribution terms and notices.\n', encoding='utf-8')
     files = [p for p in dest.rglob('*') if p.is_file()]
@@ -146,7 +149,7 @@ def main():
             path.name.lower() in forbidden or path.suffix.lower() in ('.dmp', '.log', '.prx', '.sprx', '.pkg')):
             raise RuntimeError('Unexpected artifact after startup checks: ' + str(rel))
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    manifest = {'source_commit': revision, 'built_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+    manifest = {'version': version, 'source_commit': revision, 'built_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
                 'files': {str(p.relative_to(dest)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in files}}
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')

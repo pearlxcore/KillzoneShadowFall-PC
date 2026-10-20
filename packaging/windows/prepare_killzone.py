@@ -8,6 +8,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'launcher'))
 from kzsf_local import validate_game
+from kzsf_catalog import verify_game_build
 
 
 def main():
@@ -16,6 +17,7 @@ def main():
     valid, reason = validate_game(folder)
     if not valid:
         raise ValueError(reason)
+    catalog_id = verify_game_build(folder, full=True, progress=lambda message: print(message, flush=True))
     output=ROOT/'out'
     output.mkdir(parents=True,exist_ok=True)
     # Failed preparation must not leave a partially generated image marked ready.
@@ -32,7 +34,7 @@ def main():
             generated.replace(output/generated.name)
     stamp=output/'prepared-game.json'
     temporary=stamp.with_suffix('.tmp')
-    temporary.write_text(json.dumps({'game_dir':str(folder)})+'\n',encoding='utf-8')
+    temporary.write_text(json.dumps({'game_dir':str(folder), 'catalog_id':catalog_id})+'\n',encoding='utf-8')
     temporary.replace(stamp)
     preferences = ROOT / 'user' / 'launcher-local.json'
     values = json.loads(preferences.read_text(encoding='utf-8')) if preferences.exists() else {}

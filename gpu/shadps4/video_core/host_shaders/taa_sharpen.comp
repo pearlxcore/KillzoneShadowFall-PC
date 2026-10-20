@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // RCAS on the resolved scene only. The unsharpened history and HUD are untouched.
 // Strength 0..2: above 1 the RCAS change is extrapolated (stronger than AMD's maximum). The
-// same pass sharpens FSR 3/4 output beyond their own RCAS (LDR_OUTPUT: the 8-bit UI image).
+// same pass sharpens FSR 3/4 output beyond their own RCAS (LDR_OUTPUT: the UI image).
 #version 450
 #extension GL_GOOGLE_include_directive : require
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0, rgba32f) uniform readonly image2D resolved_img;
 #ifdef LDR_OUTPUT
-layout(binding = 1, rgba8) uniform writeonly image2D result_img;
+// Killzone's UI target is packed floating point. The descriptor supplies its actual
+// format; unformatted storage writes preserve that encoding rather than forcing RGBA8.
+layout(binding = 1) uniform writeonly image2D result_img;
 #else
 layout(binding = 1, rgba16f) uniform writeonly image2D result_img;
 #endif

@@ -181,9 +181,10 @@ vk::Image CameraMotion::ObjectMotionImage(u32 width, u32 height) const noexcept 
 }
 
 void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view,
-                                vk::ImageView motion_view, u32 width, u32 height) {
+                                vk::ImageView motion_view, u32 width, u32 height,
+                                vk::ImageView velocity_view) {
     bool object_valid = false;
-    const vk::ImageView object_view = !killzone_native && object_motion && object_motion->Enabled()
+    const vk::ImageView object_view = velocity_view ? velocity_view : !killzone_native && object_motion && object_motion->Enabled()
         ? object_motion->PrepareRead(cmdbuf, width, height, object_valid) : depth_view;
     const PushConstants push{
         .reproject = Multiply(previous.view, current.inv_view),
@@ -192,7 +193,7 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
         .size = {float(width), float(height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
-        .mode = object_valid ? 1u : 0u,
+        .mode = velocity_view ? 2u : object_valid ? 1u : 0u,
     };
     const vk::DescriptorImageInfo depth_info{.imageView = depth_view,
                                              .imageLayout = vk::ImageLayout::eGeneral};
@@ -248,15 +249,20 @@ void CameraMotion::OnConstants(const float* data) {
 void CameraMotion::OnKillzoneConstants(const float* data) {
     if(!killzone_native || frame_has_camera) return;
     KillzoneCamera::Camera decoded;
-    if(!KillzoneCamera::DecodeWorld(std::span<const float>{data,160},decoded)) return;
+    if(!KillzoneCamera::DecodeWorld(std::span<const float>{data,160},decoded)) {
+        ++capture_rejections;
+        return;
+    }
     previous=current;
     current.view=decoded.view;
     current.inv_view=decoded.inverse_view;
     current.proj=decoded.projection;
     current.valid=true;
     world_far=decoded.far_plane;
-    // A projection change requires fresh temporal history.
-    if(previous.proj!=current.proj) previous.valid=false;
+    // Walking/running and FOV animation can change the projection each frame. The
+    // motion shader already uses both projections to reproject those frames;
+    // invalidating the previous camera here starves interpolation during movement.
+    if (previous.proj != current.proj) ++capture_projection_changes;
     if(render_size!=std::array<u32,2>{1920,1080}) {
         render_size={1920,1080};
         std::printf("Killzone camera: world640, native1080p, near %.6f, far %.1f, +Z conversion\n",Near(),Far());
@@ -265,16 +271,37 @@ void CameraMotion::OnKillzoneConstants(const float* data) {
 }
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
-    depth_id = depth;
+    if (!depth_id) depth_id = depth;
+}
+
+void CameraMotion::OnGBufferVelocity(VideoCore::ImageId color) {
+    if (!killzone_native || velocity_id || !color || !depth_id) return;
+    const auto& image = texture_cache.GetImage(color);
+    const auto& depth = texture_cache.GetImage(depth_id);
+    if (image.info.pixel_format == vk::Format::eR16G16B16A16Sfloat &&
+        image.info.size.width == depth.info.size.width && image.info.size.height == depth.info.size.height)
+        velocity_id = color;
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
+    if (killzone_native) {
+        ++capture_frames;
+        capture_ready_frames += Ready();
+        capture_camera_frames += frame_has_camera;
+        if (capture_frames % 120 == 0) {
+            std::printf("Killzone capture: frames=%u world_camera=%u ready=%u rejected_buffers=%u projection_changes=%u\n",
+                        capture_frames, capture_camera_frames, capture_ready_frames,
+                        capture_rejections, capture_projection_changes);
+            std::fflush(stdout);
+        }
+    }
     if (debug_overlay && frame && depth_id && current.valid && previous.valid) {
         Overlay(frame);
     }
     if (!frame_has_camera) InvalidateHistory();
     frame_has_camera = false;
     depth_id = {};
+    velocity_id = {};
 }
 
 void CameraMotion::Overlay(VideoCore::ImageId frame) {

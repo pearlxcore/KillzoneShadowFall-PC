@@ -334,6 +334,14 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 extern "C" int gow3gpu_overlay_captures_input(void) {
     return Gow3Overlay::CapturesInput() ? 1 : 0;
 }
+extern "C" void gow3gpu_character_selector_enable(int enabled) { Gow3Overlay::EnableCharacterSelector(enabled != 0); }
+extern "C" uint64_t gow3gpu_character_request(void) { return Gow3Overlay::TakeCharacterRequest(); }
+extern "C" void gow3gpu_character_cycle(int direction) { Gow3Overlay::CycleCharacterModel(direction); }
+extern "C" void gow3gpu_character_select(int model) { Gow3Overlay::SelectCharacterModel(model); }
+extern "C" void gow3gpu_character_reset(void) { Gow3Overlay::ResetCharacterSelector(); }
+extern "C" void gow3gpu_character_publish(uint64_t token,int model,int status,uint64_t available) {
+    Gow3Overlay::PublishCharacterSelection(token,model,status,available);
+}
 
 extern "C" int gow3gpu_controller_aim_gain(int aiming) {
     const auto& settings = Gow3Settings::Get();
@@ -342,6 +350,12 @@ extern "C" int gow3gpu_controller_aim_gain(int aiming) {
 extern "C" int gow3gpu_controller_turn_speed(void) {
     return Gow3Settings::Get().controller_turn_speed.load();
 }
+
+extern "C" int gow3gpu_mouse_aim_enabled(void) {
+    return Gow3Settings::Get().mouse_aim.load();
+}
+extern "C" int gow3gpu_fov_percent(void) { return Gow3Settings::Get().fov_percent.load(); }
+extern "C" int gow3gpu_camera_shake(void) { return Gow3Settings::Get().camera_shake.load(); }
 extern "C" int gow3gpu_controller_drift_deadzone(void) {
     return Gow3Settings::Get().controller_drift_deadzone.load();
 }

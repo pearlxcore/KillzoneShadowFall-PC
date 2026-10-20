@@ -24,4 +24,17 @@ mods.json
 patches.json
 !launcher/gow3.png
 !launcher/killzone.png
+!launcher/kofi.png
 /Killzone Launcher.exe
+
+# Local diagnostic launchers and runtime dumps
+[Tt]est-*.bat
+*.dmp
+/.port*.f32
+# Local session notes and diagnostic shortcuts; public launcher stays tracked
+/*.bat
+!/Launch-Killzone.bat
+/HANDOVER*.md
+/PROGRESS.md
+/SUMMARY-FOR-NEW-CHAT.md
+/DEEPSEEK-ENGINE-CONTROLS-PROMPT.md

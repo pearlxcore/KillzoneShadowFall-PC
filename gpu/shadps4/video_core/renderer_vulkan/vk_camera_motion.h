@@ -67,7 +67,7 @@ public:
     /// Records the motion vector pass: `depth_view` (depth aspect, General layout) into
     /// `motion_view` (RG16F storage, General), pixels, previous minus current.
     void RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view, vk::ImageView motion_view,
-                      u32 width, u32 height);
+                      u32 width, u32 height, vk::ImageView velocity_view = {});
 
     /// A bound constant buffer of 864 bytes: checks the scene constant signature.
     void OnConstants(const float* data);
@@ -77,6 +77,8 @@ public:
 
     /// The G-buffer pass (5+ color targets): its depth is the scene depth.
     void OnGBufferPass(VideoCore::ImageId depth);
+    void OnGBufferVelocity(VideoCore::ImageId color);
+    VideoCore::ImageId Velocity() const noexcept { return velocity_id; }
 
     /// The pass copying the finished frame (`frame`, the last target drawn) to the display: the
     /// frame's depth and camera are complete. Records the debug overlay, starts a new frame.
@@ -107,9 +109,11 @@ private:
     ObjectMotion* object_motion = nullptr;
     Camera current, previous;
     bool frame_has_camera = false;
+    u32 capture_frames = 0, capture_ready_frames = 0, capture_camera_frames = 0;
+    u32 capture_rejections = 0, capture_projection_changes = 0;
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
-    VideoCore::ImageId depth_id{};
+    VideoCore::ImageId depth_id{}, velocity_id{};
 
     vk::UniqueDescriptorSetLayout desc_layout;
     vk::UniquePipelineLayout pipeline_layout;

@@ -4,6 +4,8 @@
 #include "../src/runtime_pad.c"
 
 int gow3gpu_overlay_captures_input(void) { return 0; }
+int gow3gpu_controller_aim_gain(int aiming) { (void)aiming; return 100; }
+int gow3gpu_controller_drift_deadzone(void) { return 8; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -17,6 +19,9 @@ static uint32_t pressed_by(const ButtonMap *map, int source) {
 }
 
 int main(void) {
+    assert(pressed_by(&key_map,SDL_SCANCODE_LCTRL)==BTN_CIRCLE);
+    assert(pressed_by(&key_map,SDL_SCANCODE_LSHIFT)==BTN_L3);
+    assert(pressed_by(&key_map,SDL_SCANCODE_Z)==0);
     ButtonMap keys=key_map;
     assert(apply_button_map(&keys,NULL,true)==0 && apply_button_map(&keys,"",true)==0);
     assert(keys.count==key_map.count);
@@ -31,7 +36,7 @@ int main(void) {
     ButtonMap again=key_map;
     assert(apply_button_map(&again,"CIRCLE=left shift,circle=Left Ctrl",true)==2);
     assert(pressed_by(&again,SDL_SCANCODE_LCTRL)==BTN_CIRCLE);
-    assert(pressed_by(&again,SDL_SCANCODE_LSHIFT)==0);
+    assert(pressed_by(&again,SDL_SCANCODE_LSHIFT)==BTN_L3);
 
     /* Bad entries are skipped and leave the defaults alone. */
     ButtonMap bad=key_map;

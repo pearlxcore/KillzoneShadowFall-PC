@@ -35,3 +35,20 @@ struct KillzoneMouseInput {
         rx=int16_t(x*32767); ry=int16_t(y*32767);
     }
 };
+
+// Free-camera mouse input is an angular displacement, not a held stick rate.
+// Keep it separate so pad polling cannot consume it or repeat it across frames.
+struct KillzoneFreeLook {
+    double pending_x{},pending_y{};
+    void Clear() {pending_x=pending_y=0;}
+    void Motion(float dx,float dy) {
+        if(!std::isfinite(dx) || !std::isfinite(dy))return;
+        pending_x=std::clamp(pending_x+dx,-8192.,8192.);
+        pending_y=std::clamp(pending_y+dy,-8192.,8192.);
+    }
+    void Take(float& yaw,float& pitch,float gain,float horizontal,float vertical,bool invert) {
+        yaw=float(pending_x)*.0025f*gain*horizontal;
+        pitch=float(pending_y)*.0025f*gain*vertical*(invert ? 1.f : -1.f);
+        Clear();
+    }
+};

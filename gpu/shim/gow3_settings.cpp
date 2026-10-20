@@ -63,15 +63,23 @@ void Set(Values& v, const std::string& key, const std::string& value) {
             return;
         }
     }
-    if (key == "mouse_aim") { v.mouse_aim=i!=0;
+    if (key == "prompt_style") { v.prompt_style=i>=0 && i<=2 ? i : 0;
+    } else if (key == "mouse_aim") { v.mouse_aim=i!=0;
     } else if (key == "mouse_invert_y") { v.mouse_invert_y=i!=0;
     } else if (key == "mouse_sensitivity") { v.mouse_sensitivity=std::clamp(i,50,300);
     } else if (key == "mouse_ads_sensitivity") { v.mouse_ads_sensitivity=std::clamp(i,25,300);
     } else if (key == "mouse_horizontal_speed") { v.mouse_horizontal_speed=std::clamp(i,25,300);
     } else if (key == "mouse_vertical_speed") { v.mouse_vertical_speed=std::clamp(i,25,300);
     } else if (key == "motion_blur") { v.motion_blur=i!=0;
+    } else if (key == "bloom") { v.bloom=i!=0;
+    } else if (key == "film_grain") { v.film_grain=i!=0;
+    } else if (key == "depth_of_field") { v.depth_of_field=i!=0;
+    } else if (key == "camera_shake") { v.camera_shake=i!=0;
+    } else if (key == "fov_percent") { v.fov_percent=i>=75 && i<=150?i:100;
     } else if (key == "unlimited_health") { v.unlimited_health=i!=0;
     } else if (key == "infinite_ammo") { v.infinite_ammo=i!=0;
+    } else if (key == "unlimited_sprint") { v.unlimited_sprint=i!=0;
+    } else if (key == "continuous_scan") { v.continuous_scan=i!=0;
     } else if (key == "look_curve") { v.look_curve=i>=0 && i<=2?i:0;
     } else if (key == "look_deadzone") { v.look_deadzone=std::clamp(i,0,30);
     } else if (key == "look_ramp") { v.look_ramp=i!=0;
@@ -124,6 +132,12 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fps_limit = Gow3Graphics::ParseFpsLimit(i);
     } else if (key == "async_shaders") {
         v.async_shaders = i != 0;
+    } else if (key == "frame_gen") {
+        v.frame_gen = value == "fsr3" ? FrameGenFsr3 : FrameGenOff;
+    } else if (key == "anisotropy") {
+        v.anisotropy = Gow3Graphics::ParseAnisotropy(i);
+    } else if (key == "mip_lod_bias") {
+        v.mip_lod_bias = Gow3Graphics::TextureLodBias(f);
     } else if (key == "fsr1") {
         // Killzone's spatial presentation path; independent of temporal scene hooks.
         v.fsr1 = i != 0;
@@ -203,12 +217,16 @@ void Load() {
         }
     }
     const std::pair<const char*, const char*> env_keys[] = {
+        {"KZSF_PROMPT_STYLE", "prompt_style"},
         {"GOW3_MOUSE_AIM", "mouse_aim"}, {"GOW3_MOUSE_SENSITIVITY", "mouse_sensitivity"},
         {"GOW3_MOUSE_ADS_SENSITIVITY", "mouse_ads_sensitivity"},
         {"GOW3_MOUSE_HORIZONTAL_SPEED", "mouse_horizontal_speed"},
         {"GOW3_MOUSE_VERTICAL_SPEED", "mouse_vertical_speed"}, {"GOW3_MOUSE_INVERT_Y", "mouse_invert_y"},
         {"GOW3_MOTION_BLUR", "motion_blur"}, {"KZSF_UNLIMITED_HEALTH", "unlimited_health"},
+        {"GOW3_BLOOM", "bloom"}, {"GOW3_FILM_GRAIN", "film_grain"},
         {"KZSF_INFINITE_AMMO", "infinite_ammo"},
+        {"KZSF_UNLIMITED_SPRINT", "unlimited_sprint"},
+        {"KZSF_CONTINUOUS_SCAN", "continuous_scan"},
         {"GOW3_PAD_TURN_SPEED", "controller_turn_speed"},
         {"KZSF_SPRINT_TURN_SPEED", "sprint_turn_speed"},
         {"KZSF_LOOK_CURVE", "look_curve"}, {"KZSF_LOOK_DEADZONE", "look_deadzone"},
@@ -222,6 +240,9 @@ void Load() {
         {"GOW3_UPSCALE_PRESET", "preset"},            {"GOW3_OBJECT_MOTION", "object_motion"},
         {"GOW3_ASYNC_SHADERS", "async_shaders"},      {"GOW3_DEFERRED_READBACK", "deferred_readback"},
         {"GOW3_STALE_READBACK", "stale_readback"},     {"GOW3_FSR1", "fsr1"},
+        {"GOW3_FRAME_GEN", "frame_gen"}, {"GOW3_ANISOTROPY", "anisotropy"},
+        {"GOW3_MIP_LOD_BIAS", "mip_lod_bias"}, {"GOW3_OUTPUT_RES", "output_res"},
+        {"GOW3_RCAS_STRENGTH", "rcas_strength"},
         {"GOW3_RCAS", "rcas"},                        {"GOW3_FRAMES_AHEAD", "frames_queued"},
     };
     for (const auto& [env, key] : env_keys) {
@@ -231,6 +252,11 @@ void Load() {
     }
     v.startup_preset = v.preset;
     if (const char* off=std::getenv("KZSF_DISABLE_MOTION_BLUR")) v.motion_blur=off[0]!='1';
+    if (const char* off=std::getenv("KZSF_DISABLE_DOF")) v.depth_of_field=off[0]!='1';
+    if (const char* off=std::getenv("KZSF_DISABLE_BLOOM")) v.bloom=off[0]!='1';
+    if (const char* off=std::getenv("KZSF_DISABLE_FILM_GRAIN")) v.film_grain=off[0]!='1';
+    if (const char* fov=std::getenv("KZSF_FOV_PERCENT")) Set(v,"fov_percent",fov);
+    if (const char* shake=std::getenv("KZSF_CAMERA_SHAKE")) Set(v,"camera_shake",shake);
     const char* turn_hook=std::getenv("KZSF_ENGINE_TURN");
     v.engine_turn_hook=turn_hook && turn_hook[0]=='1';
     const char *player_turn_hook=std::getenv("KZSF_PLAYER_TURN");
@@ -239,6 +265,8 @@ void Load() {
     v.startup_object_motion = v.object_motion;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
+    v.startup_anisotropy = v.anisotropy;
+    v.startup_frame_gen = v.frame_gen;
     v.startup_render_resolution = v.render_resolution;
     v.startup_engine_fps = v.engine_fps;
     const char* applied = std::getenv("GOW3_ENGINE_FPS");
@@ -250,7 +278,10 @@ void Load() {
 
 bool GraphicsNeedRestart() {
     const auto& v = Get();
-    return v.render_resolution != v.startup_render_resolution ||
+    return v.output_res != v.startup_output_res ||
+           v.frame_gen != v.startup_frame_gen ||
+           v.anisotropy != v.startup_anisotropy ||
+           v.render_resolution != v.startup_render_resolution ||
            v.engine_fps != v.startup_engine_fps ||
            v.deferred_readback != v.startup_deferred_readback ||
            v.stale_readback != v.startup_stale_readback;
@@ -322,6 +353,8 @@ void Save() {
                  v.debug_view.load(), int(v.show_fps.load()),
                  int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
     std::fprintf(file, "output_res=%dx%d\n", OutputWidths[v.output_res], OutputHeights[v.output_res]);
+    std::fprintf(file, "frame_gen=%s\nanisotropy=%d\nmip_lod_bias=%.3f\n",
+                 v.frame_gen == FrameGenFsr3 ? "fsr3" : "off", v.anisotropy.load(), v.mip_lod_bias.load());
     std::fprintf(file, "red_orb_multiplier=%.3f\n", v.red_orb_multiplier.load());
     std::fprintf(file, "damage_dealt=%.3f\n", v.damage_dealt.load());
     std::fprintf(file, "damage_taken=%.3f\n", v.damage_taken.load());
@@ -361,12 +394,18 @@ void Save() {
     std::fprintf(file,"look_curve=%d\nlook_deadzone=%d\nlook_ramp=%d\nlook_assist=%d\n",
         v.look_curve.load(),v.look_deadzone.load(),int(v.look_ramp.load()),int(v.look_assist.load()));
     std::fprintf(file, "controller_pitch_speed=%d\n",v.controller_pitch_speed.load());
+    std::fprintf(file,"prompt_style=%d\n",v.prompt_style.load());
     std::fprintf(file,"mouse_aim=%d\nmouse_invert_y=%d\nmouse_sensitivity=%d\nmouse_ads_sensitivity=%d\n"
                       "mouse_horizontal_speed=%d\nmouse_vertical_speed=%d\nmotion_blur=%d\n"
                       "unlimited_health=%d\ninfinite_ammo=%d\n",
         int(v.mouse_aim.load()),int(v.mouse_invert_y.load()),v.mouse_sensitivity.load(),v.mouse_ads_sensitivity.load(),
         v.mouse_horizontal_speed.load(),v.mouse_vertical_speed.load(),int(v.motion_blur.load()),
         int(v.unlimited_health.load()),int(v.infinite_ammo.load()));
+    std::fprintf(file,"unlimited_sprint=%d\ncontinuous_scan=%d\n",
+        int(v.unlimited_sprint.load()),int(v.continuous_scan.load()));
+    std::fprintf(file,"fov_percent=%d\ncamera_shake=%d\ndepth_of_field=%d\nbloom=%d\nfilm_grain=%d\n",
+        v.fov_percent.load(),int(v.camera_shake.load()),int(v.depth_of_field.load()),
+        int(v.bloom.load()),int(v.film_grain.load()));
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");

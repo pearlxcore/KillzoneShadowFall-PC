@@ -10,15 +10,31 @@
 #include "gow3_graphics.h"
 #include "gow3_settings.h"
 #include "kzsf_mouse_input.h"
+#include "kzsf_prompt_device.h"
 #include <chrono>
+
+extern "C" int runtime_pad_prompt_key(int source);
+extern "C" int runtime_pad_prompt_button(int source);
 
 namespace {
 std::mutex mouse_mutex;
+std::atomic<int> prompt_device{0}; // 0 before first accepted event, 1 PC, 2 controller
+std::atomic<bool> prompt_gamepad_connected{false};
+KillzonePromptDevice prompt_controller;
 KillzoneMouseInput mouse_input;
+KillzoneFreeLook free_camera_look;
+std::atomic<bool> free_camera_input{false};
 uint64_t MouseNow() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+}
+
+extern "C" int gow3gpu_pc_prompts_active(void) {
+    int style=Gow3Settings::Get().prompt_style.load();
+    if(style)return style==1;
+    int device=prompt_device.load();
+    return device ? device==1 : !prompt_gamepad_connected.load();
 }
 
 extern "C" int gow3gpu_mouse_state(int16_t* x,int16_t* y,uint32_t* buttons) {
@@ -26,6 +42,23 @@ extern "C" int gow3gpu_mouse_state(int16_t* x,int16_t* y,uint32_t* buttons) {
     mouse_input.Sample(MouseNow(),*x,*y);
     *buttons=mouse_input.captured ? mouse_input.buttons : 0;
     return mouse_input.captured;
+}
+
+extern "C" void gow3gpu_free_camera_input(int active) {
+    if(free_camera_input.exchange(active!=0)==(active!=0))return;
+    std::scoped_lock lock{mouse_mutex};
+    free_camera_look.Clear();
+    mouse_input.Reset(mouse_input.captured,MouseNow());
+}
+extern "C" void gow3gpu_free_camera_mouse(float* yaw,float* pitch) {
+    std::scoped_lock lock{mouse_mutex};
+    *yaw=*pitch=0;
+    if(free_camera_input.load() && mouse_input.captured) {
+        const auto& s=Gow3Settings::Get();
+        free_camera_look.Take(*yaw,*pitch,s.mouse_sensitivity.load()/100.f,
+            s.mouse_horizontal_speed.load()/100.f,s.mouse_vertical_speed.load()/100.f,
+            s.mouse_invert_y.load());
+    } else free_camera_look.Clear();
 }
 
 namespace Frontend {
@@ -165,6 +198,7 @@ void WindowSDL::SetMouseCapture(bool active) {
     SDL_SetWindowMouseGrab(window,active);
     if (active) SDL_HideCursor(); else SDL_ShowCursor();
     std::scoped_lock lock{mouse_mutex};
+    free_camera_look.Clear();
     mouse_input.Reset(active,MouseNow());
     std::printf("Mouse: %s\n",active ? "captured (Left Alt releases)" : "released");
 }
@@ -191,8 +225,9 @@ void WindowSDL::UpdateTextTitle() {
 }
 
 bool WindowSDL::PollEvents() {
+    prompt_gamepad_connected.store(SDL_HasGamepad());
     const auto& mouse_settings=Gow3Settings::Get();
-    const bool mouse_requested=mouse_settings.mouse_aim.load();
+    const bool mouse_requested=mouse_settings.mouse_aim.load() || free_camera_input.load();
     if (mouse_enabled && !mouse_requested) SetMouseCapture(false);
     mouse_enabled=mouse_requested;
     {
@@ -240,8 +275,10 @@ bool WindowSDL::PollEvents() {
             }
             if (!blocked && mouse_captured) {
                 std::scoped_lock lock{mouse_mutex};
-                if (event.type==SDL_EVENT_MOUSE_MOTION)
-                    mouse_input.Motion(event.motion.xrel,event.motion.yrel,MouseNow());
+                if (event.type==SDL_EVENT_MOUSE_MOTION) {
+                    if(free_camera_input.load())free_camera_look.Motion(event.motion.xrel,event.motion.yrel);
+                    else mouse_input.Motion(event.motion.xrel,event.motion.yrel,MouseNow());
+                }
                 if (event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_BUTTON_UP) {
                     const unsigned mask=event.button.button==SDL_BUTTON_LEFT ? 1u :
                                         event.button.button==SDL_BUTTON_RIGHT ? 2u : 0u;
@@ -280,6 +317,28 @@ bool WindowSDL::PollEvents() {
         if (Gow3Overlay::HandleEvent(event)) {
             if (mouse_enabled && Gow3Overlay::CapturesInput()) SetMouseCapture(false);
             continue;
+        }
+        // Observe only inputs the game can receive, after overlay/text handling.
+        bool controller_input=false;
+        if(event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION) {
+            unsigned axis=event.gaxis.axis;
+            if(axis<4) {
+                const auto& s=Gow3Settings::Get();
+                int zone=std::max(s.controller_drift_deadzone.load(),s.look_deadzone.load());
+                controller_input=prompt_controller.Stick(axis,event.gaxis.value,zone);
+            } else if(axis<6)controller_input=prompt_controller.Trigger(axis-4,event.gaxis.value);
+        }
+        if(!text_active && !Gow3Overlay::CapturesInput() &&
+           (SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS)) {
+            if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+               runtime_pad_prompt_key(event.key.scancode))prompt_device.store(1);
+            if(mouse_enabled && mouse_captured &&
+               ((event.type==SDL_EVENT_MOUSE_MOTION && (event.motion.xrel || event.motion.yrel)) ||
+                (event.type==SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                 (event.button.button==SDL_BUTTON_LEFT || event.button.button==SDL_BUTTON_RIGHT))))
+                prompt_device.store(1);
+            if(controller_input || (event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+               runtime_pad_prompt_button(event.gbutton.button)))prompt_device.store(2);
         }
         switch (event.type) {
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:

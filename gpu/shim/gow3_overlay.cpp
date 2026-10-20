@@ -15,6 +15,7 @@
 #include <SDL3/SDL.h>
 #include "gow3_settings.h"
 #include "gow3_graphics.h"
+#include "gow3_character_selector.h"
 #include "gow3_perf_stats.h"
 
 #include "common/elf_info.h"
@@ -51,6 +52,7 @@ extern "C" const unsigned char gow3_font_ttf[];
 extern "C" const unsigned char gow3_font_ttf_end[];
 
 namespace Gow3Overlay {
+static bool CrossChapterModels();
 
 namespace {
 
@@ -62,6 +64,7 @@ std::atomic<bool> loading{false};
 std::atomic<u32> loading_done{0}, loading_total{0};
 std::atomic<u32> background_done{0}, background_total{0};
 bool dirty = false; // settings changed while open: saved on close
+Gow3CharacterSelector character_selector;
 int requested_tab = -1; // switch on the next frame (L1/R1, Q/E, menu opened)
 // The game's text dialog (SetTextEntry), guarded by imgui_mutex.
 bool text_entry_active = false;
@@ -245,6 +248,16 @@ void SliderRow(const char* label, std::atomic<int>& value, int lo, int hi, const
     ImGui::PopID();
 }
 
+void SliderRow(const char* label, std::atomic<float>& value, float lo, float hi, const char* format, const char* help) {
+    Row(label);
+    float v = value;
+    if (ImGui::SliderFloat("##value", &v, lo, hi, format, ImGuiSliderFlags_AlwaysClamp)) {
+        Store(value, Gow3Graphics::TextureLodBias(v), true);
+    }
+    Help(help);
+    ImGui::PopID();
+}
+
 const char* UpscalerLabel(int upscaler) {
     switch (upscaler) {
     case Gow3Settings::UpscalerFsr3: return "FSR 3.1";
@@ -270,11 +283,46 @@ std::string OverlayText() {
     sample.fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
     sample.frame_ms = frame_ms_avg;
     sample.upscaler = UpscalerLabel(s.upscaler);
-    return P::Format(sample, items, s.overlay_layout == 0);
+    std::string text = P::Format(sample, items, s.overlay_layout == 0);
+    if (s.frame_gen_active) {
+        char detail[80];
+        const float ms = s.game_frame_ms;
+        std::snprintf(detail, sizeof(detail), " | FG 2x | game %.0f FPS", ms > 0 ? 1000.0f / ms : 0);
+        text += detail;
+    }
+    return text;
 }
 
 void GameTab() {
     auto& s = Gow3Settings::Get();
+    if (character_selector.enabled.load()) {
+        ImGui::SeparatorText("Player model");
+        int selected = character_selector.Selected();
+        ImGui::SetNextItemWidth(260.0f * base_scale);
+        if (ImGui::BeginCombo("Model",kzsf_character_model_definition(selected)->label)) {
+            const uint64_t available=character_selector.available.load();
+            for(int model=0;model<KZSF_CHARACTER_MODEL_COUNT;model++) {
+                const bool loaded=(available&(UINT64_C(1)<<model))!=0;
+                ImGui::BeginDisabled(!loaded && !CrossChapterModels());
+                if(ImGui::Selectable(kzsf_character_model_definition(model)->label,selected==model))character_selector.Request(model);
+                ImGui::EndDisabled();
+                if(!loaded){ImGui::SameLine();ImGui::TextDisabled(CrossChapterModels() ? "Load on selection" : "Unavailable here");}
+            }
+            ImGui::EndCombo();
+        }
+        if(selected>=3)ImGui::TextWrapped("Experimental: head, body shape and animations need testing.");
+        const int status = character_selector.Status();
+        if (status == 1) ImGui::TextDisabled("Load normal gameplay to apply this model.");
+        else if (status == 2) ImGui::TextDisabled("Applying model...");
+        else if (status == 3) ImGui::TextWrapped(CrossChapterModels() ? "No compatible character variant was found for this player." : "This model is not available in the current area.");
+        else if (status == 4) ImGui::TextWrapped("Could not apply this model here. Try again in normal gameplay.");
+        else ImGui::TextDisabled("Current: %s", kzsf_character_model_definition(character_selector.current.load())->label);
+        ImGui::TextDisabled("F8: third person. F7: selected model / default.");
+        ImGui::TextDisabled("Hold F7 + Right / Left Arrow: next / previous model.");
+        ImGui::TextDisabled(CrossChapterModels() ? "Models load as needed in each chapter." : "Cycling uses models loaded in the current area.");
+    }
+    static const char* prompt_labels[]={"Automatic","Keyboard & mouse","PlayStation"};
+    Choice("Button prompts",s.prompt_style,prompt_labels,nullptr,3);
     ImGui::SeparatorText("Mouse");
     if (BeginRows("##mouse-controls")) {
         CheckRow("Enable mouse look",s.mouse_aim,"Click the game to capture the mouse. Left Alt releases it.");
@@ -348,6 +396,10 @@ void GameTab() {
         };
         CheckRow("Unlimited health (restart)",s.unlimited_health,"Saved for the next game launch.");
         CheckRow("Infinite ammo (restart)",s.infinite_ammo,"Saved for the next game launch.");
+        CheckRow("Unlimited sprint (restart)",s.unlimited_sprint,"Experimental. Prevent stamina exhaustion while sprinting.");
+        CheckRow("Continuous Tactical Echo (restart)",s.continuous_scan,"Experimental. Activate scan once after loading; pulses repeat at normal range and interval.");
+        InfoRow("Current sprint assist", enabled("KZSF_UNLIMITED_SPRINT") ? "Enabled at launch" : "Off");
+        InfoRow("Current continuous scan", enabled("KZSF_CONTINUOUS_SCAN") ? "Enabled at launch" : "Off");
         InfoRow("Current health assist", enabled("KZSF_UNLIMITED_HEALTH") ? "Enabled at launch" : "Off");
         InfoRow("Current ammo assist", enabled("KZSF_INFINITE_AMMO") ? "Enabled at launch" : "Off");
         ImGui::EndTable();
@@ -361,17 +413,38 @@ void ImageTab() {
     auto& s = Gow3Settings::Get();
     ImGui::SeparatorText("Display");
     if (BeginRows("##display")) {
+        static const char* const output_names[] = {"1080p", "1440p (FSR output)", "1800p (FSR output)", "4K (FSR output)"};
+        static const int output_values[] = {1, 2, 4, 3};
+        ChoiceRow("Render resolution (restart)", s.output_res, output_names, output_values, 4,
+                  "Scene rendering stays at 1080p; higher output uses FSR 3.1 and an output-size HUD. Relaunch through the local launcher to apply.");
+        static const char* const fg_names[] = {"Off", "FSR 3.1 2x (experimental, restart)"};
+        ChoiceRow("Frame generation", s.frame_gen, fg_names, nullptr, 2,
+                  "Select in the launcher or restart after changing. Inserts one intermediate frame; game simulation rate is unchanged.");
+        static const char* const af_names[] = {"Game default", "2x", "4x", "8x", "16x"};
+        static const int af_values[] = {0, 2, 4, 8, 16};
+        ChoiceRow("Anisotropic filtering (restart)", s.anisotropy, af_names, af_values, 5,
+                  "Improves angled mipmapped material textures. Restart to rebuild samplers.");
+        SliderRow("Distant texture sharpness", s.mip_lod_bias, -2.0f, 2.0f, "%.2f",
+                  "Negative: sharper distant materials, with possible shimmer. Zero: game default. Positive: softer.");
         ChoiceRow("Display mode", s.display_mode, G::DisplayModeNames.data(), nullptr, G::DisplayModeCount,
                   "Windowed, borderless window or exclusive fullscreen.");
         CheckRow("VSync", s.vsync, "Waits for the monitor: no tearing, a little more input delay.");
         CheckRow("Motion blur (restart required)",s.motion_blur,"Enable camera motion blur. Restart the game to apply changes.");
+        SliderRow("Field of view",s.fov_percent,75,150,"%d%%",
+                  "Multiplier of the gameplay view's current FOV, including native zoom modifiers. 100% is original. Experimental.");
+        CheckRow("Camera shake",s.camera_shake,"Apply evaluated camera-shake effects to the gameplay view. Does not remove weapon recoil or all camera animation. Experimental.");
+        CheckRow("Depth of field (restart required)",s.depth_of_field,"Enable the native far/near depth-of-field passes. Experimental; restart to apply.");
+        CheckRow("Bloom (experimental, restart required)",s.bloom,"Native bloom capture/integrate passes. Visual verification pending. Restart to apply.");
+        CheckRow("Film grain (experimental, restart required)",s.film_grain,"Native film-grain weight pass. Visual verification pending. Restart to apply.");
         ImGui::EndTable();
     }
+    if (Gow3Settings::GraphicsNeedRestart()) ImGui::TextDisabled("Saved graphics changes require a game restart.");
     const int iw = s.image_width, ih = s.image_height, ww = s.window_width, wh = s.window_height;
     const bool downscaling = iw > ww || ih > wh;
     const bool rcas_blocked = s.rcas && !s.rcas_applied;
     ImGui::SeparatorText("Sharpening");
     if (BeginRows("##scaling")) {
+        CheckRow("FSR 1 spatial upscaling", s.fsr1, "Scales the completed image when the window is larger. Independent of temporal reconstruction.");
         ImGui::BeginDisabled(rcas_blocked);
         CheckRow("Sharpening (RCAS)", s.rcas,
                  rcas_blocked && downscaling ? "No effect: the game's image is larger than the window."
@@ -388,6 +461,10 @@ void ImageTab() {
         char text[96];
         std::snprintf(text, sizeof(text), "%d x %d", iw, ih);
         InfoRow("Game image", text);
+        std::snprintf(text, sizeof(text), "%d x %d", s.active_render_width.load(), s.active_render_height.load());
+        InfoRow("Scene rendering", text);
+        InfoRow("Frame generation", s.frame_gen_active ? "FSR 3.1 2x active" : "Inactive");
+        if (const char* problem = s.frame_gen_problem.load()) InfoRow("Frame generation status", problem);
         std::snprintf(text, sizeof(text), "%d x %d", ww, wh);
         InfoRow("Window", text);
         InfoRow("Sharpening", s.rcas_applied ? "applied" : "not applied");
@@ -988,6 +1065,22 @@ bool Visible() {
 
 bool CapturesInput() {
     return menu_open || text_entry_active || choice_active;
+}
+void EnableCharacterSelector(bool enabled) { character_selector.enabled.store(enabled); }
+static bool CrossChapterModels() {
+    const char *value=std::getenv("KZSF_CHARACTER_BUNDLE_TEST");
+    return value && !std::strcmp(value,"1");
+}
+void SelectCharacterModel(int model) { character_selector.Request(model); }
+void ResetCharacterSelector() { character_selector.Reset(); }
+u64 TakeCharacterRequest() { return character_selector.Take(); }
+void CycleCharacterModel(int direction) {
+    if(direction!=1 && direction!=-1)return;
+    const uint64_t mask=CrossChapterModels() ? kzsf_character_model_mask() : character_selector.available.load();
+    character_selector.Cycle(direction,mask);
+}
+void PublishCharacterSelection(u64 token,int model,int status,uint64_t available) {
+    character_selector.Publish(token,model,status,available);
 }
 
 void BeginChoice(const std::string& title, const std::vector<std::string>& items,

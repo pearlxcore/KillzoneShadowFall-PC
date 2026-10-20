@@ -7,6 +7,8 @@
 #endif
 
 static int capture;
+static int look_gain=100, aim_gain=100;
+int gow3gpu_controller_aim_gain(int aiming) { return aiming ? aim_gain : look_gain; }
 int gow3gpu_overlay_captures_input(void) { return capture; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
@@ -32,6 +34,21 @@ static int touch_at(const PadData *d, int x) {
 static void pump(void) { SDL_UpdateJoysticks(); SDL_UpdateGamepads(); }
 
 int main(void) {
+    for (int value=-32768;value<=32767;++value) {
+        int16_t x=(int16_t)value,y=(int16_t)(-1-value);
+        const int16_t original_x=x,original_y=y;
+        kzsf_controller_aim(&x,&y,100);
+        assert(x==original_x && y==original_y);
+    }
+    {
+        int16_t x=0,y=0;
+        kzsf_controller_aim(&x,&y,300); assert(x==0 && y==0);
+        x=30000; y=15000;
+        kzsf_controller_aim(&x,&y,200);
+        assert(x==32767 && y>=16383 && y<=16384);
+        x=-32768; y=0;
+        kzsf_controller_aim(&x,&y,300); assert(x==-32768 && y==0);
+    }
     const char *tmp=getenv("TMPDIR") ? getenv("TMPDIR") : getenv("TEMP") ? getenv("TEMP") : "/tmp";
     char path[1024];
     snprintf(path,sizeof(path),"%s/gow3-pad-test-XXXXXX",tmp);
@@ -136,6 +153,25 @@ int main(void) {
     pump();
     data=read_pad();
     assert(gamepad && data.touch_count==2 && (data.buttons & BTN_TOUCHPAD));
+    /* Exercise real SDL virtual-controller input through sample_host and the guest ABI. */
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTX,8192));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTY,-4096));
+    pump(); data=read_pad();
+    assert(data.right_x==axis(8192) && data.right_y==axis(-4096));
+    look_gain=200; aim_gain=150;
+    data=read_pad();
+    assert(data.right_x==axis(16384) && data.right_y==axis(-8192));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFT_TRIGGER,32767));
+    pump(); data=read_pad();
+    assert(data.l2>30 && data.right_x==axis(12288) && data.right_y==axis(-6144));
+    capture=1; data=read_pad();
+    assert(data.right_x==128 && data.right_y==128 && data.l2==0);
+    capture=0;
+    look_gain=aim_gain=100;
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTX,0));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHTY,0));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFT_TRIGGER,-32768));
+    pump(); data=read_pad();
     assert(data.touches[0].x==1439 && data.touches[0].y==471 && data.touches[0].id==0);
     assert(data.touches[1].x==480 && data.touches[1].y==942 && data.touches[1].id==1);
     capture=1;

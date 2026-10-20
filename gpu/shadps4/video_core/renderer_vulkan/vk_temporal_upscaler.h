@@ -38,6 +38,7 @@ class Scheduler;
 class Runtime;
 class CameraMotion;
 class SceneTargets;
+class FrameGenerator;
 
 class TemporalUpscaler {
 public:
@@ -48,6 +49,12 @@ public:
 
     [[nodiscard]] bool Enabled() const noexcept {
         return enabled;
+    }
+
+    /// The presenter's frame generator: its depth, motion and picture without UI are taken at
+    /// the upscale (RunScaled). Null to stop.
+    void SetFrameGenerator(FrameGenerator* generator) noexcept {
+        frame_generator = generator;
     }
 
     /// A draw into a full-size RGBA16F target with the scene depth: the scene color.
@@ -69,6 +76,8 @@ public:
 
     /// Start of a frame in the command stream (display pass).
     bool OnFrameStart();
+    /// Before camera history is advanced: finish gameplay frames without a HUD trigger.
+    void OnCompletedFrame(VideoCore::ImageId color);
     bool RasterScaling() const;
     /// gow3: LOD bias for scene materials, log2(render / output) while a reduced scene is
     /// upscaled (0 at native size, for TAA and without an upscaler).
@@ -222,6 +231,10 @@ private:
     bool context_hdr = true;
     u32 target_width = 1920, target_height = 1080; ///< output size of scaled presets
     u64 ui_trigger_vs = 0x34e8a281;
+    FrameGenerator* frame_generator = nullptr;
+    /// The format of the port's display buffer (RedirectColor): frame generation's picture
+    /// without UI is converted the same way.
+    vk::Format display_format = vk::Format::eUndefined;
     VideoCore::ImageId ldr_target{};
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass
@@ -252,6 +265,11 @@ private:
         vk::Format format{};
         u32 width = 0, height = 0;
         bool valid = false;
+        /// Killzone: where the game's own display copy draws when the port blits the UI image.
+        VideoCore::UniqueImage sink;
+        std::vector<MirrorView> sink_views;
+        vk::Format sink_format{};
+        u32 sink_width = 0, sink_height = 0;
     };
     std::mutex display_mutex;
     std::unordered_map<VAddr, DisplayImage> displays;

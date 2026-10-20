@@ -126,6 +126,13 @@ static GuestThread *new_thread(void) {
 static void publish(GuestThread *t) {
     pthread_mutex_lock(&lock); t->next=threads; threads=t; pthread_mutex_unlock(&lock);
 }
+uintptr_t runtime_thread_tcb_peek(void) {
+    if(!current)return 0;
+#ifdef _WIN32
+    if(tls_slot==TLS_OUT_OF_INDEXES || TlsGetValue(tls_slot)!=current->tcb)return 0;
+#endif
+    return (uintptr_t)current->tcb;
+}
 /* Host threads that call into guest code without being created by the guest
  * (the main thread, test threads) get a record on first use. */
 GuestThread *runtime_thread_current(void) {

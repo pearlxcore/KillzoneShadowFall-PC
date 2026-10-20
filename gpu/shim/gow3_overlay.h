@@ -41,6 +41,12 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 
 /// The menu is open or a text entry is shown: the game's input is held neutral.
 bool CapturesInput();
+void EnableCharacterSelector(bool enabled);
+u64 TakeCharacterRequest();
+void CycleCharacterModel(int direction);
+void SelectCharacterModel(int model);
+void ResetCharacterSelector();
+void PublishCharacterSelection(u64 token, int model, int status, uint64_t available);
 
 /// Window thread: the game's text dialog (sceImeDialog). Shown as a box on screen until
 /// `active` is false; typing goes to the window (sdl_window), the box only displays it.

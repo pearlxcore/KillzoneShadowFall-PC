@@ -43,6 +43,10 @@ void runtime_mutex_report(void);
 uintptr_t runtime_memory_resolve(const char *name);
 void runtime_memory_report(void);
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
+/* Host-created texture pixels, registered with the existing guest/GPU mapper.
+ * Uses normal flexible mappings and protection/size checks; NULL on failure. */
+void *runtime_memory_map_host_pixels(uint64_t size);
+void runtime_memory_unmap_host_pixels(void *pixels,uint64_t size);
 const char *runtime_import_name(const char *name);
 uintptr_t runtime_rwlock_resolve(const char *name);
 void runtime_rwlock_report(void);
@@ -53,6 +57,8 @@ void **runtime_application_heap_api(void);
 uintptr_t runtime_thread_resolve(const char *name);
 void runtime_thread_report(void);
 uint32_t runtime_thread_trace_offset(void);
+/* Existing current-thread TCB only; never allocates or attaches a thread. */
+uintptr_t runtime_thread_tcb_peek(void);
 uint32_t runtime_thread_trace_get(void);
 void runtime_set_main_tls(const void *data, uint64_t filesz, uint64_t memsz, uint64_t align);
 void runtime_thread_attach_main(void);
@@ -94,6 +100,11 @@ void runtime_thread_keys_cleanup(void);
 /* Guest-visible errno values are FreeBSD's. */
 int32_t runtime_guest_errno(int host_errno);
 void *runtime_low_map(size_t size, int prot);
+/* Native Killzone prompt artwork: 0 unsupported, 1 key label, 2/3 left/right
+ * mouse. Reads the same effective keyboard map used by pad sampling. */
+int runtime_pad_prompt_binding(unsigned icon,int mouse_enabled,char *label,size_t size);
+void runtime_pad_free_camera(int active);
+void runtime_pad_free_camera_axes(float *left_x,float *left_y,float *right_x,float *right_y,float *forward);
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);
 uintptr_t runtime_ajm_resolve(const char *name);

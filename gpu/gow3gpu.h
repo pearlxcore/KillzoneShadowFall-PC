@@ -36,11 +36,26 @@ int gow3gpu_choice_begin(const char *title, const char *const *items, const char
 int gow3gpu_choice_poll(void);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int gow3gpu_overlay_captures_input(void);
+/* Models:0 default,1 Engineer,2 Commando,3 Security Trooper,4 Sniper,
+ * 5 Special Forces,6 Infantry Trooper. Status:0 ready,1 needs gameplay,
+ * 2 pending,3 unavailable,4 refused. Engine consumes requests on its own thread. */
+void gow3gpu_character_selector_enable(int enabled);
+uint64_t gow3gpu_character_request(void);
+void gow3gpu_character_cycle(int direction);
+void gow3gpu_character_select(int model);
+void gow3gpu_character_reset(void);
+void gow3gpu_character_publish(uint64_t token,int model,int status,uint64_t available);
 /* Live controller response gain in percent; aiming is nonzero while L2 is held. */
 int gow3gpu_controller_aim_gain(int aiming);
 int gow3gpu_controller_drift_deadzone(void);
 int gow3gpu_controller_turn_speed(void);
 int gow3gpu_sprint_turn_speed(void);
+int gow3gpu_fov_percent(void);
+int gow3gpu_camera_shake(void);
+int gow3gpu_mouse_aim_enabled(void);
+void gow3gpu_free_camera_input(int active);
+void gow3gpu_free_camera_mouse(float *yaw,float *pitch);
+int gow3gpu_pc_prompts_active(void);
 int gow3gpu_look_curve(void);
 int gow3gpu_look_deadzone(void);
 int gow3gpu_look_ramp(void);

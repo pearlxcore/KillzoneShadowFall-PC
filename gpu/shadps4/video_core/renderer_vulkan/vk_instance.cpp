@@ -529,7 +529,9 @@ bool Instance::CreateDevice() {
                 .shaderImageGatherExtended = features.shaderImageGatherExtended,
                 .shaderStorageImageExtendedFormats = features.shaderStorageImageExtendedFormats,
                 .shaderStorageImageMultisample = features.shaderStorageImageMultisample,
-                // gow3: required by the FSR 3 accumulate shaders (vk_temporal_upscaler).
+                // Temporal reconstruction and frame interpolation use unformatted storage images.
+                .shaderStorageImageReadWithoutFormat =
+                    features.shaderStorageImageReadWithoutFormat,
                 .shaderStorageImageWriteWithoutFormat =
                     features.shaderStorageImageWriteWithoutFormat,
                 .shaderClipDistance = features.shaderClipDistance,

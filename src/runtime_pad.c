@@ -62,6 +62,10 @@ _Static_assert(sizeof(ControllerInfo)==28,"OrbisPadControllerInformation layout"
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static int initialized, opened, sdl_ready;
 static SDL_Gamepad *gamepad;
+static int free_camera_input;
+void runtime_pad_free_camera(int active) {
+    __atomic_store_n(&free_camera_input,active!=0,__ATOMIC_RELEASE);
+}
 static size_t reads;
 static uint8_t connected_count;
 
@@ -120,6 +124,26 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
+void runtime_pad_free_camera_axes(float *left_x,float *left_y,float *right_x,float *right_y,float *forward) {
+    *left_x=*left_y=*right_x=*right_y=*forward=0;
+    if(!__atomic_load_n(&free_camera_input,__ATOMIC_ACQUIRE))return;
+    pthread_mutex_lock(&lock);
+    SDL_Gamepad *g=current_gamepad();
+    if(g) {
+        SDL_UpdateGamepads();
+        int16_t rx=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX);
+        int16_t ry=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY);
+        int16_t lx=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX);
+        int16_t ly=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY);
+        kzsf_controller_drift_guard(&rx,&ry,gow3gpu_controller_drift_deadzone());
+        kzsf_controller_drift_guard(&lx,&ly,gow3gpu_controller_drift_deadzone());
+        *right_x=rx/32768.f;*right_y=ry/32768.f;
+        *left_x=lx/32768.f;*left_y=ly/32768.f;
+        *forward=(float)SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)-
+                 (float)SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+    }
+    pthread_mutex_unlock(&lock);
+}
 /* Button sources: a host button or key and the PS4 button it presses. The defaults below can be
  * changed per PS4 button with GOW3_PAD_MAP (gamepad) and GOW3_KEY_MAP (keyboard), e.g.
  * GOW3_KEY_MAP="cross=Q,square=Left Shift" or GOW3_PAD_MAP="cross=b,circle=a": comma-separated
@@ -147,9 +171,9 @@ static ButtonMap pad_map={{
     {SDL_GAMEPAD_BUTTON_DPAD_LEFT,BTN_LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT,BTN_RIGHT},
 },15};
 static ButtonMap key_map={{
-    {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_E,BTN_SQUARE},
+    {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LCTRL,BTN_CIRCLE}, {SDL_SCANCODE_E,BTN_SQUARE},
     {SDL_SCANCODE_Q,BTN_TRIANGLE}, {SDL_SCANCODE_1,BTN_L1}, {SDL_SCANCODE_3,BTN_R1},
-    {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2}, {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
+    {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2}, {SDL_SCANCODE_LSHIFT,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
     {SDL_SCANCODE_RETURN,BTN_OPTIONS}, {SDL_SCANCODE_TAB,CLICK_LEFT}, {SDL_SCANCODE_BACKSPACE,CLICK_RIGHT},
     {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
 },17};
@@ -197,15 +221,65 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
     return used;
 }
 
-static void load_button_maps(void) {
-    static bool loaded;
-    if (loaded) return;
-    loaded=true;
+static void init_button_maps(void) {
     const int pad=apply_button_map(&pad_map,getenv("GOW3_PAD_MAP"),false);
     const int keys=apply_button_map(&key_map,getenv("GOW3_KEY_MAP"),true);
     if (pad || keys) printf("Runtime: pad map: %d gamepad and %d keyboard buttons remapped\n",pad,keys);
 }
+static void load_button_maps(void) {
+    static pthread_once_t once=PTHREAD_ONCE_INIT;
+    pthread_once(&once,init_button_maps);
+}
 
+int runtime_pad_prompt_binding(unsigned icon,int mouse_enabled,char *label,size_t size) {
+    /* Enum EIconType is not the SDL/gamepad enum. Stick/Move/touch gestures
+     * remain original until their meaning is established per action. */
+    static const uint32_t buttons[16]={BTN_TRIANGLE,BTN_CIRCLE,BTN_CROSS,BTN_SQUARE,
+        BTN_L2,BTN_R2,BTN_L1,BTN_R1,BTN_OPTIONS,0,0,0,BTN_UP,BTN_RIGHT,BTN_DOWN,BTN_LEFT};
+    if(!label || size<2) return 0;
+    label[0]=0;
+    if(icon>=16 || !buttons[icon]) return 0;
+    if(mouse_enabled && (icon==4 || icon==5)) return icon==5 ? 2 : 3;
+    load_button_maps();
+    const char *name=NULL;
+    for(size_t i=0;i<key_map.count;++i)
+        if(key_map.entries[i].ps==buttons[icon]) {name=SDL_GetScancodeName(key_map.entries[i].source);break;}
+    if(!name || !*name) return 0;
+    static const struct {const char *name,*label;} short_names[]={
+        {"Left Ctrl","CTRL"},{"Right Ctrl","CTRL"},{"Left Shift","SHIFT"},{"Right Shift","SHIFT"},
+        {"Left Alt","ALT"},{"Right Alt","ALT"},{"Left GUI","WIN"},{"Right GUI","WIN"},
+        {"Return","ENTER"},{"Keypad Enter","KPENT"},{"Space","SPC"},{"Backspace","BKSP"},
+        {"PageUp","PGUP"},{"PageDown","PGDN"},{"CapsLock","CAPS"},{"PrintScreen","PRTSC"},
+    };
+    for(size_t i=0;i<sizeof(short_names)/sizeof(*short_names);++i)
+        if(!SDL_strcasecmp(name,short_names[i].name)) {name=short_names[i].label;break;}
+    size_t n=strlen(name);
+    if(n>8 || n>=size) return 0;
+    for(size_t i=0;i<n;++i) {
+        unsigned char c=(unsigned char)name[i];
+        if(c>='a' && c<='z') c=(unsigned char)(c-'a'+'A');
+        if(!((c>='A' && c<='Z') || (c>='0' && c<='9') || c==' ' || c=='-' || c=='.')) {
+            label[0]=0;return 0;
+        }
+        label[i]=(char)c;
+    }
+    label[n]=0;
+    return 1;
+}
+
+/* The event thread uses the same parsed maps as pad sampling. */
+int runtime_pad_prompt_key(int source) {
+    load_button_maps();
+    for(size_t i=0;i<key_map.count;++i)if(key_map.entries[i].source==source)return 1;
+    return source==SDL_SCANCODE_W || source==SDL_SCANCODE_A || source==SDL_SCANCODE_S ||
+        source==SDL_SCANCODE_D || source==SDL_SCANCODE_UP || source==SDL_SCANCODE_DOWN ||
+        source==SDL_SCANCODE_LEFT || source==SDL_SCANCODE_RIGHT;
+}
+int runtime_pad_prompt_button(int source) {
+    load_button_maps();
+    for(size_t i=0;i<pad_map.count;++i)if(pad_map.entries[i].source==source)return 1;
+    return 0;
+}
 static void key_axis(uint8_t *axis, bool negative, bool positive) {
     if (negative || positive) *axis=(uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0));
 }
@@ -215,6 +289,11 @@ static void sample_host(PadData *d) {
     d->orientation[3]=1.0f;
     d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     d->timestamp=now_us();
+    if(__atomic_load_n(&free_camera_input,__ATOMIC_ACQUIRE)) {
+        int16_t x=0,y=0;uint32_t buttons=0;
+        gow3gpu_mouse_state(&x,&y,&buttons); // drain captured motion while player input is suspended
+        return;
+    }
     SDL_Gamepad *g=current_gamepad();
     if (g) SDL_UpdateGamepads(); /* refresh the gamepad state on this thread as well */
     if (gow3gpu_overlay_captures_input()) return; /* settings menu open: neutral input */
@@ -420,8 +499,22 @@ static void replay_sample(PadData *d) {
 /* After the menu or the text dialog closes, buttons still held (the Cross that accepted a
  * name) stay hidden until released: the game would take them as a new press. */
 static int hold_after_capture;
+static int free_camera_release;
 static void sample(PadData *d) {
     sample_host(d);
+    if(__atomic_load_n(&free_camera_input,__ATOMIC_ACQUIRE)) {
+        free_camera_release=1;click.side=-1;return;
+    }
+    if(free_camera_release) {
+        int zone=gow3gpu_controller_drift_deadzone()*128/100;
+        int held=d->buttons || d->l2>30 || d->r2>30 || abs(d->left_x-128)>zone || abs(d->left_y-128)>zone ||
+                 abs(d->right_x-128)>zone || abs(d->right_y-128)>zone || d->touch_count;
+        if(held) {
+            d->buttons=0;d->l2=d->r2=0;d->touch_count=0;
+            d->left_x=d->left_y=d->right_x=d->right_y=128;return;
+        }
+        free_camera_release=0;
+    }
     if (gow3gpu_overlay_captures_input()) { hold_after_capture=1; click.side=-1; return; }
     record_sample(d); /* the click sources as they are: a replay plays them again */
     read_inject();
