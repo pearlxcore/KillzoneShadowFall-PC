@@ -124,7 +124,7 @@ def main():
     subprocess.run([str(dest / 'runtime/python.exe'), '-I', '-B', '-c',
                     'import tkinter,PIL.Image,ctypes,ssl; t=tkinter.Tcl(); print("Bundled runtime:",t.eval("info patchlevel"))'],
                    cwd=dest, check=True)
-    smoke_user = ROOT / 'out' / (name + '-smoke-user')
+    smoke_user = ROOT / 'out' / (name + '-smoke-user-' + str(time.time_ns()))
     smoke_user.mkdir(exist_ok=False)
     clean_env = dict(os.environ, PATH=os.environ['SystemRoot'] + '/System32;' + os.environ['SystemRoot'],
                      PYTHONDONTWRITEBYTECODE='1', GOW3_USER_DIR=str(smoke_user),
