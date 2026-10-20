@@ -92,6 +92,14 @@ The full single-player game has been completed on the development PC: **Ryzen 5 
 
 An optional [starter shader cache](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases/download/v0.1.1-beta/KillzoneShadowFall-PC-CUSA00190-01.81-StarterCache-beta0.1.1.zip) is available. With the game closed, extract it beside the launcher, merging `user/cache/CUSA00190/`. Back up an existing cache first. It was tested only on the development PC; other systems may reject it.
 
+## Screenshots
+
+<img width="1922" height="1112" alt="1" src="https://github.com/user-attachments/assets/b04b61cc-b000-4459-8a26-7183e9b458a1" />
+<img width="1922" height="1112" alt="2" src="https://github.com/user-attachments/assets/3c97596c-dc0b-48b4-b89d-04b339b2b07e" />
+<img width="1922" height="1112" alt="3" src="https://github.com/user-attachments/assets/f9c832cd-a764-473b-bc95-f71f190125f0" />
+<img width="1922" height="1112" alt="4" src="https://github.com/user-attachments/assets/a10f8460-2763-4a6c-b8da-1a9917793a6d" />
+<img width="1922" height="1112" alt="5" src="https://github.com/user-attachments/assets/79dda350-5229-482c-9419-de0aea1fccae" />
+
 ## Saves and troubleshooting
 
 | Location | Contents |
