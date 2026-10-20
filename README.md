@@ -66,6 +66,14 @@ In freecam: **WASD** moves, **Q/E** moves down/up, mouse/arrows look, **Shift** 
 
 The full single-player game has been completed on the development PC: **Ryzen 5 7500F, Radeon RX 9070 XT, 32 GB RAM and Windows 11**. Other hardware and drivers still need testing. A **Vulkan 1.3-capable GPU/driver** is required.
 
+**PC spec and game dump used in this port:**
+
+
+| Title ID | Version |
+| --- | --- |
+| CUSA00190 | 01.81 |
+
+
 | Component | Tested configuration |
 |---|---|
 | CPU | AMD Ryzen 5 7500F (6 cores) |
@@ -73,7 +81,6 @@ The full single-player game has been completed on the development PC: **Ryzen 5 
 | RAM | 32 GB |
 | OS | Windows 11 Home, build 26300 |
 | GPU driver | 32.0.31041.1004 (Windows driver version) |
-| Game | CUSA00190, update 01.81 |
 
 - Performance varies by scene. FPS limits are caps, not guaranteed frame rates.
 - Shader, streaming and frame-pacing stutters can remain.
