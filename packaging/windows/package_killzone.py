@@ -153,7 +153,7 @@ def main():
                 'files': {str(p.relative_to(dest)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in files}}
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-    archive = dest.with_suffix('.zip')
+    archive = dest.with_name(dest.name + '.zip')
     with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED, compresslevel=6) as output:
         for path in dest.rglob('*'):
             if path.is_file() and '__pycache__' not in path.parts:
