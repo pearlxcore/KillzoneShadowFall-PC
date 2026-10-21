@@ -12,6 +12,46 @@ spec=importlib.util.spec_from_file_location('kzsf_local',Path(__file__).resolve(
 ui=importlib.util.module_from_spec(spec); spec.loader.exec_module(ui)
 
 class LauncherTests(unittest.TestCase):
+    def test_storage_defaults_ignore_inherited_overrides(self):
+        values=dict(ui.DEFAULTS,cache_dir='  ',savedata_dir='')
+        with patch.dict(os.environ,{'GOW3_CACHE_DIR':'old/cache','GOW3_SAVEDATA_DIR':'old/saves'}):
+            env=ui.launch_spec(values,'logs')['env']
+        self.assertNotIn('GOW3_CACHE_DIR',env)
+        self.assertNotIn('GOW3_SAVEDATA_DIR',env)
+        self.assertEqual(ui.storage_directory(values,'cache_dir'),ui.ROOT/'user/cache')
+        self.assertEqual(ui.storage_directory(values,'savedata_dir'),ui.ROOT/'user/savedata')
+
+    def test_custom_storage_persistence_and_independent_roots(self):
+        with tempfile.TemporaryDirectory() as folder:
+            values=dict(ui.DEFAULTS,cache_dir=str(Path(folder)/'cache files/nested'),
+                        savedata_dir=str(Path(folder)/'saved games'))
+            with patch.object(ui,'PREFS',Path(folder)/'prefs.json'),patch.object(ui,'CONFIG',Path(folder)/'settings.ini'):
+                ui.persist(values)
+                loaded=ui.load_preferences()
+            ui.prepare_storage(loaded)
+            env=ui.launch_spec(loaded,'logs')['env']
+            for key,variable in (('cache_dir','GOW3_CACHE_DIR'),('savedata_dir','GOW3_SAVEDATA_DIR')):
+                path=ui.storage_directory(loaded,key)
+                self.assertTrue(path.is_dir())
+                self.assertEqual(env[variable],path.as_posix())
+            self.assertEqual(env['GOW3_USER_DIR'],str(ui.ROOT/'user'))
+            self.assertEqual(env['GOW3_GPU_USER_DIR'],str(ui.ROOT/'user'))
+            values['cache_dir']='relative cache'
+            self.assertEqual(ui.storage_directory(values,'cache_dir'),(ui.ROOT/'relative cache').resolve())
+            blocked=Path(folder)/'file';blocked.write_text('keep')
+            with self.assertRaises(OSError): ui.prepare_storage(dict(values,cache_dir=str(blocked)))
+            self.assertEqual(blocked.read_text(),'keep')
+
+    def test_full_parallel_preload_and_serial_diagnostic_override(self):
+        with patch.dict(os.environ,{},clear=True):
+            env=ui.launch_spec(dict(ui.DEFAULTS),'logs')['env']
+            self.assertEqual(env['GOW3_PARALLEL_WARMUP'],'1')
+            self.assertEqual(env['GOW3_PRECOMPILE'],'1')
+            self.assertEqual(env['GOW3_BACKGROUND_WARMUP'],'0')
+            self.assertNotIn('KZSF_PACKED_SHADER_CACHE',env)
+        with patch.dict(os.environ,{'GOW3_PARALLEL_WARMUP':'0'}):
+            self.assertEqual(ui.launch_spec(dict(ui.DEFAULTS),'logs')['env']['GOW3_PARALLEL_WARMUP'],'0')
+
     def test_player_features_default_off_and_environment_isolated(self):
         for key in ('third_person','free_camera','model_switching'):
             self.assertFalse(ui.DEFAULTS[key])

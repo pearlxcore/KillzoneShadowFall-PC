@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import tempfile
 import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -57,7 +58,7 @@ PAD_LABELS = {'': 'Default', 'a': 'A / Cross', 'b': 'B / Circle', 'x': 'X / Squa
               'leftstick': 'LS / L3', 'rightstick': 'RS / R3', 'start': 'Start / Options',
               'back': 'Back / Share', 'dpup': 'D-pad up', 'dpdown': 'D-pad down',
               'dpleft': 'D-pad left', 'dpright': 'D-pad right'}
-DEFAULTS = dict(game_dir='', profile='Current build',
+DEFAULTS = dict(game_dir='', cache_dir='', savedata_dir='', profile='Current build',
                 fps='60', window_size='1920x1080', display_mode='windowed', vsync=True,
                 rcas=True, show_fps=True, upscaler='none', async_shaders=False,
                 stale_readback=True, deferred_readback=True, frames_queued='1',
@@ -103,6 +104,8 @@ def load_preferences():
     values = dict(DEFAULTS)
     if isinstance(data, dict):
         values.update({k:v for k,v in data.items() if k in DEFAULTS})
+    for key in ('cache_dir','savedata_dir'):
+        if not isinstance(values[key],str): values[key]=''
     settings=read_ini(CONFIG)
     for key,ini_key in LIVE_CONFIG.items():
         if ini_key in settings:
@@ -214,8 +217,29 @@ def needs_preparation(game_dir):
     except (OSError, ValueError, KeyError, TypeError):
         return True
 
+def storage_directory(values, key):
+    """Resolve optional storage roots without changing unrelated user files."""
+    value=values.get(key,'').strip()
+    if not value: return ROOT/'user'/('cache' if key=='cache_dir' else 'savedata')
+    path=Path(os.path.expandvars(value)).expanduser()
+    return (path if path.is_absolute() else ROOT/path).resolve()
+
+
+def prepare_storage(values):
+    for key in ('cache_dir','savedata_dir'):
+        path=storage_directory(values,key)
+        # Save mounts use a fixed-size native path buffer, including slot names.
+        if key=='savedata_dir' and len(path.as_posix().encode('utf-8'))>350:
+            raise ValueError('Choose a shorter saved-data folder path (350 bytes or fewer).')
+        path.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryFile(dir=path): pass
+
+
 def launch_spec(values, folder):
     env = dict(os.environ)
+    for key,variable in (('cache_dir','GOW3_CACHE_DIR'),('savedata_dir','GOW3_SAVEDATA_DIR')):
+        env.pop(variable,None)
+        if values.get(key,'').strip(): env[variable]=storage_directory(values,key).as_posix()
     for key in PLAYER_HOOK_ENV:
         env.pop(key,None)
     for key in ('KZSF_ORIGINAL_CLOCK','KZSF_UNIFIED_TSC','KZSF_FILE_TRACE','KZSF_RWLOCK_TRACE',
@@ -276,6 +300,9 @@ def launch_spec(values, folder):
     env['GOW3_PAD_MAP'] = ','.join(f'{k}={v}' for k,v in values['pads'].items() if v)
     executable=executable_for(values)
     env.update(KZSF_DIRECT_TSC='1',GOW3_PRECOMPILE='1',GOW3_BACKGROUND_WARMUP='0',GOW3_FREEZE_SECONDS='0')
+    # Preserve a serial diagnostic override; normal startup uses the existing
+    # bounded compiler pool and still waits for every cached pipeline.
+    env['GOW3_PARALLEL_WARMUP']='0' if env.get('GOW3_PARALLEL_WARMUP')=='0' else '1'
     # Keep the guarded player hook available for live overlay adjustments from 100%.
     env['KZSF_PLAYER_TURN']='1'
     if values['upscaler'] in ('fsr3','taa'):
@@ -506,8 +533,18 @@ class Launcher:
         self.choice(p,'Memory profile','profile',PROFILES)
         self.label(p,'Standard uses the default memory layout. Compatibility offers an alternative layout for troubleshooting.',True).pack(fill='x',pady=(5,28))
         self.heading(p,'Folders')
+        for title,key in (('Shader cache folder','cache_dir'),('Saved-data folder','savedata_dir')):
+            self.label(p,title).pack(anchor='w',pady=(0,6))
+            row=tk.Frame(p,bg=PANEL); row.pack(fill='x',pady=(0,8))
+            tk.Entry(row,textvariable=self.vars[key],bg=FIELD,fg=TEXT,insertbackground=CYAN,
+                     relief='flat').pack(side='left',fill='x',expand=True,ipady=9)
+            self.button(row,'Browse…',lambda k=key:self.browse_storage(k)).pack(side='right',padx=(10,0))
+            self.label(p,f'Empty uses: {storage_directory(DEFAULTS,key)}',True).pack(fill='x',pady=(0,12))
+        self.label(p,'Choose a root folder; game-specific subfolders are added automatically. Changing folders does not move existing files. Changes apply on the next launch.',True).pack(fill='x',pady=(0,14))
         row=tk.Frame(p,bg=PANEL); row.pack(fill='x')
-        for name,path in [('Saved games',ROOT/'user/savedata/1/CUSA00190/KZ4'),('Screenshots',ROOT/'user/screenshots'),('Logs',ROOT/'out')]:
+        self.button(row,'Saved games',lambda:self.open_folder(storage_directory(self.gather(),'savedata_dir')/'1/CUSA00190/KZ4')).pack(side='left',padx=(0,9))
+        self.button(row,'Shader cache',lambda:self.open_folder(storage_directory(self.gather(),'cache_dir')/'CUSA00190')).pack(side='left',padx=(0,9))
+        for name,path in [('Screenshots',ROOT/'user/screenshots'),('Logs',ROOT/'out')]:
             self.button(row,name,lambda f=path:self.open_folder(f)).pack(side='left',padx=(0,9))
         self.label(p,'Both memory profiles use the same saved games. A separate log is kept for each session.',True).pack(fill='x',pady=15)
         self.heading(p,'Camera & player model')
@@ -707,6 +744,12 @@ class Launcher:
     def browse(self):
         folder=filedialog.askdirectory(initialdir=self.vars['game_dir'].get(),parent=self.root)
         if folder: self.vars['game_dir'].set(folder); self.refresh_ready()
+    def browse_storage(self,key):
+        initial=storage_directory(self.gather(),key)
+        while not initial.is_dir() and initial!=initial.parent: initial=initial.parent
+        folder=filedialog.askdirectory(initialdir=str(initial),parent=self.root,
+                                       title='Choose shader cache folder' if key=='cache_dir' else 'Choose saved-data folder')
+        if folder: self.vars[key].set(folder)
     def refresh_ready(self):
         ok,text=validate_game(self.vars['game_dir'].get()); self.ready.configure(text=text,fg=GREEN if ok else CYAN)
         self.game_ok=ok
@@ -730,6 +773,7 @@ class Launcher:
         for path in (exe,ROOT/'out/renderer-stability-toggles.txt'):
             if not path.is_file(): messagebox.showerror('Installation incomplete',f'A required application file is missing:\n{path.name}\n\nExtract the entire release ZIP again, then open the launcher from the extracted folder.',parent=self.root); return
         try:
+            prepare_storage(values)
             persist(values)
             if needs_preparation(values['game_dir']):
                 helper=ROOT/'packaging/windows/prepare_killzone.py'

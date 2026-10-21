@@ -189,7 +189,8 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     Gow3Overlay::SetLoading(true, 0, 0);
     PresentLoadingFrame();
     auto last = std::chrono::steady_clock::now();
-    rasterizer->GetPipelineCache().WarmUp([&](u32 done, u32 total) {
+    rasterizer->GetPipelineCache().WarmUp([&](u32 done, u32 total, const char* stage) {
+        Gow3Overlay::SetLoadingStatus(stage);
         const auto now = std::chrono::steady_clock::now();
         if (now - last < std::chrono::milliseconds(250)) {
             return;
@@ -199,6 +200,13 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         PresentLoadingFrame();
     });
     Gow3Overlay::SetLoading(false, 0, 0);
+    // Isolated startup benchmark only: finish accepted cache writes before
+    // exiting, without entering gameplay or touching saves. Never a UI option.
+    if (precompile && EmulatorSettingsImpl::Flag("KZSF_CACHE_STARTUP_BENCHMARK", false)) {
+        rasterizer->GetPipelineCache().Sync();
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
 
 }
 

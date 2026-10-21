@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <vector>
+#include <stdexcept>
 
 namespace Serialization {
 
@@ -42,9 +43,14 @@ struct Archive {
     }
 
     void Advance(size_t size) {
-        ASSERT_MSG(offset + size <= container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        Require(size);
         offset += size;
+    }
+
+    void Require(size_t size) const {
+        const bool valid = offset <= container.size() && size <= container.size()-offset;
+        if (recoverable && !valid) throw std::runtime_error("Truncated shader cache record");
+        ASSERT_MSG(valid, "Invalid or corrupted deserialization container/shader cache");
     }
 
     std::vector<u8>&& TakeOff() {
@@ -57,11 +63,13 @@ struct Archive {
     }
 
     Archive() = default;
-    explicit Archive(std::vector<u8>&& v) : container{v} {}
+    explicit Archive(std::vector<u8>&& v, bool recoverable = false)
+        : container{std::move(v)}, recoverable{recoverable} {}
 
 private:
     u32 offset{};
     std::vector<u8> container{};
+    bool recoverable{};
 
     friend struct Writer;
     friend struct Reader;
@@ -105,8 +113,7 @@ struct Writer {
 struct Reader {
     template <typename T>
     void Read(T* ptr, size_t size) {
-        ASSERT_MSG(ar.offset + size <= ar.container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        ar.Require(size);
         std::memcpy(reinterpret_cast<void*>(ptr), ar.CurrPtr(), size);
         ar.Advance(size);
     }
@@ -121,7 +128,9 @@ struct Reader {
     void Read(auto& v) {
         size_t num_elements{};
         Read(num_elements);
-        for (int i = 0; i < num_elements; ++i) {
+        if (ar.recoverable && num_elements > ar.container.size()-ar.offset)
+            throw std::runtime_error("Invalid shader cache element count");
+        for (size_t i = 0; i < num_elements; ++i) {
             v.emplace_back();
             Read(v.back());
         }
@@ -130,6 +139,7 @@ struct Reader {
     void Read(std::string& s) {
         size_t length{};
         Read(length);
+        ar.Require(length);
         s.resize(length);
         Read(s.data(), length);
     }

@@ -53,5 +53,18 @@ int main() {
         assert(restored.samplers[i].sharp_fetch.immediates[0]==i);
         assert(restored.samplers[i].is_depth==((i%2)!=0));
     }
-    puts("17 sampler variants survive insertion/copy/clear and logical cache round trip");
+    for (unsigned cut=0;cut<sizeof(uint64_t);++cut) {
+        Serialization::Archive damaged{std::vector<u8>(cut),true};
+        Serialization::Reader input{damaged};uint64_t value{};bool rejected=false;
+        try{input.Read(value);}catch(const std::runtime_error&){rejected=true;}
+        assert(rejected);
+    }
+    {
+        std::vector<u8> bytes(sizeof(size_t),0xff);
+        Serialization::Archive damaged{std::move(bytes),true};
+        Serialization::Reader input{damaged};std::string value;bool rejected=false;
+        try{input.Read(value);}catch(const std::runtime_error&){rejected=true;}
+        assert(rejected&&value.empty());
+    }
+    puts("Sampler/cache round trip and recoverable truncation/length checks pass");
 }

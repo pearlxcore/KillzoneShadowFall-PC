@@ -129,7 +129,11 @@ static auto UserPaths = [] {
     create_path(PathType::MetaDataDir, user_dir / METADATA_DIR);
     create_path(PathType::CustomTrophy, user_dir / CUSTOM_TROPHY);
     create_path(PathType::CustomConfigs, user_dir / CUSTOM_CONFIGS);
-    create_path(PathType::CacheDir, user_dir / CACHE_DIR);
+    const char* cache_override = std::getenv("GOW3_CACHE_DIR");
+    const auto cache_dir = cache_override && *cache_override ? fs::u8path(cache_override)
+                                                            : user_dir / CACHE_DIR;
+    std::filesystem::create_directories(cache_dir);
+    create_path(PathType::CacheDir, cache_dir);
     create_path(PathType::FontsDir, user_dir / FONTS_DIR);
     create_path(PathType::TrophyDir, user_dir / TROPHY_DIR);
     create_path(PathType::HomeDir, user_dir / HOME_DIR);

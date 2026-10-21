@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string_view>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -62,6 +63,8 @@ std::atomic<bool> menu_open{false};
 bool r3_down = false, l2_down = false;
 std::atomic<bool> loading{false};
 std::atomic<u32> loading_done{0}, loading_total{0};
+std::atomic<const char*> loading_stage{"Preparing graphics"};
+std::atomic<u32> loading_skipped{0}, loading_failed{0};
 std::atomic<u32> background_done{0}, background_total{0};
 bool dirty = false; // settings changed while open: saved on close
 Gow3CharacterSelector character_selector;
@@ -720,7 +723,7 @@ void LoadingScreen() {
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
     const u32 done = loading_done, total = loading_total;
     ImGui::SetWindowFontScale(1.6f);
-    ImGui::TextUnformatted(total ? "Loading shader cache..." : "Preparing graphics...");
+    ImGui::TextUnformatted(loading_stage.load());
     ImGui::SetWindowFontScale(1.0f);
     if (total) {
         char count[64];
@@ -729,6 +732,10 @@ void LoadingScreen() {
         ImGui::ProgressBar(float(done) / float(total), ImVec2(-1.0f, 0.0f), count);
     }
     ImGui::TextDisabled("The first start after an update takes longer.");
+    if (std::string_view(loading_stage.load()) == "Optimizing shader cache")
+        ImGui::TextDisabled("One-time conversion. Existing shaders are kept until preload completes.");
+    if (loading_skipped || loading_failed)
+        ImGui::TextDisabled("Skipped: %u   Failed: %u", loading_skipped.load(), loading_failed.load());
     ImGui::End();
 }
 
@@ -1054,6 +1061,12 @@ void SetLoading(bool active, u32 done, u32 total) {
     loading_done = done;
     loading_total = total;
     loading = active;
+}
+
+void SetLoadingStatus(const char* stage, u32 skipped, u32 failed) {
+    loading_stage = stage;
+    if (skipped != UINT32_MAX) loading_skipped = skipped;
+    if (failed != UINT32_MAX) loading_failed = failed;
 }
 
 bool Visible() {

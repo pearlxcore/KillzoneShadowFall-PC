@@ -59,3 +59,6 @@ python packaging/windows/package_killzone.py --msys C:/msys64
 The Killzone packager creates a portable folder, ZIP, SHA256 checksum and manifest in `dist/`, including Python/Tk and runtime DLLs. Use this packager rather than the inherited `package.sh`. Game files, user settings, saves and caches are excluded.
 
 Before publishing, verify first-time game setup, launch/exit, settings persistence and the packaged runtime on a clean Windows installation. Set `LAUNCHER_VERSION` in `launcher/kzsf_local.py` to the intended release label.
+
+For the unreleased shader-cache optimization, diagnostic switches and benchmark
+procedure, see [Shader-cache startup](SHADER-CACHE-STARTUP.md).

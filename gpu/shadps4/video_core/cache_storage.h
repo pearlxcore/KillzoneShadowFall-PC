@@ -6,6 +6,7 @@
 #include "common/path_util.h"
 #include "common/singleton.h"
 #include "common/types.h"
+#include "video_core/shader_cache_store.h"
 
 #include <functional>
 #include <thread>
@@ -32,6 +33,10 @@ public:
         return opened;
     }
     void FinishPreload();
+    // Profile validation must run before this optional, one-time conversion.
+    bool PrepareStorage(const ShaderCacheStore::Progress& progress = {});
+    bool CompletePreload(const ShaderCacheStore::Progress& progress = {});
+    ShaderCacheStore::Stats StorageStats() const;
     /// gow3: removes every cached blob (an incompatible cache is rebuilt, not ignored).
     void Clear();
 
@@ -51,7 +56,6 @@ public:
     size_t CountBlobs(BlobType type);
 
 private:
-    std::jthread io_worker{};
     std::filesystem::path cache_path{};
     bool opened{};
 };

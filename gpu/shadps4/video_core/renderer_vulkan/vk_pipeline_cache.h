@@ -130,7 +130,7 @@ public:
 
     /// Loads the pipelines of earlier sessions. gow3: called by the presenter once the window
     /// can show a loading screen; `progress(done, total)` follows the pipelines read.
-    void WarmUp(const std::function<void(u32 done, u32 total)>& progress = {});
+    void WarmUp(const std::function<void(u32 done, u32 total, const char* stage)>& progress = {});
     /// gow3: the same load on low-priority threads while the game runs; the GPU thread takes
     /// the results a few at a time (PumpWarmUp). False when it cannot (zip archive store).
     bool StartBackgroundWarmUp();
@@ -228,6 +228,7 @@ private:
     /// gow3: GOW3_PARALLEL_WARMUP: WarmUp builds the cached pipelines on these threads.
     struct WarmupPool;
     WarmupPool* warmup_pool = nullptr;
+    std::atomic<u64> warmup_prepare_ns{}, warmup_module_ns{}, warmup_build_ns{};
     std::mutex warmup_results_mutex;
     std::vector<std::pair<GraphicsPipelineKey, std::unique_ptr<GraphicsPipeline>>> warmup_graphics;
     std::vector<std::pair<ComputePipelineKey, std::unique_ptr<ComputePipeline>>> warmup_compute;

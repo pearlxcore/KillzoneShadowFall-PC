@@ -81,7 +81,11 @@ static int make_dirs(const char *path) {
     return mkdir(buffer,0755) && errno!=EEXIST ? -1 : 0;
 }
 static void root(int32_t user, const char *title, char *out, size_t size) {
-    snprintf(out,size,"%s/savedata/%d/%s",runtime_file_user_dir(),user,title && *title ? title : title_id);
+    const char *override=getenv("GOW3_SAVEDATA_DIR");
+    if (override && *override)
+        snprintf(out,size,"%s/%d/%s",override,user,title && *title ? title : title_id);
+    else
+        snprintf(out,size,"%s/savedata/%d/%s",runtime_file_user_dir(),user,title && *title ? title : title_id);
 }
 static int valid_name(const char *name, size_t max) {
     size_t n=strnlen(name,max);

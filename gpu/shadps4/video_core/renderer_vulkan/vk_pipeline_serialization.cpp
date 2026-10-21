@@ -15,6 +15,9 @@
 #include <map>
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
+#else
+#include <sys/resource.h>
 #endif
 #include "common/serdes.h"
 #include "common/scope_exit.h"
@@ -45,6 +48,22 @@ namespace Vulkan {
 namespace {
 // gow3: the test knobs that change recompiled SPIR-V (GOW3_LIGHTING_TEST=dref,
 // GOW3_AMD_PATHS_OFF=shaderext) get their own shader binary cache version.
+template <typename F>
+auto Measured(std::atomic<u64>& ns, F&& function) {
+    const auto start = std::chrono::steady_clock::now();
+    SCOPE_EXIT {ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now()-start).count();};
+    return function();
+}
+u64 PeakProcessMemory() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS memory{};
+    return K32GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory)) ? memory.PeakWorkingSetSize : 0;
+#else
+    rusage usage{};
+    return getrusage(RUSAGE_SELF, &usage)==0 ? u64(usage.ru_maxrss)*1024 : 0;
+#endif
+}
 u32 CurrentShaderBinaryVersion() {
     return LightingTest::ShaderBinaryVersion(
         Serialization::ShaderBinaryVersion,
@@ -464,7 +483,7 @@ vk::ResultValue<vk::UniquePipeline> CreateCachedGraphicsPipeline(
 // only the pipeline objects, the slow part, are built here. The runtime compiler builds
 // pipelines on worker threads the same way (vk_pipeline_cache.cpp).
 struct PipelineCache::WarmupPool {
-    explicit WarmupPool(u32 count, bool low_priority = false) {
+    explicit WarmupPool(u32 count, bool low_priority = false) : bounded(!low_priority) {
         for (u32 i = 0; i < count; ++i) {
             threads.emplace_back([this, low_priority] {
                 if (low_priority) {
@@ -488,7 +507,12 @@ struct PipelineCache::WarmupPool {
     }
     void Push(std::function<bool()> job) {
         {
-            std::scoped_lock lock{mutex};
+            std::unique_lock lock{mutex};
+            while (bounded && jobs.size() >= std::max<size_t>(1, threads.size()*4)) {
+                idle.wait_for(lock,std::chrono::milliseconds(50));
+                lock.unlock();if(pulse)pulse();lock.lock();
+            }
+            // Bound pending pipeline captures during large full preloads.
             jobs.push_back(std::move(job));
         }
         cv.notify_one();
@@ -524,8 +548,10 @@ struct PipelineCache::WarmupPool {
 
     std::atomic<u32> built{0};
     std::atomic<u32> failed{0};
+    std::function<void()> pulse;
 
 private:
+    const bool bounded;
     void Run() {
         std::unique_lock lock{mutex};
         while (true) {
@@ -688,6 +714,17 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    const auto prepare_start=std::chrono::steady_clock::now();
+    const auto prepare_io=Storage::DataBase::Instance().StorageStats().read_ns;
+    const u64 prepare_module=warmup_module_ns.load(),prepare_build=warmup_build_ns.load();
+    SCOPE_EXIT {
+        const u64 elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now()-prepare_start).count();
+        const u64 other=Storage::DataBase::Instance().StorageStats().read_ns-prepare_io+
+                        warmup_module_ns.load()-prepare_module+
+                        (warmup_pool ? 0 : warmup_build_ns.load()-prepare_build);
+        warmup_prepare_ns+=elapsed>other ? elapsed-other : 0;
+    };
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
     sel.runtime_infos = {};
@@ -705,7 +742,7 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
         return false;
     }
 
-    Serialization::Archive meta_ar{std::move(meta_blob)};
+    Serialization::Archive meta_ar{std::move(meta_blob), true};
 
     if (!LoadPipelineStage(meta_ar, 0)) {
         return false;
@@ -713,23 +750,23 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
 
     if(!ValidatePreloadedBindings()) return false;
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
-    ASSERT(is_new);
+    if (!is_new) return false;
 
     if (warmup_pool) {
         // The slot stays null until WarmUp moves the built pipeline in (the map may rehash).
         warmup_pool->Push([this, key = compute_key, info = sel.infos[0], module = sel.modules[0],
                            sdata]() mutable {
-            auto pipeline = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap,
+            auto pipeline = Measured(warmup_build_ns, [&] {return std::make_unique<ComputePipeline>(instance, scheduler, desc_heap,
                                                               profile, *pipeline_cache, key, *info,
-                                                              module, sdata, true);
+                                                              module, sdata, true);});
             std::scoped_lock lock{warmup_results_mutex};
             warmup_compute.emplace_back(key, std::move(pipeline));
             return true;
         });
     } else {
-        it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
+        it.value() = Measured(warmup_build_ns, [&] {return std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key,
-                                                       *sel.infos[0], sel.modules[0], sdata, true);
+                                                       *sel.infos[0], sel.modules[0], sdata, true);});
     }
 
     sel.infos.fill(nullptr);
@@ -775,6 +812,17 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    const auto prepare_start=std::chrono::steady_clock::now();
+    const auto prepare_io=Storage::DataBase::Instance().StorageStats().read_ns;
+    const u64 prepare_module=warmup_module_ns.load(),prepare_build=warmup_build_ns.load();
+    SCOPE_EXIT {
+        const u64 elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now()-prepare_start).count();
+        const u64 other=Storage::DataBase::Instance().StorageStats().read_ns-prepare_io+
+                        warmup_module_ns.load()-prepare_module+
+                        (warmup_pool ? 0 : warmup_build_ns.load()-prepare_build);
+        warmup_prepare_ns+=elapsed>other ? elapsed-other : 0;
+    };
     // A rejected/partial cache record must not leak a stage into the next one.
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
@@ -799,7 +847,7 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
             return false;
         }
 
-        Serialization::Archive meta_ar{std::move(meta_blob)};
+        Serialization::Archive meta_ar{std::move(meta_blob), true};
 
         if (!LoadPipelineStage(meta_ar, stage_idx)) {
             return false;
@@ -808,23 +856,23 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
 
     if(!ValidatePreloadedBindings()) return false;
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
-    ASSERT(is_new);
+    if (!is_new) return false;
 
     if (warmup_pool) {
         warmup_pool->Push([this, key = sel.graphics_key, infos = sel.infos,
                            runtime_infos = sel.runtime_infos, fetch = sel.fetch_shader,
                            modules = sel.modules, sdata]() mutable {
-            auto pipeline = std::make_unique<GraphicsPipeline>(
+            auto pipeline = Measured(warmup_build_ns, [&] {return std::make_unique<GraphicsPipeline>(
                 instance, scheduler, desc_heap, profile, key, *pipeline_cache, infos,
-                runtime_infos, fetch, modules, sdata, true);
+                runtime_infos, fetch, modules, sdata, true);});
             std::scoped_lock lock{warmup_results_mutex};
             warmup_graphics.emplace_back(key, std::move(pipeline));
             return true;
         });
     } else {
-        it.value() = std::make_unique<GraphicsPipeline>(
+        it.value() = Measured(warmup_build_ns, [&] {return std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
+            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);});
     }
 
     sel.infos.fill(nullptr);
@@ -858,7 +906,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
 
     auto [it_pgm, new_program] = program_cache.try_emplace(program->info.pgm_hash);
     if (new_program) {
-        module = CompileSPV(spv, instance.GetDevice());
+        module = Measured(warmup_module_ns, [&] {return CompileSPV(spv, instance.GetDevice());});
         it_pgm.value() = std::move(program);
     } else {
         const auto& it = std::ranges::find(it_pgm.value()->modules, spec, &Program::Module::spec);
@@ -876,7 +924,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             }
             module = it->module;
         } else {
-            module = CompileSPV(spv, instance.GetDevice());
+            module = Measured(warmup_module_ns, [&] {return CompileSPV(spv, instance.GetDevice());});
         }
     }
     sel.runtime_infos[stage] = spec.runtime_info;
@@ -959,62 +1007,49 @@ bool PipelineCache::CheckCacheProfile() {
     return true;
 }
 
-void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
-    if (!CheckCacheProfile()) {
-        return;
-    }
-
-    u32 num_pipelines{};
-    u32 num_total_pipelines{};
-    const u32 expected =
-        u32(Storage::DataBase::Instance().CountBlobs(Storage::BlobType::PipelineKey));
-    const auto started = std::chrono::steady_clock::now();
-    const u32 warmup_threads = WarmupPool::Threads();
+void PipelineCache::WarmUp(const std::function<void(u32,u32,const char*)>& progress) {
+    const auto started=std::chrono::steady_clock::now();
+    auto& db=Storage::DataBase::Instance();
+    const auto tick=[&](u32 done,u32 total,const char* stage) {if(progress)progress(done,total,stage);};
+    tick(0,0,"Reading cache");
+    if (!CheckCacheProfile()) return;
+    db.PrepareStorage([&](u64 done,u64 total) {
+        tick(u32(done),u32(total),total ? "Optimizing shader cache" : "Reading cache");
+        return true;
+    });
+    const auto after_prepare=db.StorageStats();
+    const auto preload_started=std::chrono::steady_clock::now();
+    warmup_prepare_ns=0;warmup_module_ns=0;warmup_build_ns=0;
+    u32 num_pipelines=0,num_total_pipelines=0,skipped=0,failed=0;
+    const u32 expected=u32(db.CountBlobs(Storage::BlobType::PipelineKey));
+    const u32 warmup_threads=WarmupPool::Threads();
     std::unique_ptr<WarmupPool> pool;
-    if (warmup_threads) {
-        pool = std::make_unique<WarmupPool>(warmup_threads);
-        warmup_pool = pool.get();
-    }
-    // In parallel mode the screen follows the pipelines built, not the ones read.
-    const auto report = [&] {
-        if (progress) {
-            const u32 done = pool ? pool->built + pool->failed : num_total_pipelines;
-            progress(done, std::max(expected, num_total_pipelines));
-        }
+    if(warmup_threads) {pool=std::make_unique<WarmupPool>(warmup_threads);warmup_pool=pool.get();}
+    const auto report=[&](const char* stage) {
+        const u32 errors=failed+(pool ? pool->failed.load() : 0);
+        const u32 done=skipped+failed+(pool ? pool->built.load()+pool->failed.load() : num_pipelines);
+        Gow3Overlay::SetLoadingStatus(stage,skipped,errors);
+        tick(done,std::max(expected,num_total_pipelines),stage);
     };
-
-    Storage::DataBase::Instance().ForEachBlob(
-        Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
-            ++num_total_pipelines;
-            report();
-
-            Serialization::Archive ar{std::move(data)};
-            Serialization::Reader pldata{ar};
-
-            u32 version{};
-            pldata.Read(version);
-            if (version != Serialization::PipelineKeyVersion) {
-                return;
-            }
-
-            u32 is_compute{};
-            pldata.Read(is_compute);
-
-            bool result{};
-            if (is_compute) {
-                result = LoadComputePipeline(ar);
-            } else {
-                result = LoadGraphicsPipeline(ar);
-            }
-
-            if (result) {
-                ++num_pipelines;
-            }
-        });
-
-    if (pool) {
-        pool->Wait(report);
-        warmup_pool = nullptr;
+    if(pool)pool->pulse=[&]{report("Building pipelines");};
+    db.ForEachBlob(Storage::BlobType::PipelineKey,[&](std::vector<u8>&& data) {
+        ++num_total_pipelines;
+        if(data.size()<8) {++skipped;report("Preparing shaders");return;}
+        try {
+            Serialization::Archive ar{std::move(data),true};Serialization::Reader pldata{ar};
+            u32 version{},is_compute{};pldata.Read(version);pldata.Read(is_compute);
+            if(version!=Serialization::PipelineKeyVersion || is_compute>1) ++skipped;
+            else if(is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar)) ++num_pipelines;
+            else ++skipped;
+        } catch(const std::exception& e) {
+            ++failed;
+            if(failed<=8) std::printf("Pipeline warm-up: record rejected: %s\n",e.what());
+        }
+        report("Preparing shaders");
+    });
+    if(pool) {
+        pool->Wait([&]{report("Building pipelines");});
+        warmup_pool=nullptr;
         // Every slot was reserved by the loaders; the ones whose build failed stay out.
         for (auto& [key, pipeline] : warmup_graphics) {
             graphics_pipelines[key] = std::move(pipeline);
@@ -1028,23 +1063,39 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
         for (auto it = compute_pipelines.begin(); it != compute_pipelines.end();) {
             it = it->second ? std::next(it) : compute_pipelines.erase(it);
         }
-        num_pipelines -= pool->failed;
-        warmup_graphics.clear();
-        warmup_compute.clear();
-        pool.reset();
+        num_pipelines-=pool->failed;
+        failed+=pool->failed;
+        warmup_graphics.clear();warmup_compute.clear();pool.reset();
     }
-    std::printf("Pipeline warm-up: %u of %u pipelines in %.2f s (%u threads)\n", num_pipelines,
-                num_total_pipelines,
-                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(),
-                warmup_threads);
-    LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
-    ReportPipelineBinaryCache();
-    if (num_total_pipelines > num_pipelines) {
-        LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
-                    num_total_pipelines - num_pipelines);
-    }
-
-    Storage::DataBase::Instance().FinishPreload();
+    const auto read_stats=db.StorageStats();
+    // Once every pipeline was considered and no build/read failed, the verified
+    // packed store can replace its loose rollback copies. Otherwise keep them.
+    if(!failed && !read_stats.corrupt && !EmulatorSettingsImpl::Flag("KZSF_CACHE_KEEP_LOOSE",false))
+        db.CompletePreload([&](u64 done,u64 total) {tick(u32(done),u32(total),"Finalizing shader cache");return true;});
+    db.FinishPreload();
+    report("Building pipelines");
+    const auto stats=db.StorageStats();
+    u64 accepted_set=0;
+    for(const auto& item:graphics_pipelines)if(item.second)
+        accepted_set^=std::hash<GraphicsPipelineKey>{}(item.first)+0x4752415048494353ull;
+    for(const auto& item:compute_pipelines)if(item.second)
+        accepted_set^=item.first.value+0x434f4d5055544521ull;
+    const double preload_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-preload_started).count();
+    const double total_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+    std::printf("Pipeline warm-up: %u of %u pipelines in %.2f s (%u threads); skipped=%u failed=%u\n",
+                num_pipelines,num_total_pipelines,total_ms/1000,warmup_threads,skipped,failed);
+    std::printf("Shader cache metrics: storage=%s scan_ms=%.3f read_ms=%.3f deserialize_prepare_ms=%.3f "
+                "module_ms=%.3f pipeline_cpu_ms=%.3f preload_ms=%.3f total_ms=%.3f "
+                "reads=%llu bytes=%llu scans=%llu corrupt=%llu workers=%u peak_process_bytes=%llu index_estimate_bytes=%llu pipeline_set_hash=%llx\n",
+                stats.packed ? "packed-v1" : "loose",stats.scan_ns/1e6,
+                (read_stats.read_ns-after_prepare.read_ns)/1e6,warmup_prepare_ns.load()/1e6,
+                warmup_module_ns.load()/1e6,warmup_build_ns.load()/1e6,preload_ms,total_ms,
+                static_cast<unsigned long long>(read_stats.reads-after_prepare.reads),
+                static_cast<unsigned long long>(read_stats.bytes-after_prepare.bytes),
+                static_cast<unsigned long long>(stats.scans),static_cast<unsigned long long>(stats.corrupt),
+                warmup_threads,static_cast<unsigned long long>(PeakProcessMemory()),
+                static_cast<unsigned long long>(stats.index_bytes),static_cast<unsigned long long>(accepted_set));
+    std::fflush(stdout);ReportPipelineBinaryCache();
 }
 
 void PipelineCache::StartOnDemand() {
@@ -1130,7 +1181,11 @@ bool PipelineCache::StartBackgroundWarmUp() {
         warm.total = u32(db.CountBlobs(Storage::BlobType::PipelineKey));
         db.ForEachBlob(
             Storage::BlobType::PipelineKey,
-            [&](std::vector<u8>&& data) { ReadWarmEntry(warm, std::move(data)); },
+            [&](std::vector<u8>&& data) {
+                if (data.size()<8) {++warm.done;return;}
+                try {ReadWarmEntry(warm, std::move(data));}
+                catch(const std::exception&) {++warm.done;}
+            },
             [&] { return warm.stopping.load(std::memory_order_relaxed); });
         warm.stages.clear();
         warm.reader_ns = ElapsedNs(reader_started);
@@ -1145,7 +1200,7 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
     const auto entry_started = std::chrono::steady_clock::now();
     SCOPE_EXIT { warm.entry_ns += ElapsedNs(entry_started); ++warm.entries; };
     const auto skip = [&] { warm.done.fetch_add(1, std::memory_order_relaxed); };
-    Serialization::Archive ar{std::move(data)};
+    Serialization::Archive ar{std::move(data), true};
     Serialization::Reader pldata{ar};
     u32 version{};
     pldata.Read(version);
@@ -1187,7 +1242,7 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
             std::vector<u8> meta_blob;
             db.Load(Storage::BlobType::ShaderMeta, fmt::format("{:#018x}", hashes[i]), meta_blob);
             if (!meta_blob.empty()) {
-                Serialization::Archive meta_ar{std::move(meta_blob)};
+                Serialization::Archive meta_ar{std::move(meta_blob), true};
                 if (LoadShaderMeta(meta_ar, stage->program->info, stage->fetch, stage->spec,
                                    stage->perm_idx)) {
                     std::vector<u32> spv;

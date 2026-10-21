@@ -34,11 +34,17 @@ This README describes the current source. Older downloads may have fewer feature
 
 Most launcher changes apply on the next game launch. The in-game menu identifies settings that need a restart.
 
-## Extra features
+## Third person and freecam
 
-- **Third person and freecam:** enable their checkboxes on Home, then use **F8** for third person or **F9** to detach the camera and explore without moving the player. Freecam supports keyboard, mouse and controller movement; **F10** recenters it. See the shortcuts below for movement controls.
-- **Player models:** play as characters such as Echo, Sinclair or VSA Engineer. Select appearances in the in-game menu or cycle them with **F7 + Left/Right**; **F7 alone** toggles the selected appearance and default player. Models from other chapters load on selection, so switching may take a moment.
-- **Cheats:** unlimited health protects against normal damage, infinite ammo removes ammunition depletion/reloading, and unlimited sprint prevents stamina exhaustion. Continuous Tactical Echo refreshes orange enemy marks at the normal scan range and interval after you activate it once per load. It does not automatically aim; scripted deaths can still occur.
+Enable their checkboxes on Home, then use **F8** for third person or **F9** to detach the camera and explore without moving the player. Freecam supports keyboard, mouse and controller movement; **F10** recenters it. See the shortcuts below for movement controls.
+
+## Player models
+
+Play as characters such as Echo, Sinclair or VSA Engineer. Select appearances in the in-game menu or cycle them with **F7 + Left/Right**; **F7 alone** toggles the selected appearance and default player. Models from other chapters load on selection, so switching may take a moment.
+
+## Cheats
+
+Unlimited health protects against normal damage, infinite ammo removes ammunition depletion/reloading, and unlimited sprint prevents stamina exhaustion. Continuous Tactical Echo refreshes orange enemy marks at the normal scan range and interval after you activate it once per load. It does not automatically aim; scripted deaths can still occur.
 
 ## Shortcuts
 
@@ -109,6 +115,8 @@ An optional [starter shader cache](https://github.com/pearlxcore/KillzoneShadowF
 | `user/launcher-settings.ini` | Runtime and in-game menu settings |
 | `user/cache/` | Persistent shader caches |
 | `out/dialogue-…-modelauncher/` | Session logs and exit status |
+
+Choose optional **Shader cache folder** and **Saved-data folder** paths under **Home → Folders** in the launcher. Empty fields use the defaults above. Game-specific subfolders are added automatically. Changes apply on the next launch; existing files are not moved.
 
 Use **Advanced → Open latest session logs** when reporting a problem. Include your GPU/driver, chapter and checkpoint, selected model/settings, and relevant logs. **Do not upload game files.**
 
