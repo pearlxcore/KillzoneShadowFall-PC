@@ -36,9 +36,31 @@ Most launcher changes apply on the next game launch. The in-game menu identifies
 
 ## Third person and freecam
 
+
+
+https://github.com/user-attachments/assets/4256e0fe-54b6-4d97-af83-335598717047
+
+
+https://github.com/user-attachments/assets/fd7b9263-4175-46a6-92dc-ef5fe2345b40
+
+
+
+https://github.com/user-attachments/assets/5b4f6e1b-e3ce-4d49-8d40-e344f71c3e42
+
+
+
+
+
+
 Enable their checkboxes on Home, then use **F8** for third person or **F9** to detach the camera and explore without moving the player. Freecam supports keyboard, mouse and controller movement; **F10** recenters it. See the shortcuts below for movement controls.
 
 ## Player models
+
+
+
+https://github.com/user-attachments/assets/f92258e0-bf7a-4fe3-8411-33209a6baa48
+
+
 
 Play as characters such as Echo, Sinclair or VSA Engineer. Select appearances in the in-game menu or cycle them with **F7 + Left/Right**; **F7 alone** toggles the selected appearance and default player. Models from other chapters load on selection, so switching may take a moment.
 
