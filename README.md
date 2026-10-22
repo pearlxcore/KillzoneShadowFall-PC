@@ -165,5 +165,3 @@ Also used: [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9), [FFmpeg](htt
 ## License
 
 [GNU GPL v2 or later](LICENSE). Third-party components retain their own licenses.
-
-Not affiliated with Sony Interactive Entertainment or Guerrilla Games. Killzone is a trademark of Sony Interactive Entertainment.
