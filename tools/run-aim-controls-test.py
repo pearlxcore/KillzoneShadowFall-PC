@@ -11,13 +11,13 @@ def main():
  if a.mode=='assist':v['look_assist']=False
  if a.mode=='responsive':v.update(look_curve='1',look_ramp=False)
  folder=ui.ROOT/'out'/('aim-controls-'+a.mode+'-'+time.strftime('%Y%m%d-%H%M%S'))
- spec=ui.launch_spec(v,folder);spec['env']['GOW3_CONFIG']=str(folder/'settings.ini')
- spec['command'][0]=str(ui.ROOT/'out/gow3-probe-aim-controls.exe')
+ spec=ui.launch_spec(v,folder);spec['env']['KZSF_CONFIG']=str(folder/'settings.ini')
+ spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-aim-controls.exe')
  if a.mode=='responsive':spec['env']['KZSF_PAD_DRIFT_LOG']='1'
  report={k:v[k] for k in ('look_curve','look_deadzone','look_ramp','look_assist')}
  if a.report_only:print(json.dumps(report,indent=2));return 0
- running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
- if 'gow3-probe' in running.stdout.lower():print('Close the current game first.');return 1
+ running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
+ if 'kzsf-probe' in running.stdout.lower():print('Close the current game first.');return 1
  ok,reason=ui.validate_game(v['game_dir'])
  if not ok:print(reason);return 1
  folder.mkdir(parents=True)

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
-#include "gow3_settings.h"
+#include "kzsf_settings.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/texture_cache/sampler.h"
@@ -14,7 +14,7 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
     using namespace Vulkan;
     const bool game_aniso = AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
                             AmdGpu::IsAnisoFilter(sampler.xy_min_filter);
-    const int forced = Gow3Settings::Get().startup_anisotropy;
+    const int forced = KzsfSettings::Get().startup_anisotropy;
     const bool material = !is_depth && sampler.xy_min_filter != AmdGpu::Filter::Point &&
                           sampler.mip_filter != AmdGpu::MipFilter::None && sampler.MaxLod() > 0;
     const bool force_aniso = material && forced > 1;

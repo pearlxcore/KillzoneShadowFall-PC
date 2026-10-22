@@ -8,8 +8,8 @@
 
 static int capture;
 static int look_gain=100, aim_gain=100;
-int gow3gpu_controller_aim_gain(int aiming) { return aiming ? aim_gain : look_gain; }
-int gow3gpu_overlay_captures_input(void) { return capture; }
+int kzsfgpu_controller_aim_gain(int aiming) { return aiming ? aim_gain : look_gain; }
+int kzsfgpu_overlay_captures_input(void) { return capture; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -51,11 +51,11 @@ int main(void) {
     }
     const char *tmp=getenv("TMPDIR") ? getenv("TMPDIR") : getenv("TEMP") ? getenv("TEMP") : "/tmp";
     char path[1024];
-    snprintf(path,sizeof(path),"%s/gow3-pad-test-XXXXXX",tmp);
+    snprintf(path,sizeof(path),"%s/kzsf-pad-test-XXXXXX",tmp);
     int fd=mkstemp(path);
     assert(fd>=0);
     close(fd);
-    setenv("GOW3_PAD_FILE",path,1);
+    setenv("KZSF_PAD_FILE",path,1);
     setenv("SDL_VIDEODRIVER","dummy",1);
     /* Only the virtual test controller is a gamepad, whatever is plugged in. */
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT,"0x1d50/0x6189");
@@ -137,7 +137,7 @@ int main(void) {
     desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
     desc.button_mask=(1u<<SDL_GAMEPAD_BUTTON_COUNT)-1;
     desc.axis_mask=(1u<<SDL_GAMEPAD_AXIS_COUNT)-1;
-    desc.name="gow3 test controller";
+    desc.name="kzsf test controller";
     desc.vendor_id=0x1d50;
     desc.product_id=0x6189;
     desc.ntouchpads=1;

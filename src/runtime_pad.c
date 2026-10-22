@@ -1,14 +1,14 @@
 /* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
  * by the window thread (gpu/shim/window.cpp); here state is only sampled.
  *
- * Default keyboard layout (GOW3_KEY_MAP changes the buttons, see apply_button_map):
+ * Default keyboard layout (KZSF_KEY_MAP changes the buttons, see apply_button_map):
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad (photo mode), Backspace right touchpad (pause menu),
  *   IJKL d-pad (I up, K down, J left, L right). */
 #define _GNU_SOURCE
 #include "runtime.h"
-#include "gpu/gow3gpu.h"
+#include "gpu/kzsfgpu.h"
 #include "kzsf_controller_aim.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,8 +135,8 @@ void runtime_pad_free_camera_axes(float *left_x,float *left_y,float *right_x,flo
         int16_t ry=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY);
         int16_t lx=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX);
         int16_t ly=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY);
-        kzsf_controller_drift_guard(&rx,&ry,gow3gpu_controller_drift_deadzone());
-        kzsf_controller_drift_guard(&lx,&ly,gow3gpu_controller_drift_deadzone());
+        kzsf_controller_drift_guard(&rx,&ry,kzsfgpu_controller_drift_deadzone());
+        kzsf_controller_drift_guard(&lx,&ly,kzsfgpu_controller_drift_deadzone());
         *right_x=rx/32768.f;*right_y=ry/32768.f;
         *left_x=lx/32768.f;*left_y=ly/32768.f;
         *forward=(float)SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)-
@@ -145,8 +145,8 @@ void runtime_pad_free_camera_axes(float *left_x,float *left_y,float *right_x,flo
     pthread_mutex_unlock(&lock);
 }
 /* Button sources: a host button or key and the PS4 button it presses. The defaults below can be
- * changed per PS4 button with GOW3_PAD_MAP (gamepad) and GOW3_KEY_MAP (keyboard), e.g.
- * GOW3_KEY_MAP="cross=Q,square=Left Shift" or GOW3_PAD_MAP="cross=b,circle=a": comma-separated
+ * changed per PS4 button with KZSF_PAD_MAP (gamepad) and KZSF_KEY_MAP (keyboard), e.g.
+ * KZSF_KEY_MAP="cross=Q,square=Left Shift" or KZSF_PAD_MAP="cross=b,circle=a": comma-separated
  * <ps4 button>=<SDL key or gamepad button name>. A mapped PS4 button loses its default sources.
  * touchpad_left (alias touchpad) and touchpad_right are the two sides of the touchpad click:
  * photo mode and the pause menu. Back/View (Share on a DualSense) is the right click, and with
@@ -185,7 +185,7 @@ static char *trim(char *text) {
     return text;
 }
 
-/* Applies a GOW3_PAD_MAP/GOW3_KEY_MAP value; returns how many entries were used. Bad entries are
+/* Applies a KZSF_PAD_MAP/KZSF_KEY_MAP value; returns how many entries were used. Bad entries are
  * logged and skipped, so their PS4 button keeps its default. */
 static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
     if (!spec || !*spec) return 0;
@@ -222,8 +222,8 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
 }
 
 static void init_button_maps(void) {
-    const int pad=apply_button_map(&pad_map,getenv("GOW3_PAD_MAP"),false);
-    const int keys=apply_button_map(&key_map,getenv("GOW3_KEY_MAP"),true);
+    const int pad=apply_button_map(&pad_map,getenv("KZSF_PAD_MAP"),false);
+    const int keys=apply_button_map(&key_map,getenv("KZSF_KEY_MAP"),true);
     if (pad || keys) printf("Runtime: pad map: %d gamepad and %d keyboard buttons remapped\n",pad,keys);
 }
 static void load_button_maps(void) {
@@ -291,12 +291,12 @@ static void sample_host(PadData *d) {
     d->timestamp=now_us();
     if(__atomic_load_n(&free_camera_input,__ATOMIC_ACQUIRE)) {
         int16_t x=0,y=0;uint32_t buttons=0;
-        gow3gpu_mouse_state(&x,&y,&buttons); // drain captured motion while player input is suspended
+        kzsfgpu_mouse_state(&x,&y,&buttons); // drain captured motion while player input is suspended
         return;
     }
     SDL_Gamepad *g=current_gamepad();
     if (g) SDL_UpdateGamepads(); /* refresh the gamepad state on this thread as well */
-    if (gow3gpu_overlay_captures_input()) return; /* settings menu open: neutral input */
+    if (kzsfgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     load_button_maps();
     if (g) {
@@ -313,7 +313,7 @@ static void sample_host(PadData *d) {
         {
             int16_t rx=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX);
             int16_t ry=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY);
-            int drift_zone=gow3gpu_controller_drift_deadzone();
+            int drift_zone=kzsfgpu_controller_drift_deadzone();
             int16_t raw_x=rx,raw_y=ry;
             int suppressed=kzsf_controller_drift_guard(&rx,&ry,drift_zone);
             static int drift_log=-1;
@@ -332,7 +332,7 @@ static void sample_host(PadData *d) {
                     report_at=now;samples=blocked=0;peak=0;
                 }
             }
-            kzsf_controller_aim(&rx,&ry,gow3gpu_controller_aim_gain(d->l2>30));
+            kzsf_controller_aim(&rx,&ry,kzsfgpu_controller_aim_gain(d->l2>30));
             d->right_x=axis(rx); d->right_y=axis(ry);
         }
         if (SDL_GetNumGamepadTouchpads(g)>0) {
@@ -361,7 +361,7 @@ static void sample_host(PadData *d) {
     }
     {
         int16_t mx=0,my=0; uint32_t buttons=0;
-        if (gow3gpu_mouse_state(&mx,&my,&buttons)) {
+        if (kzsfgpu_mouse_state(&mx,&my,&buttons)) {
             if (mx || my) { d->right_x=axis(mx); d->right_y=axis(my); }
             if (buttons&1) { d->buttons|=BTN_R2; d->r2=255; }
             if (buttons&2) { d->buttons|=BTN_L2; d->l2=255; }
@@ -388,17 +388,17 @@ static void sample_host(PadData *d) {
     }
 }
 
-/* GOW3_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
+/* KZSF_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
  * tokens, re-read when it changes: button names (cross circle square triangle l1 r1 l2 r2 l3 r3
  * options touchpad touchpad_left touchpad_right up down left right) are held while listed;
  * touchpad is the left side; lx= ly= rx= ry= (0..255) override the sticks. An empty file
  * releases everything. */
 static struct { uint32_t buttons; int stick[4]; } injected={0,{-1,-1,-1,-1}};
-static int replay_armed;      /* 1 while a GOW3_PAD_REPLAY recording plays, 2 once it ended */
+static int replay_armed;      /* 1 while a KZSF_PAD_REPLAY recording plays, 2 once it ended */
 static uint64_t replay_start; /* 0: (re)start at the next sample */
 static void read_inject(void) {
     static const char *path; static int checked; static uint64_t last_check; static struct timespec mtime;
-    if (!checked) { path=getenv("GOW3_PAD_FILE"); checked=1; }
+    if (!checked) { path=getenv("KZSF_PAD_FILE"); checked=1; }
     if (!path || !*path) return;
     uint64_t now=now_us();
     if (now-last_check<20000) return;
@@ -420,7 +420,7 @@ static void read_inject(void) {
     for (int i=0;i<4;++i) injected.stick[i]=-1;
     char token[64];
     while (fscanf(f,"%63s",token)==1) {
-        if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* GOW3_PAD_REPLAY */
+        if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* KZSF_PAD_REPLAY */
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!strcmp(token,ps_names[i].name)) injected.buttons|=ps_names[i].ps;
         for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
     }
@@ -428,9 +428,9 @@ static void read_inject(void) {
     printf("Runtime: pad file: buttons 0x%x sticks %d %d %d %d\n",injected.buttons,
            injected.stick[0],injected.stick[1],injected.stick[2],injected.stick[3]);
 }
-/* GOW3_PAD_RECORD=<file>: F9 starts and stops recording the pad state (gamepad or keyboard) with
- * the time since F9; GOW3_PAD_REPLAY=<file> plays such a recording back, started by the token
- * "replay" in GOW3_PAD_FILE (scripted tests repeat a route the player ran once). Lines: ms buttons
+/* KZSF_PAD_RECORD=<file>: F9 starts and stops recording the pad state (gamepad or keyboard) with
+ * the time since F9; KZSF_PAD_REPLAY=<file> plays such a recording back, started by the token
+ * "replay" in KZSF_PAD_FILE (scripted tests repeat a route the player ran once). Lines: ms buttons
  * lx ly rx ry l2 r2, written when the state changes. */
 typedef struct { uint32_t ms, buttons; uint8_t axes[4], l2, r2; } PadSample;
 static FILE *record_file;
@@ -438,7 +438,7 @@ static uint64_t record_start;
 static PadSample record_last;
 static void record_sample(const PadData *d) {
     static const char *path; static int checked, f9_was_down;
-    if (!checked) { path=getenv("GOW3_PAD_RECORD"); checked=1; }
+    if (!checked) { path=getenv("KZSF_PAD_RECORD"); checked=1; }
     if (!path || !*path || !sdl_ready) return;
     const bool *k=SDL_GetKeyboardState(NULL);
     const int f9=k && k[SDL_SCANCODE_F9];
@@ -470,7 +470,7 @@ static void replay_sample(PadData *d) {
         static int loaded;
         if (!loaded) {
             loaded=1;
-            const char *path=getenv("GOW3_PAD_REPLAY");
+            const char *path=getenv("KZSF_PAD_REPLAY");
             FILE *f=path ? fopen(path,"r") : NULL;
             PadSample s; unsigned v[8]; size_t cap=0;
             while (f && fscanf(f,"%u %u %u %u %u %u %u %u",&v[0],&v[1],&v[2],&v[3],&v[4],&v[5],&v[6],&v[7])==8) {
@@ -506,7 +506,7 @@ static void sample(PadData *d) {
         free_camera_release=1;click.side=-1;return;
     }
     if(free_camera_release) {
-        int zone=gow3gpu_controller_drift_deadzone()*128/100;
+        int zone=kzsfgpu_controller_drift_deadzone()*128/100;
         int held=d->buttons || d->l2>30 || d->r2>30 || abs(d->left_x-128)>zone || abs(d->left_y-128)>zone ||
                  abs(d->right_x-128)>zone || abs(d->right_y-128)>zone || d->touch_count;
         if(held) {
@@ -515,7 +515,7 @@ static void sample(PadData *d) {
         }
         free_camera_release=0;
     }
-    if (gow3gpu_overlay_captures_input()) { hold_after_capture=1; click.side=-1; return; }
+    if (kzsfgpu_overlay_captures_input()) { hold_after_capture=1; click.side=-1; return; }
     record_sample(d); /* the click sources as they are: a replay plays them again */
     read_inject();
     replay_sample(d);

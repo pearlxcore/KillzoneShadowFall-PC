@@ -51,7 +51,7 @@ void SetObjectName(vk::Device device, const HandleType& handle, const char* form
     SetObjectName(device, handle, debug_name);
 }
 
-// gow3: a failing Check() aborts with only the result, and several call sites pass no
+// kzsf: a failing Check() aborts with only the result, and several call sites pass no
 // message, so nothing recorded which Vulkan call failed (a driver returning
 // VK_ERROR_UNKNOWN gave no clue). Log the enclosing function (inline template =>
 // the call site's function) and the return address before aborting.

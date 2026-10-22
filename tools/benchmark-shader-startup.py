@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--baseline', type=Path, required=True)
-    parser.add_argument('--candidate', type=Path, default=ROOT/'out/gpu/gow3-probe.exe')
+    parser.add_argument('--candidate', type=Path, default=ROOT/'out/gpu/kzsf-probe.exe')
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--prepare-only', action='store_true')
     parser.add_argument('--only', choices=('baseline', 'loose', 'packed'))
@@ -84,7 +84,7 @@ def main():
         print('Snapshot ready. Run repeat benchmarks, or reboot before a cold measurement.')
         return
     running = subprocess.check_output(['tasklist', '/FO', 'CSV', '/NH'], text=True)
-    if re.search(r'"gow3-probe[^\"]*\.exe"', running, re.I):
+    if re.search(r'"kzsf-probe[^\"]*\.exe"', running, re.I):
         parser.error('Close the game before benchmarking; no running game is stopped automatically.')
     values = dict(ui.DEFAULTS)
     values['game_dir'] = ui.load_preferences()['game_dir']
@@ -95,10 +95,10 @@ def main():
         folder.mkdir()
         spec = ui.launch_spec(values, folder)
         env = spec['env']
-        env.update(GOW3_USER_DIR=str(work/'user'), GOW3_GPU_USER_DIR=str(work/'user'),
-                   GOW3_CONFIG=str(work/'settings.ini'), GOW3_FRAME_STATS='0',
-                   GOW3_STALL_SECONDS='0',
-                   GOW3_PARALLEL_WARMUP='0' if mode == 'baseline' else '1',
+        env.update(KZSF_USER_DIR=str(work/'user'), KZSF_GPU_USER_DIR=str(work/'user'),
+                   KZSF_CONFIG=str(work/'settings.ini'), KZSF_FRAME_STATS='0',
+                   KZSF_STALL_SECONDS='0',
+                   KZSF_PARALLEL_WARMUP='0' if mode == 'baseline' else '1',
                    KZSF_PACKED_SHADER_CACHE='1' if mode == 'packed' else '0',
                    KZSF_CACHE_KEEP_LOOSE='1', KZSF_CACHE_STARTUP_BENCHMARK='1')
         command = list(spec['command'])

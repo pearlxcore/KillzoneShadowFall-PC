@@ -21,8 +21,8 @@ def startup_smoke(spec, folder):
         shutil.copytree(ui.ROOT / "user/savedata", profile / "savedata")
     pad = folder / "pad.txt"
     pad.write_text("")
-    spec["env"].update(KZSF_PROMPT_TEXTURE_SMOKE="1", GOW3_PRECOMPILE="0",
-                       GOW3_USER_DIR=str(profile), GOW3_PAD_FILE=str(pad))
+    spec["env"].update(KZSF_PROMPT_TEXTURE_SMOKE="1", KZSF_PRECOMPILE="0",
+                       KZSF_USER_DIR=str(profile), KZSF_PAD_FILE=str(pad))
     with (folder / "stdout.log").open("wb") as out, (folder / "stderr.log").open("wb") as err:
         game = subprocess.Popen(spec["command"], cwd=ui.ROOT, env=spec["env"], stdout=out, stderr=err,
                                 creationflags=subprocess.CREATE_NO_WINDOW)
@@ -68,21 +68,21 @@ def main():
         values["mouse_aim"] = False
     folder = ui.ROOT / "out" / ("pc-prompts-" + args.mode + "-" + time.strftime("%Y%m%d-%H%M%S"))
     spec = ui.launch_spec(values, folder)
-    spec["command"][0] = str(ui.ROOT / "out/gow3-probe-pc-prompts.exe")
-    spec["env"]["GOW3_CONFIG"] = str(folder / "settings.ini")
+    spec["command"][0] = str(ui.ROOT / "out/kzsf-probe-pc-prompts.exe")
+    spec["env"]["KZSF_CONFIG"] = str(folder / "settings.ini")
     spec["env"]["KZSF_NATIVE_PROMPTS"] = "1"
     spec["env"]["KZSF_PROMPT_PC_TEST"] = "0"
     spec["env"]["KZSF_PROMPT_TRACE"] = "1"
     spec["env"]["KZSF_PROMPT_TEXTURE_SMOKE"] = "0"
     report = dict(mode=args.mode, mouse_aim=bool(values["mouse_aim"]),
-                  executable=spec["command"][0], settings=spec["env"]["GOW3_CONFIG"],
-                  effective_key_spec=spec["env"].get("GOW3_KEY_MAP", "runtime defaults"))
+                  executable=spec["command"][0], settings=spec["env"]["KZSF_CONFIG"],
+                  effective_key_spec=spec["env"].get("KZSF_KEY_MAP", "runtime defaults"))
     if args.report_only:
         print(json.dumps(report, indent=2))
         return 0
-    running = subprocess.run(["tasklist", "/FI", "IMAGENAME eq gow3-probe*", "/FO", "CSV", "/NH"],
+    running = subprocess.run(["tasklist", "/FI", "IMAGENAME eq kzsf-probe*", "/FO", "CSV", "/NH"],
                              capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-    if "gow3-probe" in running.stdout.lower():
+    if "kzsf-probe" in running.stdout.lower():
         print("Close the current Killzone game, then run this BAT again.")
         return 1
     ok, reason = ui.validate_game(values["game_dir"])
@@ -90,7 +90,7 @@ def main():
         print(reason)
         return 1
     if not Path(spec["command"][0]).is_file():
-        print("Missing local prototype build: out/gow3-probe-pc-prompts.exe")
+        print("Missing local prototype build: out/kzsf-probe-pc-prompts.exe")
         return 1
     folder.mkdir(parents=True, exist_ok=False)
     if ui.CONFIG.is_file():

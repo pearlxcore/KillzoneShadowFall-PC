@@ -12,12 +12,29 @@ spec=importlib.util.spec_from_file_location('kzsf_local',Path(__file__).resolve(
 ui=importlib.util.module_from_spec(spec); spec.loader.exec_module(ui)
 
 class LauncherTests(unittest.TestCase):
+    def test_log_tail_handles_large_missing_empty_and_invalid_utf8_logs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'stderr.log'
+            self.assertIn('not been created',ui.log_tail(path))
+            path.write_bytes(b''); self.assertEqual(ui.log_tail(path),'No output yet.')
+            path.write_bytes(b'old line\n'*1000+b'latest\xff\n')
+            tail=ui.log_tail(path,64)
+            self.assertTrue(tail.startswith('[Showing the latest part'))
+            self.assertIn('latest\ufffd',tail)
+            self.assertLess(len(tail),120)
+
+    def test_native_upload_diagnostics_are_not_inherited(self):
+        variables={'KZSF_CUSTOM_VERTEX_PROBE_FILE':'local.va','KZSF_CUSTOM_INDEX_PROBE_FILE':'local.ia','KZSF_CUSTOM_MATERIAL_PROBE':'1','KZSF_CUSTOM_TEXTURE_PROBE_FILE':'local.rgba','KZSF_CUSTOM_OWNED_TEXTURE_PROBE':'1','KZSF_CUSTOM_MODEL_PROBE_DIR':'local-model','KZSF_CUSTOM_MODEL_PREVIEW':'1'}
+        with patch.dict(os.environ,variables):
+            env=ui.launch_spec(dict(ui.DEFAULTS),'logs')['env']
+        self.assertFalse(set(variables)&set(env))
+
     def test_storage_defaults_ignore_inherited_overrides(self):
         values=dict(ui.DEFAULTS,cache_dir='  ',savedata_dir='')
-        with patch.dict(os.environ,{'GOW3_CACHE_DIR':'old/cache','GOW3_SAVEDATA_DIR':'old/saves'}):
+        with patch.dict(os.environ,{'KZSF_CACHE_DIR':'old/cache','KZSF_SAVEDATA_DIR':'old/saves'}):
             env=ui.launch_spec(values,'logs')['env']
-        self.assertNotIn('GOW3_CACHE_DIR',env)
-        self.assertNotIn('GOW3_SAVEDATA_DIR',env)
+        self.assertNotIn('KZSF_CACHE_DIR',env)
+        self.assertNotIn('KZSF_SAVEDATA_DIR',env)
         self.assertEqual(ui.storage_directory(values,'cache_dir'),ui.ROOT/'user/cache')
         self.assertEqual(ui.storage_directory(values,'savedata_dir'),ui.ROOT/'user/savedata')
 
@@ -30,12 +47,12 @@ class LauncherTests(unittest.TestCase):
                 loaded=ui.load_preferences()
             ui.prepare_storage(loaded)
             env=ui.launch_spec(loaded,'logs')['env']
-            for key,variable in (('cache_dir','GOW3_CACHE_DIR'),('savedata_dir','GOW3_SAVEDATA_DIR')):
+            for key,variable in (('cache_dir','KZSF_CACHE_DIR'),('savedata_dir','KZSF_SAVEDATA_DIR')):
                 path=ui.storage_directory(loaded,key)
                 self.assertTrue(path.is_dir())
                 self.assertEqual(env[variable],path.as_posix())
-            self.assertEqual(env['GOW3_USER_DIR'],str(ui.ROOT/'user'))
-            self.assertEqual(env['GOW3_GPU_USER_DIR'],str(ui.ROOT/'user'))
+            self.assertEqual(env['KZSF_USER_DIR'],str(ui.ROOT/'user'))
+            self.assertEqual(env['KZSF_GPU_USER_DIR'],str(ui.ROOT/'user'))
             values['cache_dir']='relative cache'
             self.assertEqual(ui.storage_directory(values,'cache_dir'),(ui.ROOT/'relative cache').resolve())
             blocked=Path(folder)/'file';blocked.write_text('keep')
@@ -45,12 +62,12 @@ class LauncherTests(unittest.TestCase):
     def test_full_parallel_preload_and_serial_diagnostic_override(self):
         with patch.dict(os.environ,{},clear=True):
             env=ui.launch_spec(dict(ui.DEFAULTS),'logs')['env']
-            self.assertEqual(env['GOW3_PARALLEL_WARMUP'],'1')
-            self.assertEqual(env['GOW3_PRECOMPILE'],'1')
-            self.assertEqual(env['GOW3_BACKGROUND_WARMUP'],'0')
+            self.assertEqual(env['KZSF_PARALLEL_WARMUP'],'1')
+            self.assertEqual(env['KZSF_PRECOMPILE'],'1')
+            self.assertEqual(env['KZSF_BACKGROUND_WARMUP'],'0')
             self.assertNotIn('KZSF_PACKED_SHADER_CACHE',env)
-        with patch.dict(os.environ,{'GOW3_PARALLEL_WARMUP':'0'}):
-            self.assertEqual(ui.launch_spec(dict(ui.DEFAULTS),'logs')['env']['GOW3_PARALLEL_WARMUP'],'0')
+        with patch.dict(os.environ,{'KZSF_PARALLEL_WARMUP':'0'}):
+            self.assertEqual(ui.launch_spec(dict(ui.DEFAULTS),'logs')['env']['KZSF_PARALLEL_WARMUP'],'0')
 
     def test_player_features_default_off_and_environment_isolated(self):
         for key in ('third_person','free_camera','model_switching'):
@@ -94,14 +111,14 @@ class LauncherTests(unittest.TestCase):
                     self.assertEqual(loaded[key],values[key])
                 env=ui.launch_spec(loaded,folder)['env']
                 self.assertEqual(ui.executable_for(loaded),ui.GRAPHICS_EXE)
-                self.assertEqual(ui.executable_for(dict(ui.DEFAULTS)),'out/gow3-probe-launcher.exe')
-                self.assertEqual(env['GOW3_OUTPUT_RES'],'3200x1800')
-                self.assertEqual(env['GOW3_UPSCALER'],'fsr3')
-                self.assertEqual(env['GOW3_SCENE_NATIVE'],'1')
-                self.assertEqual(env['GOW3_ANISOTROPY'],'16')
-                self.assertEqual(env['GOW3_MIP_LOD_BIAS'],'-0.5')
-                self.assertEqual(env['GOW3_FRAME_GEN'],'fsr3')
-                self.assertNotIn('GOW3_RENDER_RES',env)
+                self.assertEqual(ui.executable_for(dict(ui.DEFAULTS)),'out/kzsf-game.exe')
+                self.assertEqual(env['KZSF_OUTPUT_RES'],'3200x1800')
+                self.assertEqual(env['KZSF_UPSCALER'],'fsr3')
+                self.assertEqual(env['KZSF_SCENE_NATIVE'],'1')
+                self.assertEqual(env['KZSF_ANISOTROPY'],'16')
+                self.assertEqual(env['KZSF_MIP_LOD_BIAS'],'-0.5')
+                self.assertEqual(env['KZSF_FRAME_GEN'],'fsr3')
+                self.assertNotIn('KZSF_RENDER_RES',env)
                 ui.write_keys(ui.CONFIG,{'output_res':'999999x999999','anisotropy':'900',
                                         'mip_lod_bias':'nan','frame_gen':'unknown','rcas_strength':'-1'})
                 loaded=ui.load_preferences()
@@ -109,17 +126,17 @@ class LauncherTests(unittest.TestCase):
                     self.assertEqual(loaded[key],ui.DEFAULTS[key])
 
     def test_frame_generation_native_and_environment_isolation(self):
-        contaminated=dict(GOW3_FRAME_GEN='fsr3',GOW3_SCENE_NATIVE='1',GOW3_NATIVE_AA='1',
-                          GOW3_RENDER_RES='1280x720',GOW3_OUTPUT_RES='3840x2160')
+        contaminated=dict(KZSF_FRAME_GEN='fsr3',KZSF_SCENE_NATIVE='1',KZSF_NATIVE_AA='1',
+                          KZSF_RENDER_RES='1280x720',KZSF_OUTPUT_RES='3840x2160')
         with patch.dict(os.environ,contaminated):
             env=ui.launch_spec(dict(ui.DEFAULTS),'logs')['env']
-            self.assertEqual(env['GOW3_FRAME_GEN'],'off')
-            self.assertEqual(env['GOW3_OUTPUT_RES'],'1920x1080')
-            self.assertNotIn('GOW3_NATIVE_AA',env)
-            self.assertNotIn('GOW3_SCENE_NATIVE',env)
+            self.assertEqual(env['KZSF_FRAME_GEN'],'off')
+            self.assertEqual(env['KZSF_OUTPUT_RES'],'1920x1080')
+            self.assertNotIn('KZSF_NATIVE_AA',env)
+            self.assertNotIn('KZSF_SCENE_NATIVE',env)
             env=ui.launch_spec(dict(ui.DEFAULTS,frame_gen='fsr3'),'logs')['env']
-            self.assertEqual(env['GOW3_NATIVE_AA'],'1')
-            self.assertEqual(env['GOW3_UPSCALER'],'fsr3')
+            self.assertEqual(env['KZSF_NATIVE_AA'],'1')
+            self.assertEqual(env['KZSF_UPSCALER'],'fsr3')
 
     def test_native_prompt_settings_round_trip(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -140,14 +157,14 @@ class LauncherTests(unittest.TestCase):
             spec=ui.launch_spec(values,Path('logs'))
             self.assertTrue(spec['command'][0].endswith(exe.replace('/',os.sep)))
             env=spec['env']
-            self.assertEqual(env['GOW3_FPS_LIMIT'],'120')
+            self.assertEqual(env['KZSF_FPS_LIMIT'],'120')
             self.assertEqual(env['KZSF_VIRTUAL_TSC'],'1')
-            self.assertEqual(env['GOW3_DRAW_PIPE'],'0')
-            self.assertEqual(env['GOW3_ASYNC_SHADERS'],'0')
-            self.assertEqual(env['GOW3_UPSCALER'],'none')
-            self.assertEqual(env['GOW3_READBACK_LINEAR'],'1')
-            self.assertEqual(env['GOW3_DMEM_MB'],'4608' if profile.startswith('Beta') else '6144')
-            self.assertEqual(env['GOW3_USER_DIR'],str(ui.ROOT/'user'))
+            self.assertEqual(env['KZSF_DRAW_PIPE'],'0')
+            self.assertEqual(env['KZSF_ASYNC_SHADERS'],'0')
+            self.assertEqual(env['KZSF_UPSCALER'],'none')
+            self.assertEqual(env['KZSF_READBACK_LINEAR'],'1')
+            self.assertEqual(env['KZSF_DMEM_MB'],'4608' if profile.startswith('Beta') else '6144')
+            self.assertEqual(env['KZSF_USER_DIR'],str(ui.ROOT/'user'))
 
     def test_preferences_and_ini_preserve_unexposed_settings(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -166,7 +183,7 @@ class LauncherTests(unittest.TestCase):
         for health,ammo in ((True,False),(False,True),(True,True)):
             values=dict(ui.DEFAULTS,unlimited_health=health,infinite_ammo=ammo)
             spec=ui.launch_spec(values,Path('logs'))
-            self.assertEqual(Path(spec['command'][0]).name,'gow3-probe-launcher.exe')
+            self.assertEqual(Path(spec['command'][0]).name,'kzsf-game.exe')
             self.assertEqual(spec['env']['KZSF_UNLIMITED_HEALTH'],str(int(health)))
             self.assertEqual(spec['env']['KZSF_INFINITE_AMMO'],str(int(ammo)))
 
@@ -174,34 +191,34 @@ class LauncherTests(unittest.TestCase):
         for key in ('controller_turn_speed','controller_pitch_speed'):
             values=dict(ui.DEFAULTS,**{key:'150'})
             spec=ui.launch_spec(values,Path('logs'))
-            self.assertEqual(Path(spec['command'][0]).name,'gow3-probe-launcher.exe')
+            self.assertEqual(Path(spec['command'][0]).name,'kzsf-game.exe')
             self.assertEqual(spec['env']['KZSF_PLAYER_TURN'],'1')
             self.assertNotIn('KZSF_ENGINE_TURN',spec['env'])
-            self.assertEqual(spec['env']['GOW3_PAD_TURN_SPEED'],
+            self.assertEqual(spec['env']['KZSF_PAD_TURN_SPEED'],
                              '150' if key=='controller_turn_speed' else '100')
-            self.assertEqual(spec['env']['GOW3_PAD_PITCH_SPEED'],
+            self.assertEqual(spec['env']['KZSF_PAD_PITCH_SPEED'],
                              '150' if key=='controller_pitch_speed' else '100')
 
     def test_current_build_and_fsr_flags_are_isolated(self):
-        inherited=dict(KZSF_FSR_QUALITY='1',KZSF_FSR_NATIVE='1',GOW3_RENDER_RES='1280x720',
-                       GOW3_PRESET_FILE='old-test',KZSF_ENGINE_TURN='1',KZSF_PLAYER_TURN='1',
+        inherited=dict(KZSF_FSR_QUALITY='1',KZSF_FSR_NATIVE='1',KZSF_RENDER_RES='1280x720',
+                       KZSF_PRESET_FILE='old-test',KZSF_ENGINE_TURN='1',KZSF_PLAYER_TURN='1',
                        KZSF_CAMERA_OBSERVER='1',KZSF_CAMERA_CALL_BRIDGE='1',KZSF_THIRD_PERSON_TEST='1',KZSF_THIRD_PERSON_AUTOTEST='1')
         with patch.dict(os.environ,inherited):
             for provider in ('none','fsr3','taa'):
                 launch=ui.launch_spec(dict(ui.DEFAULTS,upscaler=provider),Path('logs'))
                 env=launch['env']
-                self.assertEqual(Path(launch['command'][0]).name,'gow3-probe-launcher.exe')
-                for key in ('KZSF_FSR_QUALITY','GOW3_RENDER_RES','GOW3_PRESET_FILE','KZSF_ENGINE_TURN',
+                self.assertEqual(Path(launch['command'][0]).name,'kzsf-game.exe')
+                for key in ('KZSF_FSR_QUALITY','KZSF_RENDER_RES','KZSF_PRESET_FILE','KZSF_ENGINE_TURN',
                             'KZSF_CAMERA_OBSERVER','KZSF_CAMERA_CALL_BRIDGE','KZSF_THIRD_PERSON_TEST','KZSF_THIRD_PERSON_AUTOTEST'):
                     self.assertNotIn(key,env)
                 self.assertEqual(env['KZSF_PLAYER_TURN'],'1')
-                self.assertEqual(env['GOW3_PRECOMPILE'],'1')
+                self.assertEqual(env['KZSF_PRECOMPILE'],'1')
                 self.assertEqual(env['KZSF_DIRECT_TSC'],'1')
-                self.assertEqual(env['GOW3_FREEZE_SECONDS'],'0')
+                self.assertEqual(env['KZSF_FREEZE_SECONDS'],'0')
                 if provider in ('fsr3','taa'):
                     self.assertEqual(env['KZSF_FSR_NATIVE'],'1')
-                    self.assertEqual(env['GOW3_UPSCALE_PRESET'],'0')
-                    self.assertEqual(env['GOW3_JITTER'],'0')
+                    self.assertEqual(env['KZSF_UPSCALE_PRESET'],'0')
+                    self.assertEqual(env['KZSF_JITTER'],'0')
                 else:
                     self.assertNotIn('KZSF_FSR_NATIVE',env)
 

@@ -18,25 +18,25 @@ def main():
     values = ui.load_preferences()
     folder = ui.ROOT / "out" / ("native-prompts-" + time.strftime("%Y%m%d-%H%M%S"))
     spec = ui.launch_spec(values, folder)
-    spec["command"][0] = str(ui.ROOT / "out/gow3-probe-prompt-trace.exe")
-    spec["env"]["GOW3_CONFIG"] = str(folder / "settings.ini")
+    spec["command"][0] = str(ui.ROOT / "out/kzsf-probe-prompt-trace.exe")
+    spec["env"]["KZSF_CONFIG"] = str(folder / "settings.ini")
     spec["env"]["KZSF_PROMPT_TRACE"] = "1"
     report = {
         "diagnostic": "native-gameplay-prompts",
         "artwork_replacement": False,
         "command": spec["command"],
-        "config": spec["env"]["GOW3_CONFIG"],
+        "config": spec["env"]["KZSF_CONFIG"],
         "log_folder": str(folder),
-        "key_map": spec["env"].get("GOW3_KEY_MAP", "runtime defaults"),
+        "key_map": spec["env"].get("KZSF_KEY_MAP", "runtime defaults"),
     }
     if args.report_only:
         print(json.dumps(report, indent=2))
         return 0
     running = subprocess.run(
-        ["tasklist", "/FI", "IMAGENAME eq gow3-probe*", "/FO", "CSV", "/NH"],
+        ["tasklist", "/FI", "IMAGENAME eq kzsf-probe*", "/FO", "CSV", "/NH"],
         capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW,
     )
-    if "gow3-probe" in running.stdout.lower():
+    if "kzsf-probe" in running.stdout.lower():
         print("Close the current Killzone game, then run this BAT again.")
         return 1
     ok, reason = ui.validate_game(values["game_dir"])
@@ -44,7 +44,7 @@ def main():
         print(reason)
         return 1
     if not Path(spec["command"][0]).is_file():
-        print("The diagnostic build is missing: out/gow3-probe-prompt-trace.exe")
+        print("The diagnostic build is missing: out/kzsf-probe-prompt-trace.exe")
         return 1
     folder.mkdir(parents=True, exist_ok=False)
     if ui.CONFIG.is_file():

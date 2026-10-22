@@ -32,7 +32,7 @@ promedio (55 a 240) en 1080p con la tasa de cuadros del motor en 240 FPS.
 **Probado y jugable de principio a fin** en 1080p nativo con la tasa de cuadros del motor en 240
 FPS. En otras resoluciones de render algunas texturas se ven rotas; hay una corrección en curso.
 
-El progreso se registra (en portugués) en [docs/gow3/ROADMAP.md](docs/gow3/ROADMAP.md).
+El progreso se registra (en portugués) en [docs/kzsf/ROADMAP.md](docs/kzsf/ROADMAP.md).
 
 ## Qué funciona
 
@@ -77,9 +77,9 @@ El progreso se registra (en portugués) en [docs/gow3/ROADMAP.md](docs/gow3/ROAD
   probás una, abrí un issue con tu `user/last_run.log`. Esta descarga no incluye archivos del juego.
 
 **Pasos**
-1. Descargá `gow3-windows.zip` desde la
+1. Descargá `kzsf-windows.zip` desde la
    [página de Releases](https://github.com/FelipePrado0/gow3_pc/releases/latest).
-2. Extraelo en una carpeta a tu elección, por ejemplo `C:\Games\gow3-windows`. No lo ejecutes
+2. Extraelo en una carpeta a tu elección, por ejemplo `C:\Games\kzsf-windows`. No lo ejecutes
    desde dentro del zip.
 3. Abrí **`God of War III.exe`**. Si Windows muestra "Windows protegió su PC", hacé clic en
    **Más información** y después en **Ejecutar de todas formas**: el programa no está firmado
@@ -125,14 +125,14 @@ una Radeon RX 7800 XT (RADV) en una sesión Wayland.
 ```
 bash build.sh
 bash packaging/linux/build.sh   # necesita PyInstaller, Tk, Pillow e iced-x86 para Python, además de patchelf y curl
-./dist/gow3-x86_64.AppImage
+./dist/kzsf-x86_64.AppImage
 ```
 Elegí la carpeta del juego en el launcher. `--play` inicia el juego con las opciones guardadas y sin
-ventana. Desde un árbol de código fuente: `GOW3_GAME_DIR=/ruta/a/CUSA01623 python3 run.py` después
+ventana. Desde un árbol de código fuente: `KZSF_GAME_DIR=/ruta/a/CUSA01623 python3 run.py` después
 de `bash build.sh`.
 
 - **Archivos:** las partidas, los ajustes, la caché de shaders y el log están en
-  `~/.local/share/gow3`; los ajustes propios del launcher en `~/.config/gow3-launcher`.
+  `~/.local/share/kzsf`; los ajustes propios del launcher en `~/.config/kzsf-launcher`.
 - **Carpeta de actualización:** si la actualización se volcó por separado del juego, elegila en
   **Game → Update folder**. Se superpone a la carpeta del juego sin modificar ninguna de las dos.
 - **Advanced → Linux:** sistema de ventanas (automático, Wayland o X11), GameMode y MangoHud. Solo se
@@ -141,11 +141,11 @@ de `bash build.sh`.
   Steam, con el ícono, las cápsulas vertical y horizontal, el fondo de la biblioteca y el logo hechos
   a partir de las imágenes del dump. Cerrá Steam primero (reescribe sus accesos directos al salir).
   El botón también está en el launcher de Windows (aún no probado ahí).
-- **Entrada de menú:** el AppImage escribe `~/.local/share/applications/gow3.desktop` al iniciar,
+- **Entrada de menú:** el AppImage escribe `~/.local/share/applications/kzsf.desktop` al iniciar,
   para que el launcher y la ventana del juego muestren su ícono en el dock; **Advanced → Linux** lo
   desactiva y elimina la entrada.
-- **Ícono:** el AppImage, el launcher y la ventana del juego usan `packaging/linux/gow3.png` cuando
-  ese archivo existe al compilar, y `launcher/gow3.png` en caso contrario.
+- **Ícono:** el AppImage, el launcher y la ventana del juego usan `packaging/linux/kzsf.png` cuando
+  ese archivo existe al compilar, y `launcher/kzsf.png` en caso contrario.
 - **Parches:** el mismo archivo de parches sirve para la actualización completa 01.02 (`eboot.bin`
   sha256 `6e72330e…`) y para el título europeo (CUSA01715): los parches y trucos encuentran sus
   sitios por firma.
@@ -174,7 +174,7 @@ de `bash build.sh`.
 
 ## Compilar desde el código fuente
 
-El desarrollo ocurre en la rama `gow3`; `main` recibe merges ya probados.
+El desarrollo ocurre en la rama `kzsf`; `main` recibe merges ya probados.
 
 1. Instalá MSYS2 (`winget install MSYS2.MSYS2`) y, en la consola **MSYS2 CLANG64**, los paquetes
    listados en [packaging/windows/README.md](packaging/windows/README.md).
@@ -182,15 +182,15 @@ El desarrollo ocurre en la rama `gow3`; `main` recibe merges ya probados.
 
    ```bash
    git clone --recursive https://github.com/FelipePrado0/gow3_pc
-   cd gow3_pc
-   git checkout gow3   # lo más nuevo; omitilo para compilar main
+   cd kzsf_pc
+   git checkout kzsf   # lo más nuevo; omitilo para compilar main
    bash build.sh
    ```
 
 3. Iniciá el launcher (en PowerShell, en la carpeta del proyecto):
 
    ```powershell
-   python launcher/gow3_launcher_win.py
+   python launcher/kzsf_launcher_win.py
    ```
 
 4. En **Game**, elegí la carpeta del juego. Ajustá **Display**, **Performance** y **Patches** si
@@ -200,25 +200,25 @@ Para jugar con los ajustes guardados sin abrir la ventana del launcher (para un 
 Steam):
 
 ```powershell
-python launcher/gow3_launcher_win.py --play
+python launcher/kzsf_launcher_win.py --play
 ```
 
 O sin el launcher:
 
 ```powershell
-$env:GOW3_GAME_DIR = 'D:\ruta\CUSA01623'
+$env:KZSF_GAME_DIR = 'D:\ruta\CUSA01623'
 python run.py
 ```
 
-Los ajustes se guardan en `gow3.ini` (el juego y el menú dentro del juego) y en
-`%APPDATA%\gow3-launcher\settings.json` (el launcher). Las partidas, la caché de shaders y
+Los ajustes se guardan en `kzsf.ini` (el juego y el menú dentro del juego) y en
+`%APPDATA%\kzsf-launcher\settings.json` (el launcher). Las partidas, la caché de shaders y
 `last_run.log` van a la carpeta `user` del proyecto.
 
 En **Performance → GPU data → Stream buffer memory**, elegí **System RAM (cached, default)**,
 **System RAM (uncached)** o **GPU memory (previous behavior)**. La RAM del sistema puede mejorar los
 cuadros por segundo en notebooks con NVIDIA. La elección se guarda y se aplica en el próximo inicio
 del juego, incluso al usar `Play God of War III.exe` o `--play`. Elegí GPU memory para restaurar el
-comportamiento de asignación anterior. Para inicios directos sin el launcher, `GOW3_STREAM_MEMORY`
+comportamiento de asignación anterior. Para inicios directos sin el launcher, `KZSF_STREAM_MEMORY`
 acepta `cached`, `host` o `device`; la elección guardada por el launcher tiene prioridad cuando se
 usa.
 
@@ -230,8 +230,8 @@ multimuestreadas en el resto (NVIDIA). La etiqueta nombra la placa y la decisió
 "Automatic (Intel(R) Arc(TM) A750 Graphics: off)", y sigue la elección de **Graphics card**. La regla
 cubre toda GPU con esos dos drivers, incluidas las integradas; la línea del log del juego `GPU: guest
 multisampling off` u `on` indica lo que se aplicó. Elegí **Off** si las líneas aparecen en otra placa
-y **On** para mantener el multimuestreo de todas formas. Off y On establecen `GOW3_NO_MSAA=1` o `0`;
-Automatic deja pasar un `GOW3_NO_MSAA` heredado. Se aplica en el próximo inicio del juego.
+y **On** para mantener el multimuestreo de todas formas. Off y On establecen `KZSF_NO_MSAA=1` o `0`;
+Automatic deja pasar un `KZSF_NO_MSAA` heredado. Se aplica en el próximo inicio del juego.
 
 ### Importar partidas de shadPS4
 
@@ -242,7 +242,7 @@ son del juego de PS3 y no funcionan. Usá el mismo ID de título (este ejemplo u
 2. Buscá el origen en la carpeta de datos de shadPS4: `user\savedata\1\CUSA01623\` en versiones
    anteriores, o `home\<user-id>\savedata\CUSA01623\` en versiones más nuevas.
 3. El destino es **`user\savedata\1\CUSA01623\` junto a `God of War III.exe`**.
-   Ejemplo: `C:\Games\gow3-windows\user\savedata\1\CUSA01623\`. Con una **Saves folder**
+   Ejemplo: `C:\Games\kzsf-windows\user\savedata\1\CUSA01623\`. Con una **Saves folder**
    personalizada en el launcher, usá `<carpeta personalizada>\savedata\1\CUSA01623\`.
 4. Copiá cada carpeta de slot allí, conservando su nombre y los archivos del juego. No anides otra
    carpeta `CUSA01623`. Excluí la carpeta interna `sce_sys` del slot de los datos del juego.
@@ -260,8 +260,8 @@ restaurá la configuración anterior de Saves folder después de probar.
 
 ### Overlays de terceros (Windows)
 
-El proceso del juego es **`bin\gow3-probe.exe`**, no `God of War III.exe` (las builds desde el código
-fuente usan `out\gow3-probe.exe`). Agregá ese ejecutable a RTSS y activá la visualización en pantalla
+El proceso del juego es **`bin\kzsf-probe.exe`**, no `God of War III.exe` (las builds desde el código
+fuente usan `out\kzsf-probe.exe`). Agregá ese ejecutable a RTSS y activá la visualización en pantalla
 de Afterburner. En el instalador de ReShade, seleccioná ese mismo ejecutable y la API **Vulkan**.
 
 Si el overlay sigue sin aparecer, informá las versiones del port y del overlay, la última versión del
@@ -298,7 +298,7 @@ Los **íconos de botones en el juego** (desactivados por defecto) se eligen en l
 PlayStation en los tutoriales, la lista de movimientos y las indicaciones de quick-time events; el
 dibujo del control en el menú de pausa sigue siendo un DualShock 4. El launcher escribe una copia
 parcheada de dos archivos del juego en la carpeta de datos del port y nunca modifica tu carpeta del
-juego. Un control nuevo se detecta después de reiniciar. Sin el launcher, definí `GOW3_GLYPH_STYLE`
+juego. Un control nuevo se detecta después de reiniciar. Sin el launcher, definí `KZSF_GLYPH_STYLE`
 como `auto`, `xbox` o `nintendo` antes de iniciar `run.py`.
 
 En el menú: L1/R1 o Q/E cambian de pestaña. En la lista de partidas: las flechas o la cruceta eligen,
@@ -322,7 +322,7 @@ del juego reciben como argumento el ejecutable preparado (`out/eboot.elf`).
 Para comprobar que se implementó toda función del sistema que usa el juego, sin iniciarlo:
 
 ```bash
-out/gow3-probe.exe out/boot-linked.bin --app0 <carpeta del juego> --check-imports
+out/kzsf-probe.exe out/boot-linked.bin --app0 <carpeta del juego> --check-imports
 ```
 
 ## Cómo funciona
@@ -333,12 +333,12 @@ out/gow3-probe.exe out/boot-linked.bin --app0 <carpeta del juego> --check-import
 | Loader | `src/probe.c` | Carga la imagen, instala los hooks validados (trucos, multiplicadores, barra de vida) e inicia el código original del juego |
 | Runtime | `src/runtime_*.c` | Reimplementa las funciones del sistema de la PS4: memoria, hilos, archivos, audio, video, control, partidas y servicios |
 | GPU | `gpu/shadps4/` | El video core de shadPS4, que traduce los comandos y shaders de la GPU de la PS4 a Vulkan, con las correcciones de God of War III de cuesta4 (rama `eltutz`) y el trabajo de velocidad de este port (caché de shaders en segundo plano, lecturas diferidas) |
-| Menú dentro del juego | `gpu/shim/gow3_overlay.cpp` | El menú Dear ImGui y el overlay de rendimiento; ajustes en `gpu/shim/gow3_settings.cpp` |
+| Menú dentro del juego | `gpu/shim/kzsf_overlay.cpp` | El menú Dear ImGui y el overlay de rendimiento; ajustes en `gpu/shim/kzsf_settings.cpp` |
 | Parches | `patches/God_of_War_III_Remastered.xml`, `scripts/patches.py` | Se aplican en memoria al iniciar, sin modificar los archivos del juego |
-| Launcher | `launcher/gow3_launcher_win.py` | Ajustes, parches, mods, controles y el botón de jugar |
+| Launcher | `launcher/kzsf_launcher_win.py` | Ajustes, parches, mods, controles y el botón de jugar |
 
 Más documentación: [mods](docs/MODS.md), [mapa de cuadros y escalador](docs/upscaler.md),
-[trabajo paralelo de GPU](docs/parallel_gpu.md) y el [roadmap](docs/gow3/ROADMAP.md).
+[trabajo paralelo de GPU](docs/parallel_gpu.md) y el [roadmap](docs/kzsf/ROADMAP.md).
 
 ## Créditos
 

@@ -2,9 +2,14 @@
 #define KZSF_CHARACTER_MODELS_H
 #include <string.h>
 #include <stdint.h>
-enum { KZSF_CHARACTER_MODEL_COUNT=17 };
+enum { KZSF_CHARACTER_MODEL_CJ=17, KZSF_CHARACTER_MODEL_COUNT=18 };
+/* Preserve stable IDs and bundle metadata while the two Lucas outfit paths
+ * still render the default suit. Re-enable after visual validation. */
+static inline int kzsf_character_model_selectable(int model) {
+    return model>=0 && model<KZSF_CHARACTER_MODEL_COUNT && model!=13 && model!=16;
+}
 static inline uint64_t kzsf_character_model_mask(void) {
-    return (UINT64_C(1)<<KZSF_CHARACTER_MODEL_COUNT)-1;
+    return ((UINT64_C(1)<<KZSF_CHARACTER_MODEL_COUNT)-1)&~((UINT64_C(1)<<13)|(UINT64_C(1)<<16));
 }
 typedef struct {const char *name,*label,*bundle;} KzsfCharacterModelDefinition;
 /* One row per supported model. Chapter discovery adds rows here, with the
@@ -28,7 +33,8 @@ static inline const KzsfCharacterModelDefinition *kzsf_character_model_definitio
         {"ISA_Lamb_Echo","Lucas - Echo outfit (experimental)","assets_description.characters.isa_lamb_isa_lamb_echo_character"},
         {"ISA_Lamb_Helghan","Lucas - Helghan outfit (experimental)","assets_description.characters.isa_lamb_isa_lamb_helghan_character"},
         {"ISA_Lamb_Prisoner","Lucas - prisoner (experimental)","assets_description.characters.isa_lamb_isa_lamb_prisoner_character"},
-        {"ISA_Lamb_SpaceSuit","Lucas - spacesuit (experimental)","assets_description.characters.isa_lamb_isa_lamb_spacesuit_character"}};
+        {"ISA_Lamb_SpaceSuit","Lucas - spacesuit (experimental)","assets_description.characters.isa_lamb_isa_lamb_spacesuit_character"},
+        {"Custom_CJ","CJ (custom)",""}};
 #ifdef __cplusplus
     static_assert(KZSF_CHARACTER_MODEL_COUNT<64,"model availability mask capacity");
     static_assert(sizeof(models)/sizeof(*models)==KZSF_CHARACTER_MODEL_COUNT,"model metadata count");
@@ -53,7 +59,7 @@ static inline const char *kzsf_character_model_bundle(int model) {
 static inline int kzsf_character_next_loaded(int current,int direction,uint64_t mask) {
     if(current<0 || current>=KZSF_CHARACTER_MODEL_COUNT)current=0;
     if(direction!=1 && direction!=-1)return current;
-    mask|=1;
+    mask=(mask&kzsf_character_model_mask())|1;
     for(int step=1;step<=KZSF_CHARACTER_MODEL_COUNT;step++) {
         int next=(current+direction*step+KZSF_CHARACTER_MODEL_COUNT)%KZSF_CHARACTER_MODEL_COUNT;
         if(mask&(UINT64_C(1)<<next))return next;

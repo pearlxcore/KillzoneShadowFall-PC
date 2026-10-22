@@ -50,40 +50,40 @@ def main():
     prefix='character-resources-' if args.character_resources else 'third-person-' if args.third_person else 'camera-observer-'
     folder=ui.ROOT/'out'/(prefix+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/'out/gow3-probe-camera-observer.exe')
-    spec['env'].update(KZSF_CAMERA_OBSERVER='1',GOW3_CONFIG=str(folder/'settings.ini'))
+    spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-camera-observer.exe')
+    spec['env'].update(KZSF_CAMERA_OBSERVER='1',KZSF_CONFIG=str(folder/'settings.ini'))
     if args.call_bridge:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-camera-bridge.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-camera-bridge.exe')
         spec['env']['KZSF_CAMERA_CALL_BRIDGE']='1'
     if args.third_person:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-third-person-animation-owned.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-third-person-animation-owned.exe')
         spec['env']['KZSF_THIRD_PERSON_TEST']='1'
     if args.character_inventory:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-inventory.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-inventory.exe')
     if args.character_resources:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-resources-nested.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-resources-nested.exe')
         spec['env']['KZSF_CHARACTER_RESOURCE_TEST']='1'
     if args.character_swap:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-swap.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-swap.exe')
         spec['env']['KZSF_CHARACTER_SWAP_TEST']='1'
     if args.character_selector:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-selector.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-selector.exe')
         spec['env']['KZSF_CHARACTER_SELECTOR_TEST']='1'
     if args.character_retarget:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-retarget.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-retarget.exe')
         spec['env']['KZSF_CHARACTER_RETARGET_AUDIT']='1'
     if args.character_engineer:
         # Revision11/12 introduced gameplay crashes; retain their binaries/logs
         # for investigation and use the previously exercised body-only build.
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-engineer-v10.exe')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-engineer-v10.exe')
         spec['env']['KZSF_CHARACTER_ENGINEER_TEST']='1'
         spec['env']['KZSF_CHARACTER_ENGINEER_DRAW_TEST']='1'
         spec['env']['KZSF_FOLLOW_FREE_CAMERA']='1'
         spec['env'].pop('KZSF_CHARACTER_BODY_ROUTE_TEST',None)
         if args.character_engineer_face:
-            spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-engineer-v13-face.exe')
+            spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-engineer-v13-face.exe')
         if args.character_engineer_weapon:
-            spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-engineer-v16-restore-pose.exe')
+            spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-engineer-v16-restore-pose.exe')
             spec['env']['KZSF_CHARACTER_BODY_ROUTE_TEST']='1'
         spec['env'].pop('KZSF_CHARACTER_SINGLE_BODY_TEST',None)
         spec['env'].pop('KZSF_CHARACTER_COMMANDO_TEST',None)
@@ -91,17 +91,17 @@ def main():
         spec['env'].pop('KZSF_CHARACTER_ALL_MODELS_TEST',None)
         spec['env'].pop('KZSF_CHARACTER_BUNDLE_TEST',None)
         if args.character_single_body:
-            spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-engineer-v17-single-body.exe')
+            spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-engineer-v17-single-body.exe')
             spec['env']['KZSF_CHARACTER_SINGLE_BODY_TEST']='1'
         if args.character_commando:
-            spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-commando-v18.exe')
+            spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-commando-v18.exe')
             spec['env']['KZSF_CHARACTER_COMMANDO_TEST']='1'
         if args.character_model_overlay:
-            spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-selector-v21.exe')
+            spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-selector-v21.exe')
             spec['env']['KZSF_CHARACTER_OVERLAY_TEST']='1'
             spec['env']['KZSF_CHARACTER_ALL_MODELS_TEST']='1'
             if args.character_all_chapters:
-                spec['command'][0]=str(ui.ROOT/'out/gow3-probe-character-selector-v44-complete-draw-batch.exe')
+                spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-character-selector-v44-complete-draw-batch.exe')
                 spec['env']['KZSF_CHARACTER_BUNDLE_TEST']='1'
                 spec['env']['KZSF_CHARACTER_PRESERVE_SOURCE_BODY']='0'
                 spec['env']['KZSF_CHARACTER_FACE_PLAYER_ANIMATION_CONTROL']='1' if args.character_fall_control else '0'
@@ -185,9 +185,9 @@ def main():
             report.update(prototype_revision='selector-44-fall-control',capture_goal='Compare the same Sinclair/default cliff drop with player facial animation libraries retained and all native draw records processed. Gameplay confirmation required.')
     if args.report_only:
         print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
                            capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the running game before starting this camera investigation.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:print(reason);return 1
@@ -198,10 +198,10 @@ def main():
     profile=folder/'user';profile.mkdir()
     if (ui.ROOT/'user/savedata').is_dir():
         shutil.copytree(ui.ROOT/'user/savedata',profile/'savedata')
-    spec['env']['GOW3_USER_DIR']=str(profile)
+    spec['env']['KZSF_USER_DIR']=str(profile)
     (folder/'comparison.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     if args.startup_smoke:
-        spec['env'].update(GOW3_PRECOMPILE='0',GOW3_WINDOW_FOCUS='0')
+        spec['env'].update(KZSF_PRECOMPILE='0',KZSF_WINDOW_FOCUS='0')
         with (folder/'stdout.log').open('wb') as out,(folder/'stderr.log').open('wb') as err:
             game=subprocess.Popen(spec['command'],cwd=ui.ROOT,env=spec['env'],stdout=out,stderr=err,
                                   creationflags=subprocess.CREATE_NO_WINDOW)

@@ -42,7 +42,8 @@ static inline void kzsf_observer_body_visibility(FILE *out,uintptr_t owner,uintp
     uintptr_t desired=active==owner ? __atomic_load_n(&kzsf_character_render_part,__ATOMIC_RELAXED) : original;
     uintptr_t other=active==owner ? original : recovery==owner ? __atomic_load_n(&kzsf_character_restore_part,__ATOMIC_RELAXED) : 0;
     KzsfCharacterBodyVisibility changes[128];int count=0;uintptr_t model=0;
-    if(!kzsf_character_body_visibility_plan_ex(owner,desired,other,show_body,read,opaque,&model,changes,&count) || !count)return;
+    int cj=active==owner && __atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE)==KZSF_CHARACTER_MODEL_CJ;
+    if(!kzsf_character_body_visibility_plan_follow(owner,desired,other,show_body,cj,read,opaque,&model,changes,&count) || !count)return;
     if(active!=owner && recovery==owner && model!=__atomic_load_n(&kzsf_character_restore_model,__ATOMIC_RELAXED))return;
     int ok=kzsf_character_body_visibility_apply(owner,model,changes,count,read,opaque,
         (KzsfCharacterBodyBegin)(base+0x7000d0),(KzsfCharacterBodySlot)(base+0x701940),(KzsfCharacterBodyEnd)(base+0x7001b0));

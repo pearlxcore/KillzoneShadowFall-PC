@@ -8,8 +8,8 @@ from pathlib import Path
 from patches import (compile_patches, external_patches, external_selection, compile_external,
                      game_profile, selected_patches, patch_requirements, GAMES)
 
-GOW3 = ROOT / 'patches/God_of_War_III_Remastered.xml'
-GOW3_IDS = {'CUSA01623'}
+KZSF = ROOT / 'patches/God_of_War_III_Remastered.xml'
+KZSF_IDS = {'CUSA01623'}
 SEGMENTS = [(0, 0x6000000)]
 
 
@@ -38,7 +38,7 @@ class ExternalPatchTests(unittest.TestCase):
             (folder / 'extra.xml').write_text(EXTERNAL)
             (folder / 'other.xml').write_text(EXTERNAL.replace('CUSA01623', 'CUSA99999'))
             (folder / 'broken.xml').write_text('<Patch>')
-            found = external_patches(folder, '01.02', GOW3, GOW3_IDS)
+            found = external_patches(folder, '01.02', KZSF, KZSF_IDS)
             self.assertEqual([key for key, _, _ in found],
                              ['extra.xml/On', 'extra.xml/Off', 'extra.xml/Mask'])
             # The file's isEnabled; the mask patch is skipped as a whole.
@@ -50,12 +50,12 @@ class ExternalPatchTests(unittest.TestCase):
             self.assertEqual(writes, [(0x2000, (0x12345678).to_bytes(4, 'little'))])
 
     def test_built_in_file_is_not_external(self):
-        self.assertEqual(external_patches(GOW3.parent, '01.02', GOW3, GOW3_IDS), [])
+        self.assertEqual(external_patches(KZSF.parent, '01.02', KZSF, KZSF_IDS), [])
 
 
 class GameProfileTests(unittest.TestCase):
     def test_profiles_by_title_id(self):
-        self.assertEqual(game_profile('CUSA01623')[1:3], (GOW3, '01.02'))
+        self.assertEqual(game_profile('CUSA01623')[1:3], (KZSF, '01.02'))
         self.assertIsNone(game_profile('CUSA99999'))
         self.assertIsNone(game_profile(None))
 
@@ -67,31 +67,31 @@ class GameProfileTests(unittest.TestCase):
                          ['Bug Fix - Texture Corruption Fix', 'Frame Rate Patch - 120 FPS'])
         self.assertEqual(restrict_to_available(['Resolution Patch - 8K'], available), [])
 
-    def test_gow3_defaults_and_extras(self):
-        self.assertEqual(selected_patches(GOW3, '01.02', ''),
+    def test_kzsf_defaults_and_extras(self):
+        self.assertEqual(selected_patches(KZSF, '01.02', ''),
                          ['Bug Fix - Texture Corruption Fix', 'Skip Any Video With X Button',
                           'Bug Fix - Startup Black Screen'])
-        self.assertEqual(selected_patches(GOW3, '01.02', 'Resolution Patch - 720p; Skip Any Video With X Button'),
+        self.assertEqual(selected_patches(KZSF, '01.02', 'Resolution Patch - 720p; Skip Any Video With X Button'),
                          ['Skip Any Video With X Button', 'Bug Fix - Startup Black Screen', 'Resolution Patch - 720p'])
-        self.assertEqual(selected_patches(GOW3, '01.00', ''), [])
+        self.assertEqual(selected_patches(KZSF, '01.00', ''), [])
         # The launcher's selection is exact: unchecked defaults stay off, except the fixes that are
         # always on (a list saved before they existed must still get them).
-        self.assertEqual(selected_patches(GOW3, '01.02', 'Skip Any Video With X Button', only=True),
+        self.assertEqual(selected_patches(KZSF, '01.02', 'Skip Any Video With X Button', only=True),
                          ['Skip Any Video With X Button', 'Bug Fix - Startup Black Screen'])
-        self.assertEqual(selected_patches(GOW3, '01.02', '', only=True), ['Bug Fix - Startup Black Screen'])
-        self.assertEqual(selected_patches(GOW3, '01.00', '', only=True), [])
+        self.assertEqual(selected_patches(KZSF, '01.02', '', only=True), ['Bug Fix - Startup Black Screen'])
+        self.assertEqual(selected_patches(KZSF, '01.00', '', only=True), [])
 
-    def test_gow3_resolution_patch_replaces_texture_fix(self):
-        self.assertEqual(selected_patches(GOW3, '01.02', 'Resolution Patch - 4K'),
+    def test_kzsf_resolution_patch_replaces_texture_fix(self):
+        self.assertEqual(selected_patches(KZSF, '01.02', 'Resolution Patch - 4K'),
                          ['Skip Any Video With X Button', 'Bug Fix - Startup Black Screen', 'Resolution Patch - 4K'])
         with self.assertRaises(ValueError):
-            selected_patches(GOW3, '01.02', 'Resolution Patch - 4K;Resolution Patch - 720p')
+            selected_patches(KZSF, '01.02', 'Resolution Patch - 4K;Resolution Patch - 720p')
 
     def test_profile_by_title_for_any_region(self):
         from unittest import mock
         import patches
-        self.assertEqual(game_profile('CUSA01715')[1], GOW3)
-        self.assertEqual(game_profile('CUSA99999', 'God of War® III Remastered')[1], GOW3)
+        self.assertEqual(game_profile('CUSA01715')[1], KZSF)
+        self.assertEqual(game_profile('CUSA99999', 'God of War® III Remastered')[1], KZSF)
         self.assertIsNone(game_profile('CUSA99999', 'Another Game'))
         with mock.patch.object(patches, 'game_sfo', return_value={'TITLE_ID': 'CUSA77777', 'TITLE': 'God of War III Remastered'}):
             self.assertTrue(patches.game_patchable('folder'))
@@ -175,7 +175,7 @@ class SignatureTests(unittest.TestCase):
         known = json.loads((ROOT / 'tests/data/eboot_6e72_sites.json').read_text())
         fixed = lambda pattern, at, n: [None if b == '??' else int(b, 16) for b in pattern.split()][at:at + n]
         shifts = {}
-        metas = {m.get('Name'): list(m.iter('Line')) for m in ET.parse(GOW3).getroot().iter('Metadata')}
+        metas = {m.get('Name'): list(m.iter('Line')) for m in ET.parse(KZSF).getroot().iter('Metadata')}
         for name, sites in known['patches'].items():
             for index, address, original in sites:
                 line = metas[name][index]
@@ -186,7 +186,7 @@ class SignatureTests(unittest.TestCase):
                 shifts.setdefault(reference >> 16, set()).add(int(address, 0) - reference)
         self.assertTrue(all(len(s) == 1 for s in shifts.values()), shifts)
         header = (ROOT / 'src/cheat_hook.h').read_text()
-        hooks = re.findall(r'\{(0x[0-9a-f]+),GOW3_CHEAT_\w+,\d+,\d+,\s*\{([^}]*)\},.*?\{"([^"]+)",(\d+)\}\}',
+        hooks = re.findall(r'\{(0x[0-9a-f]+),KZSF_CHEAT_\w+,\d+,\d+,\s*\{([^}]*)\},.*?\{"([^"]+)",(\d+)\}\}',
                            header, re.S)
         for name, (address, original) in known['cheats'].items():
             # The cheats' region moved -0x10 (Rage of Sparta has two sites with the same bytes).
@@ -196,46 +196,46 @@ class SignatureTests(unittest.TestCase):
             _, _, pattern, at = match[0]
             self.assertEqual(fixed(pattern, int(at), len(original) // 2), list(bytes.fromhex(original)), name)
 
-    @unittest.skipUnless(os.environ.get('GOW3_GAME'), 'GOW3_GAME (game folder) not set')
-    def test_gow3_signatures_in_the_reference_and_a_moved_build(self):
+    @unittest.skipUnless(os.environ.get('KZSF_GAME'), 'KZSF_GAME (game folder) not set')
+    def test_kzsf_signatures_in_the_reference_and_a_moved_build(self):
         from prepare import parse_self
         from patches import eboot_image, eboot_segments
-        elf, *_ = parse_self((Path(os.environ['GOW3_GAME']) / 'eboot.bin').read_bytes())
+        elf, *_ = parse_self((Path(os.environ['KZSF_GAME']) / 'eboot.bin').read_bytes())
         image = eboot_image(bytes(elf))
-        names = [m.get('Name') for m in ET.parse(GOW3).getroot().iter('Metadata')]
+        names = [m.get('Name') for m in ET.parse(KZSF).getroot().iter('Metadata')]
         segments = eboot_segments(bytes(elf))  # as patches.py: .bss included (memsz)
         # The reference build: the signatures give exactly the Address writes.
         for name in names:
-            self.assertEqual(compile_patches(GOW3, [name], None, segments, image, {}),
-                             compile_patches(GOW3, [name], '01.02', segments), name)
+            self.assertEqual(compile_patches(KZSF, [name], None, segments, image, {}),
+                             compile_patches(KZSF, [name], '01.02', segments), name)
         # A build whose code moved like the full 01.02 update's: +0x120 from 0x1f0000 to 0x210000,
         # data unchanged (the bytes taken out keep the data at its address).
         moved = image[:0x1f0000] + bytes(0x120) + image[0x1f0000:0x210000] + image[0x210120:]
         self.assertEqual(len(moved), len(image))
         shift = lambda at: at + 0x120 if 0x1f0000 <= at < 0x210000 else at
         for name in ('Resolution Patch - 4K', 'Skip Intro'):
-            reference = compile_patches(GOW3, [name], None, segments, image, {})
-            found = compile_patches(GOW3, [name], None, segments, moved, {})
+            reference = compile_patches(KZSF, [name], None, segments, image, {})
+            found = compile_patches(KZSF, [name], None, segments, moved, {})
             self.assertEqual([at for at, _ in found], [shift(at) for at, _ in reference], name)
         # Skip Intro's cave moved: the boot call into it is recomputed, the flag (data) is not.
-        writes = dict(compile_patches(GOW3, ['Skip Intro'], None, segments, moved, {}))
+        writes = dict(compile_patches(KZSF, ['Skip Intro'], None, segments, moved, {}))
         rel = lambda data, at, end: end + int.from_bytes(data[at:at + 4], 'little', signed=True)
         self.assertEqual(rel(writes[0x01b36a], 1, 0x01b36f), shift(0x212170))
         flag = rel(writes[0x0c8440], 2, 0x0c844a)  # the getter (not moved) and the cave share it
         self.assertEqual(rel(writes[shift(0x212170)], 2, shift(0x212170) + 10), flag)
 
-    def test_gow3_patches_compile(self):
-        names = [m.get('Name') for m in ET.parse(GOW3).getroot().iter('Metadata')]
-        self.assertTrue(compile_patches(GOW3, names, '01.02', SEGMENTS))
+    def test_kzsf_patches_compile(self):
+        names = [m.get('Name') for m in ET.parse(KZSF).getroot().iter('Metadata')]
+        self.assertTrue(compile_patches(KZSF, names, '01.02', SEGMENTS))
 
-    def test_gow3_startup_black_screen(self):
+    def test_kzsf_startup_black_screen(self):
         # The frame index variable (.bss) starts at 2, the index before the first frame's 0.
-        self.assertEqual(compile_patches(GOW3, ['Bug Fix - Startup Black Screen'], '01.02', SEGMENTS),
+        self.assertEqual(compile_patches(KZSF, ['Bug Fix - Startup Black Screen'], '01.02', SEGMENTS),
                          [(0x14ba600, (2).to_bytes(4, 'little'))])
 
-    def test_gow3_skip_intro_targets(self):
+    def test_kzsf_skip_intro_targets(self):
         # Ported from the other 01.02 build: every jump must land where this eboot has the code.
-        writes = dict(compile_patches(GOW3, ['Skip Intro'], '01.02', SEGMENTS))
+        writes = dict(compile_patches(KZSF, ['Skip Intro'], '01.02', SEGMENTS))
         rel = lambda data, at, end: end + int.from_bytes(data[at:at + 4], 'little', signed=True)
         self.assertEqual(writes[0x184950], bytes.fromhex('eb34'))  # jne over the logo start
         getter = writes[0x0c8440]  # mov [flag], 1; mov eax, 1; ret
@@ -248,10 +248,10 @@ class SignatureTests(unittest.TestCase):
         self.assertEqual(rel(cave, 2, 0x61217a), 0x1e79258)
         self.assertEqual(rel(cave, 11, 0x61217f), 0x4b4c90)
 
-    @unittest.skipUnless(os.environ.get('GOW3_GAME'), 'GOW3_GAME (game folder) not set')
-    def test_gow3_skip_intro_original_bytes(self):
+    @unittest.skipUnless(os.environ.get('KZSF_GAME'), 'KZSF_GAME (game folder) not set')
+    def test_kzsf_skip_intro_original_bytes(self):
         from prepare import parse_self
-        elf, _, ph, _, _ = parse_self((Path(os.environ['GOW3_GAME']) / 'eboot.bin').read_bytes())
+        elf, _, ph, _, _ = parse_self((Path(os.environ['KZSF_GAME']) / 'eboot.bin').read_bytes())
         text = next(p for p in ph if p['type'] == 1 and p['flags'] & 1)
         original = {0x184950: '7534', 0x0c8440: '488d05955b38008b00c3660f1f440000',
                     0x01b36a: 'e821990900', 0x212170: '90' * 15}
@@ -261,10 +261,10 @@ class SignatureTests(unittest.TestCase):
 
     def test_requirements_from_patch_notes(self):
         # Notes ask for extra direct memory (shadPS4 "DMEM") and a VBlank rate.
-        self.assertEqual(patch_requirements(GOW3, ['Resolution Patch - 4K', 'Skip Any Video With X Button'], '01.02'),
+        self.assertEqual(patch_requirements(KZSF, ['Resolution Patch - 4K', 'Skip Any Video With X Button'], '01.02'),
                          (5056 + 6144, None))
-        self.assertEqual(patch_requirements(GOW3, ['Frame Rate Patch - 120 FPS'], '01.02'), (None, 120))
-        self.assertEqual(patch_requirements(GOW3, [], '01.02'), (None, None))
+        self.assertEqual(patch_requirements(KZSF, ['Frame Rate Patch - 120 FPS'], '01.02'), (None, 120))
+        self.assertEqual(patch_requirements(KZSF, [], '01.02'), (None, None))
 
 
 if __name__ == '__main__':

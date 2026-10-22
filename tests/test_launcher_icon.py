@@ -9,7 +9,7 @@ from pathlib import Path
 
 from paths import ROOT
 sys.path.insert(0, str(ROOT / 'launcher'))
-import gow3_launcher_win as launcher  # noqa: E402
+import kzsf_launcher_win as launcher  # noqa: E402
 
 try:
     import tkinter as tk
@@ -21,7 +21,7 @@ try:
 except ImportError:
     PILLOW = False
 
-OWN_ICON = ROOT / 'launcher' / 'gow3.png'
+OWN_ICON = ROOT / 'launcher' / 'kzsf.png'
 WM_GETICON, ICON_SMALL, ICON_BIG = 0x7F, 0, 1
 
 

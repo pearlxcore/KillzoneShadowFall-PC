@@ -53,21 +53,21 @@ def main():
     values=ui.load_preferences()
     folder=ui.ROOT/'out'/(('texture-memo-' if args.texture_memo else 'performance-profile-')+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/'out/gow3-probe-profile.exe')
-    spec['env'].update(GOW3_GPU_PROFILE='1',KZSF_CPU_PROFILE='1',GOW3_PERF_DIAG='1',GOW3_BUFFER_STATS='1',GOW3_UPSCALER='none',
-                       GOW3_CONFIG=str(folder/'settings.ini'))
+    spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-profile.exe')
+    spec['env'].update(KZSF_GPU_PROFILE='1',KZSF_CPU_PROFILE='1',KZSF_PERF_DIAG='1',KZSF_BUFFER_STATS='1',KZSF_UPSCALER='none',
+                       KZSF_CONFIG=str(folder/'settings.ini'))
     spec['env'].pop('KZSF_FSR_NATIVE',None)
     if args.texture_memo:spec['env']['KZSF_DIRECT_TEXTURE_MEMO']='1'
     report=dict(executable=spec['command'][0],renderer='native1080p, no FSR',
         gpu_profile=True,cpu_stage_profile=True,wait_profile=True,direct_texture_memo=args.texture_memo,
-        precompile=spec['env']['GOW3_PRECOMPILE'],
+        precompile=spec['env']['KZSF_PRECOMPILE'],
         player_turn=spec['env'].get('KZSF_PLAYER_TURN','0'),
         assists={k:spec['env'][k] for k in ('KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO')})
     if args.report_only:
         print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
         capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():print('Close the current game first.');return 1
+    if 'kzsf-probe' in running.stdout.lower():print('Close the current game first.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:print(reason);return 1
     if not Path(spec['command'][0]).is_file():print('Current launcher build missing.');return 1

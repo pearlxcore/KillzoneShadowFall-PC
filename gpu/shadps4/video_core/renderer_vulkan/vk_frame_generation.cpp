@@ -8,7 +8,7 @@
 #include <cstdlib>
 
 #include "ffx_vk_fsr3_3_1_5_bridge.h"
-#include "gow3_settings.h"
+#include "kzsf_settings.h"
 #include "video_core/host_shaders/frame_gen_inputs_comp.h"
 #include "video_core/host_shaders/frame_gen_ui_comp.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -32,7 +32,7 @@ FrameGenerator::FrameGenerator(const Instance& instance_, Scheduler& scheduler_)
     const auto features = instance.GetPhysicalDevice().getFeatures();
     if (Wanted() && (!features.shaderStorageImageReadWithoutFormat ||
                      !features.shaderStorageImageWriteWithoutFormat)) {
-        Fail(Gow3Settings::FrameGenFsr3, "GPU lacks unformatted storage image support");
+        Fail(KzsfSettings::FrameGenFsr3, "GPU lacks unformatted storage image support");
     }
     if (Wanted()) std::printf("Frame generation: experimental FSR 3.1 2x requested\n");
 }
@@ -40,9 +40,9 @@ FrameGenerator::FrameGenerator(const Instance& instance_, Scheduler& scheduler_)
 FrameGenerator::~FrameGenerator() { DestroyFsr3(); }
 
 bool FrameGenerator::Wanted() const {
-    const auto& s = Gow3Settings::Get();
-    return s.startup_frame_gen == Gow3Settings::FrameGenFsr3 &&
-           s.frame_gen == Gow3Settings::FrameGenFsr3;
+    const auto& s = KzsfSettings::Get();
+    return s.startup_frame_gen == KzsfSettings::FrameGenFsr3 &&
+           s.frame_gen == KzsfSettings::FrameGenFsr3;
 }
 
 u32 FrameGenerator::GeneratedCount() const { return Wanted() ? 1 : 0; }
@@ -447,14 +447,14 @@ u32 FrameGenerator::Generate(vk::CommandBuffer cmdbuf, vk::Image color, vk::Imag
         ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(fsr3, fsr3_pending.front().frame_id);
         fsr3_pending.pop_front();
     }
-    const int provider = Gow3Settings::Get().frame_gen;
+    const int provider = KzsfSettings::Get().frame_gen;
     const int slot_index = selected;
     selected = -1;
     if (provider != last_provider) {
         last_provider = provider;
         reset = true;
     }
-    if (provider == Gow3Settings::FrameGenOff || slot_index < 0 || outputs.empty() || !width ||
+    if (provider == KzsfSettings::FrameGenOff || slot_index < 0 || outputs.empty() || !width ||
         !height) {
         // A frame without the game's scene (menu, movie, loading): start over afterwards.
         reset = true;
@@ -585,7 +585,7 @@ u32 FrameGenerator::GenerateFsr3(vk::CommandBuffer cmdbuf, const Slot& slot, vk:
         if (ffxVkFsr3_3_1_6FrameGenerationContextCreate(&create, &fsr3) !=
             FFX_VK_FSR3_3_1_6_FRAMEGEN_OK) {
             fsr3 = nullptr;
-            Fail(Gow3Settings::FrameGenFsr3, "FSR 3.1 frame generation context creation failed");
+            Fail(KzsfSettings::FrameGenFsr3, "FSR 3.1 frame generation context creation failed");
             return 0;
         }
         fsr3_width = width;
@@ -641,7 +641,7 @@ u32 FrameGenerator::GenerateFsr3(vk::CommandBuffer cmdbuf, const Slot& slot, vk:
     if (ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(fsr3, &prepare) !=
         FFX_VK_FSR3_3_1_6_FRAMEGEN_OK) {
         fsr3_pending.push_back({id, scheduler.CurrentTick()});
-        Fail(Gow3Settings::FrameGenFsr3, "FSR 3.1 frame generation (prepare) failed");
+        Fail(KzsfSettings::FrameGenFsr3, "FSR 3.1 frame generation (prepare) failed");
         return 0;
     }
     const FfxVkFsr3_3_1_6FrameGenerationDispatchInfo dispatch{
@@ -666,7 +666,7 @@ u32 FrameGenerator::GenerateFsr3(vk::CommandBuffer cmdbuf, const Slot& slot, vk:
     const auto result = ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(fsr3, &dispatch);
     fsr3_pending.push_back({id, scheduler.CurrentTick()});
     if (result != FFX_VK_FSR3_3_1_6_FRAMEGEN_OK) {
-        Fail(Gow3Settings::FrameGenFsr3, "FSR 3.1 frame generation (dispatch) failed");
+        Fail(KzsfSettings::FrameGenFsr3, "FSR 3.1 frame generation (dispatch) failed");
         return 0;
     }
     static bool reported = false;
@@ -680,8 +680,8 @@ u32 FrameGenerator::GenerateFsr3(vk::CommandBuffer cmdbuf, const Slot& slot, vk:
 
 void FrameGenerator::Fail(int provider, const char* reason) {
     std::printf("Frame generation: %s; disabled\n", reason);
-    Gow3Settings::Get().frame_gen_problem = reason;
-    Gow3Settings::Get().frame_gen = Gow3Settings::FrameGenOff;
+    KzsfSettings::Get().frame_gen_problem = reason;
+    KzsfSettings::Get().frame_gen = KzsfSettings::FrameGenOff;
     reset = true;
 }
 

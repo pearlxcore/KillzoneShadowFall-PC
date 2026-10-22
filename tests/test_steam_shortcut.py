@@ -91,7 +91,7 @@ class AddToSteamTests(unittest.TestCase):
         (self.steam / 'userdata' / '0').mkdir()  # the anonymous account is skipped
         other = {'shortcuts': {'0': {'appid': 5, 'AppName': 'Other', 'Exe': '"/x"', 'tags': {'0': 'keep'}}}}
         (self.steam / 'userdata' / '2222' / 'config' / 'shortcuts.vdf').write_bytes(steam.dump_vdf(other))
-        self.command = ('/home/user/gow3.AppImage', '--play', '/home/user')
+        self.command = ('/home/user/kzsf.AppImage', '--play', '/home/user')
 
     def add(self, **kwargs):
         return steam.add_to_steam(self.game, self.command, self.icon, steam_root=self.steam, running=False, **kwargs)
@@ -105,7 +105,7 @@ class AddToSteamTests(unittest.TestCase):
         app_id = result['app_id']
         entry = next(iter(self.shortcuts('1111').values()))
         self.assertEqual((entry['AppName'], entry['Exe'], entry['LaunchOptions']),
-                         (steam.APP_NAME, '"/home/user/gow3.AppImage"', '--play'))
+                         (steam.APP_NAME, '"/home/user/kzsf.AppImage"', '--play'))
         self.assertEqual(entry['appid'], app_id)
         grid = self.steam / 'userdata' / '1111' / 'config' / 'grid'
         sizes = {f'{app_id}p.png': steam.CAPSULE, f'{app_id}.png': steam.WIDE, f'{app_id}_hero.png': steam.HERO}
@@ -123,11 +123,11 @@ class AddToSteamTests(unittest.TestCase):
         self.assertEqual(shortcuts['0']['AppName'], 'Other')
         self.assertEqual(shortcuts['0']['tags'], {'0': 'keep'})
         self.assertEqual(shortcuts['1']['AppName'], steam.APP_NAME)
-        self.assertTrue((self.steam / 'userdata' / '2222' / 'config' / 'shortcuts.vdf.gow3-backup').is_file())
+        self.assertTrue((self.steam / 'userdata' / '2222' / 'config' / 'shortcuts.vdf.kzsf-backup').is_file())
 
     def test_adding_again_updates_the_same_shortcut(self):
         self.add()
-        self.command = ('/home/user/gow3.AppImage', '--play', '/home/user')
+        self.command = ('/home/user/kzsf.AppImage', '--play', '/home/user')
         result = self.add()
         self.assertTrue(result['updated'])
         self.assertEqual(len([v for v in self.shortcuts('2222').values() if v['AppName'] == steam.APP_NAME]), 1)

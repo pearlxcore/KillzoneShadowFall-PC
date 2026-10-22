@@ -2,16 +2,16 @@
 #define _GNU_SOURCE
 #include <assert.h>
 #include "../src/runtime_pad.c"
-int gow3gpu_overlay_captures_input(void) {return 0;}
-int gow3gpu_controller_drift_deadzone(void) {return 8;}
-int gow3gpu_controller_aim_gain(int aiming) {(void)aiming;return 100;}
-int gow3gpu_mouse_state(int16_t *x,int16_t *y,uint32_t *buttons) {(void)x;(void)y;(void)buttons;return 0;}
+int kzsfgpu_overlay_captures_input(void) {return 0;}
+int kzsfgpu_controller_drift_deadzone(void) {return 8;}
+int kzsfgpu_controller_aim_gain(int aiming) {(void)aiming;return 100;}
+int kzsfgpu_mouse_state(int16_t *x,int16_t *y,uint32_t *buttons) {(void)x;(void)y;(void)buttons;return 0;}
 uintptr_t runtime_lookup(const RuntimeExport *table,size_t count,const char *name) {
     (void)table;(void)count;(void)name;return 0;
 }
 int main(void) {
-    _putenv_s("GOW3_KEY_MAP","cross=Q,square=Left Shift,r2=NotAKey,triangle=Application");
-    _putenv_s("GOW3_PAD_MAP","");
+    _putenv_s("KZSF_KEY_MAP","cross=Q,square=Left Shift,r2=NotAKey,triangle=Application");
+    _putenv_s("KZSF_PAD_MAP","");
     char label[16];
     assert(runtime_pad_prompt_binding(2,0,label,sizeof(label))==1 && !strcmp(label,"Q"));
     assert(runtime_pad_prompt_binding(3,0,label,sizeof(label))==1 && !strcmp(label,"SHIFT"));

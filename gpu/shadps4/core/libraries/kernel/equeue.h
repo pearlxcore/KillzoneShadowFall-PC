@@ -181,7 +181,7 @@ public:
 
     bool EventExists(u64 id, s16 filter);
 
-    // gow3: watchdog diagnostics for the loading freeze (last blocked waiter, counters).
+    // kzsf: watchdog diagnostics for the loading freeze (last blocked waiter, counters).
     std::atomic<unsigned int> diag_blocked_tid{0};
     std::atomic<int> diag_blocked_num{0};
     std::atomic<unsigned long long> diag_waits{0};

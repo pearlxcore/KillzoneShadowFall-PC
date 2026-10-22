@@ -8,7 +8,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
-#include "gow3_settings.h"
+#include "kzsf_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -110,7 +110,7 @@ bool Swapchain::AcquireNextImage() {
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
                                    image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
-    if (std::getenv("GOW3_PRESENT_TRACE")) {
+    if (std::getenv("KZSF_PRESENT_TRACE")) {
         std::fprintf(stderr,"WSI acquire: swap=%p slot=%u image=%u acquired=%p ready=%p result=%d\n",
                      (void*)(VkSwapchainKHR)swapchain,frame_index,image_index,
                      (void*)(VkSemaphore)image_acquired[frame_index],
@@ -137,7 +137,7 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present() {
-    if (std::getenv("GOW3_PRESENT_TRACE")) {
+    if (std::getenv("KZSF_PRESENT_TRACE")) {
         std::fprintf(stderr,"WSI present: swap=%p slot=%u image=%u wait=%p\n",
                      (void*)(VkSwapchainKHR)swapchain,frame_index,image_index,
                      (void*)(VkSemaphore)present_ready[image_index]);
@@ -212,9 +212,9 @@ void Swapchain::FindPresentMode() {
         return;
     }
 
-    // gow3: VSync on is Fifo (no tearing, waits for the display); off is Mailbox when the
+    // kzsf: VSync on is Fifo (no tearing, waits for the display); off is Mailbox when the
     // driver has it, else Immediate (tearing allowed), else Fifo.
-    vsync = Gow3Settings::Get().vsync;
+    vsync = KzsfSettings::Get().vsync;
     const auto has = [&](vk::PresentModeKHR mode) { return std::ranges::find(modes, mode) != modes.cend(); };
     present_mode = vsync ? vk::PresentModeKHR::eFifo
                    : has(vk::PresentModeKHR::eMailbox) ? vk::PresentModeKHR::eMailbox
@@ -224,7 +224,7 @@ void Swapchain::FindPresentMode() {
 }
 
 void Swapchain::UpdateVsync() {
-    if (Gow3Settings::Get().vsync == vsync) {
+    if (KzsfSettings::Get().vsync == vsync) {
         return;
     }
     if (const auto result = instance.GetDevice().waitIdle(); result != vk::Result::eSuccess) {

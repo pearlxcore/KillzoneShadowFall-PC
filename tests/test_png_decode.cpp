@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../gpu/shim/gow3_png.h"
+#include "../gpu/shim/kzsf_png.h"
 
 // 2x2 RGB: red, green / blue, white.
 static const unsigned char kPng[] = {
@@ -15,8 +15,8 @@ static const unsigned char kPng[] = {
     0xd9, 0x68, 0x8b, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
 
 int main() {
-    Gow3Png::Image image;
-    assert(Gow3Png::DecodeRgba(kPng, sizeof(kPng), image));
+    KzsfPng::Image image;
+    assert(KzsfPng::DecodeRgba(kPng, sizeof(kPng), image));
     assert(image.width == 2 && image.height == 2 && image.rgba.size() == 16);
     const unsigned char expected[16] = {255, 0, 0, 255, 0, 255, 0, 255,
                                         0, 0, 255, 255, 255, 255, 255, 255};
@@ -25,13 +25,13 @@ int main() {
     }
 
     // Truncated data and data that is not a PNG fail and leave the image empty.
-    Gow3Png::Image bad;
-    assert(!Gow3Png::DecodeRgba(kPng, 40, bad) && bad.rgba.empty());
+    KzsfPng::Image bad;
+    assert(!KzsfPng::DecodeRgba(kPng, 40, bad) && bad.rgba.empty());
     const unsigned char junk[64] = {1, 2, 3};
-    assert(!Gow3Png::DecodeRgba(junk, sizeof(junk), bad) && bad.rgba.empty());
-    assert(!Gow3Png::DecodeRgba(nullptr, 0, bad));
+    assert(!KzsfPng::DecodeRgba(junk, sizeof(junk), bad) && bad.rgba.empty());
+    assert(!KzsfPng::DecodeRgba(nullptr, 0, bad));
 
-    assert(!Gow3Png::LoadRgba("does/not/exist/icon0.png", bad) && bad.rgba.empty());
+    assert(!KzsfPng::LoadRgba("does/not/exist/icon0.png", bad) && bad.rgba.empty());
     std::puts("png-decode-test: ok");
     return 0;
 }

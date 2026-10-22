@@ -1,7 +1,7 @@
 #include <cassert>
-#include "../gpu/shim/gow3_character_selector.h"
+#include "../gpu/shim/kzsf_character_selector.h"
 int main() {
-    Gow3CharacterSelector state;
+    KzsfCharacterSelector state;
     state.Request(1);assert(state.Take()==0);
     state.enabled=true;state.Request(1);
     const auto engineer=state.Take();assert(uint32_t(engineer)==2 && state.Take()==0);
@@ -15,6 +15,7 @@ int main() {
     assert(state.Status()==4 && state.Selected()==2); // rejected request displays the actual model
     state.Request(KZSF_CHARACTER_MODEL_COUNT);state.Request(-1);assert(state.Take()==0);
     for(int model=3;model<KZSF_CHARACTER_MODEL_COUNT;model++) {
+        if(!kzsf_character_model_selectable(model))continue;
         state.Request(model);const auto token=state.Take();state.Publish(token,model,0,127);
         assert(state.Selected()==model && state.available.load()==127);
     }
@@ -31,6 +32,7 @@ int main() {
     state.enabled=true;state.Cycle(1,127);token=state.Take();assert(uint32_t(token)==2);
     state.Reset();
     const int last=KZSF_CHARACTER_MODEL_COUNT-1;
+    state.Request(13);state.Request(16);assert(state.Take()==0);
     const uint64_t high=UINT64_C(1)<<last;
     state.Cycle(-1,high);token=state.Take();assert(uint32_t(token)==uint32_t(last+1));
     state.Publish(token,last,0,high|1);assert(state.Selected()==last && state.available.load()==(high|1));

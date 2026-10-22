@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- gow3_pc: ported to the CUSA01623 v01.02 eboot.bin with sha256
+<!-- kzsf_pc: ported to the CUSA01623 v01.02 eboot.bin with sha256
      d85c8135d330c3b601bf5dc3f1dd86bd6119fb8a9fce372bed2c9785f9a79299 (scripts/patches.py checks it).
      The shadPS4 file targets another build of 01.02: its code addresses in 0x564000-0x56bfff are
      0x10 higher and in 0x5f0000-0x609fff 0x120 lower here; data addresses match. Every ported
@@ -109,7 +109,7 @@
         </PatchList>
         <Target Name="sixty" Address="0x006fc0d8" Pattern="c5 fa 59 85 9c fd ff ff c5 fa 59 05 ?? ?? ?? ?? e8 ?? ?? ?? ?? c5 f9 70 c0 00" At="12" Ref="1" Tail="0"/>
     </Metadata>
-    <Metadata Title="God of War III Remastered" Name="Frame Rate Patch - 240 FPS" Note="The 120 FPS patch with the engine maximum framerate at 240 FPS (frametime clamp of 1/240 second), adapted by Felipe Prado. Same swing energy correction. Requires setting VBlank to 240 FPS." Author="kvicken, gow3_pc" PatchVer="1.0" AppVer="01.02" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="God of War III Remastered" Name="Frame Rate Patch - 240 FPS" Note="The 120 FPS patch with the engine maximum framerate at 240 FPS (frametime clamp of 1/240 second), adapted by Felipe Prado. Same swing energy correction. Requires setting VBlank to 240 FPS." Author="kvicken, kzsf_pc" PatchVer="1.0" AppVer="01.02" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="bytes" Address="0x0048ff1a" Value="488d05{rel:sixty:0}" Pattern="c5 fa 11 85 98 fb ff ff 48 8d 05 ?? ?? ?? ?? c5 fa 10 00" At="8"/>
             <Line Type="bytes" Address="0x0075dbe4" Value="00007043" Pattern="00 00 80 3f 00 00 48 42 8f c2 6f 42 00 00 c8 42 00 00 00 5f" At="8"/>
@@ -142,7 +142,7 @@
          for each other (black screen, FPS counter running; issue #111). Starting the variable at
          2, the index before 0 in the 0-1-2 rotation, removes the deadlock; the game overwrites it
          from the first frame on. The variable is found through the store in the frame end code. -->
-    <Metadata Title="God of War III Remastered" Name="Bug Fix - Startup Black Screen" Note="Fixes the black screen at startup with the FPS counter running: the frame pacing index starts at 2 instead of 0, so the second frame no longer waits for a flip that only it can trigger." Author="gow3_pc" PatchVer="1.0" AppVer="01.02" AppElf="eboot.bin" isEnabled="true">
+    <Metadata Title="God of War III Remastered" Name="Bug Fix - Startup Black Screen" Note="Fixes the black screen at startup with the FPS counter running: the frame pacing index starts at 2 instead of 0, so the second frame no longer waits for a flip that only it can trigger." Author="kzsf_pc" PatchVer="1.0" AppVer="01.02" AppElf="eboot.bin" isEnabled="true">
         <PatchList>
             <Line Type="bytes32" Address="0x018ba600" Target="frame_index" Value="0x00000002"/>
         </PatchList>

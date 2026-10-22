@@ -1,14 +1,14 @@
-// gow3.ini graphics keys (gow3_settings.cpp, gow3_graphics.h).
+// kzsf.ini graphics keys (kzsf_settings.cpp, kzsf_graphics.h).
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
-#include "gow3_graphics.h"
-#include "gow3_settings.h"
+#include "kzsf_graphics.h"
+#include "kzsf_settings.h"
 
-namespace G = Gow3Graphics;
+namespace G = KzsfGraphics;
 
 static std::string Read(const char* path) {
     std::ifstream in(path);
@@ -46,10 +46,10 @@ int main() {
                "controller_pitch_speed=190\nmotion_blur=0\nbloom=0\nfilm_grain=0\nprompt_style=1\n"
                "unlimited_sprint=1\ncontinuous_scan=1\n";
     }
-    _putenv_s("GOW3_CONFIG", path);
-    _putenv_s("GOW3_ASYNC_SHADERS", "");
-    auto& v = Gow3Settings::Get();
-    Gow3Settings::Load();
+    _putenv_s("KZSF_CONFIG", path);
+    _putenv_s("KZSF_ASYNC_SHADERS", "");
+    auto& v = KzsfSettings::Get();
+    KzsfSettings::Load();
     assert(v.controller_look_gain==150 && v.controller_aim_gain==125);
     assert(v.controller_turn_speed==175);
     assert(v.controller_pitch_speed==190);
@@ -61,33 +61,33 @@ int main() {
     // Killzone supports spatial FSR independently of the temporal scene integration.
     assert(v.fsr1 && !v.rcas && v.rcas_strength == 40 && v.frames_queued == 2);
     assert(v.anisotropy == 16 && v.startup_anisotropy == 16 && v.mip_lod_bias == -0.5f);
-    assert(v.frame_gen == Gow3Settings::FrameGenFsr3 && v.output_res == 4);
+    assert(v.frame_gen == KzsfSettings::FrameGenFsr3 && v.output_res == 4);
     v.anisotropy = 8;
-    assert(Gow3Settings::GraphicsNeedRestart());
+    assert(KzsfSettings::GraphicsNeedRestart());
     v.anisotropy = 16;
     v.mip_lod_bias = -1.0f;
-    assert(!Gow3Settings::GraphicsNeedRestart());
+    assert(!KzsfSettings::GraphicsNeedRestart());
     v.mip_lod_bias = -0.5f;
-    _putenv_s("GOW3_FSR1", "0");
-    Gow3Settings::Load();
+    _putenv_s("KZSF_FSR1", "0");
+    KzsfSettings::Load();
     assert(!v.fsr1);
-    _putenv_s("GOW3_FSR1", "1");
-    Gow3Settings::Load();
+    _putenv_s("KZSF_FSR1", "1");
+    KzsfSettings::Load();
     assert(v.fsr1);
-    _putenv_s("GOW3_FSR1", "");
-    assert(!Gow3Settings::GraphicsNeedRestart());
-    assert(v.applied_engine_fps == 240);  // no GOW3_ENGINE_FPS: the configured rate
-    _putenv_s("GOW3_ENGINE_FPS", "60");    // run.py: the frame rate patch did not apply
-    Gow3Settings::Load();
-    assert(v.engine_fps == 240 && v.applied_engine_fps == 60 && !Gow3Settings::GraphicsNeedRestart());
-    _putenv_s("GOW3_ENGINE_FPS", "");
+    _putenv_s("KZSF_FSR1", "");
+    assert(!KzsfSettings::GraphicsNeedRestart());
+    assert(v.applied_engine_fps == 240);  // no KZSF_ENGINE_FPS: the configured rate
+    _putenv_s("KZSF_ENGINE_FPS", "60");    // run.py: the frame rate patch did not apply
+    KzsfSettings::Load();
+    assert(v.engine_fps == 240 && v.applied_engine_fps == 60 && !KzsfSettings::GraphicsNeedRestart());
+    _putenv_s("KZSF_ENGINE_FPS", "");
     v.engine_fps = 120;
-    assert(Gow3Settings::GraphicsNeedRestart());
+    assert(KzsfSettings::GraphicsNeedRestart());
     v.fps_limit = 60;  // live: no restart because of it
     v.engine_fps = 240;
-    assert(!Gow3Settings::GraphicsNeedRestart());
+    assert(!KzsfSettings::GraphicsNeedRestart());
 
-    Gow3Settings::Save();
+    KzsfSettings::Save();
     const std::string saved = Read(path);
     assert(saved.find("unlimited_sprint=1\n") != std::string::npos);
     assert(saved.find("continuous_scan=1\n") != std::string::npos);
@@ -109,9 +109,9 @@ int main() {
         out << "display_mode=huge\nfps_limit=7\nrender_resolution=8K\nengine_fps=1\n"
                "rcas_strength=250\nframes_queued=9\nprompt_style=9\n";
     }
-    _putenv_s("GOW3_ASYNC_SHADERS", "1");  // the environment still wins at start
+    _putenv_s("KZSF_ASYNC_SHADERS", "1");  // the environment still wins at start
     v.async_shaders = false;
-    Gow3Settings::Load();
+    KzsfSettings::Load();
     assert(v.display_mode == G::Windowed && v.fps_limit == 0 && v.render_resolution == 0 && v.engine_fps == 120);
     assert(v.rcas_strength == 75 && v.frames_queued == 1);
     assert(v.prompt_style==0);
@@ -120,8 +120,8 @@ int main() {
         std::ofstream out(path);
         out << "cheat_double_jumps=1\ncheat_very_hard=1\n";
     }
-    Gow3Settings::Load();
-    Gow3Settings::Save();
+    KzsfSettings::Load();
+    KzsfSettings::Save();
     const std::string cheats = Read(path);
     assert(cheats.find("cheat_double_jumps=1\n") != std::string::npos);
     assert(cheats.find("cheat_very_hard=1\n") != std::string::npos);

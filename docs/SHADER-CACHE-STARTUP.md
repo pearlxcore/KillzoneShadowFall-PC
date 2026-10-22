@@ -6,7 +6,7 @@ These are unreleased changes on `main`. The v0.2.0 download is unchanged.
 
 The launcher still finishes cached-pipeline precompilation before gameplay. It
 explicitly enables the existing parallel compiler pool (CPU threads minus two,
-at most six workers). Set `GOW3_PARALLEL_WARMUP=0` before opening the launcher for
+at most six workers). Set `KZSF_PARALLEL_WARMUP=0` before opening the launcher for
 a serial comparison. Background preloading remains disabled.
 
 Loose shader records are inventoried once during preload. Startup logs include
@@ -67,7 +67,7 @@ Do not remove the packed store unless rebuilding its contents is intended.
 Build the game and explicit test/benchmark targets with MSYS2 CLANG64:
 
 ```bash
-ninja -C out/gpu gow3-probe shader-cache-store-test warmup-inbox-test benchmark-shader-cache
+ninja -C out/gpu kzsf-probe shader-cache-store-test warmup-inbox-test benchmark-shader-cache
 ./out/gpu/shader-cache-store-test.exe
 ./out/gpu/warmup-inbox-test.exe
 ./out/gpu/sampler-resources-test.exe
@@ -95,7 +95,7 @@ binary files; they never modify linked payloads in place. Use a baseline built
 from v0.2.0 and the current candidate, on the same volume as the source cache:
 
 ```powershell
-python tools/benchmark-shader-startup.py --source 'C:/Port/user/cache/CUSA00190' --work out/cache-startup-comparison --baseline 'C:/Baseline/out/gow3-probe-launcher.exe'
+python tools/benchmark-shader-startup.py --source 'C:/Port/user/cache/CUSA00190' --work out/cache-startup-comparison --baseline 'C:/Baseline/out/kzsf-probe-launcher.exe'
 ```
 
 Close the running game first. This compares three repeat runs of the baseline,
@@ -109,7 +109,7 @@ runs, reboot, then select exactly one measurement; repeat after another reboot
 for the other modes:
 
 ```powershell
-python tools/benchmark-shader-startup.py --work out/cache-startup-comparison --baseline 'C:/Baseline/out/gow3-probe-launcher.exe' --only baseline --reboot-cold
+python tools/benchmark-shader-startup.py --work out/cache-startup-comparison --baseline 'C:/Baseline/out/kzsf-probe-launcher.exe' --only baseline --reboot-cold
 ```
 
 Use `--only loose` and `--only packed` after separate reboots. The tool never

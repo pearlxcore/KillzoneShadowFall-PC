@@ -37,7 +37,7 @@ EqueueInternal* GetEqueue(OrbisKernelEqueue eq) {
     return kqueues[eq];
 }
 
-// ---- gow3: watchdog diagnostics (loading freeze: who waits on which queue/event) ----
+// ---- kzsf: watchdog diagnostics (loading freeze: who waits on which queue/event) ----
 namespace {
 struct EqDiagEntry {
     char op;           // 'W' wait-enter, 'w' wait-exit, 'T' trigger, 'A' add-event
@@ -83,7 +83,7 @@ void EqDiagLog(char op, const EqueueInternal* q, u64 ident, s32 arg, u32 timo) {
 // Printed by the loader's freeze/stall watchdogs (src/probe.c). Best-effort: never blocks
 // on a queue's mutex (a trigger in progress just means "events skipped"), so it cannot
 // deadlock the process it is diagnosing.
-extern "C" void gow3gpu_equeue_dump(void) {
+extern "C" void kzsfgpu_equeue_dump(void) {
     Libraries::Kernel::EqDiagEntry ring[128];
     unsigned int total;
     {
@@ -419,14 +419,14 @@ bool EqueueInternal::EventExists(u64 id, s16 filter) {
     return it != m_events.cend();
 }
 
-static s32 NextEqueueHandle() { // gow3
+static s32 NextEqueueHandle() { // kzsf
     static std::atomic<s32> next{0x40000};
     return next++;
 }
 
 s32 PS4_SYSV_ABI posix_kqueue() {
     // Reserve a file handle for the kqueue
-    // gow3: equeue handles come from their own range, not the file table.
+    // kzsf: equeue handles come from their own range, not the file table.
     s32 kqueue_handle = NextEqueueHandle();
 
     // Plenty of equeue logic uses names to identify queues.
@@ -543,7 +543,7 @@ int PS4_SYSV_ABI sceKernelCreateEqueue(OrbisKernelEqueue* eq, const char* name) 
     LOG_INFO(Kernel_Event, "name = {}", name);
 
     // Reserve a file handle for the kqueue
-    // gow3: equeue handles come from their own range, not the file table.
+    // kzsf: equeue handles come from their own range, not the file table.
     OrbisKernelEqueue kqueue_handle = NextEqueueHandle();
 
     // Create the equeue

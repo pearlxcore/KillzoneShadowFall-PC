@@ -31,58 +31,58 @@ def main():
     # Each comparison explicitly opts into its own native hook.
     spec['env'].pop('KZSF_ENGINE_TURN',None)
     spec['env'].pop('KZSF_TURN_LOG',None)
-    spec['command'][0]=str(ui.ROOT/('out/gow3-probe-precompile.exe' if args.precompile else 'out/gow3-probe-fastclock.exe'))
-    if args.fsr_test: spec['command'][0]=str(ui.ROOT/'out/gow3-probe-fsr-test.exe')
-    if args.capture: spec['command'][0]=str(ui.ROOT/'out/gow3-probe-fsr-capture.exe')
+    spec['command'][0]=str(ui.ROOT/('out/kzsf-probe-precompile.exe' if args.precompile else 'out/kzsf-probe-fastclock.exe'))
+    if args.fsr_test: spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-fsr-test.exe')
+    if args.capture: spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-fsr-capture.exe')
     if args.controller_test:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-controller.exe')
-        spec['env'].update(GOW3_PAD_LOOK_GAIN='150',GOW3_PAD_AIM_GAIN='125',
-                           GOW3_CONFIG=str(folder/'settings.ini'))
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-controller.exe')
+        spec['env'].update(KZSF_PAD_LOOK_GAIN='150',KZSF_PAD_AIM_GAIN='125',
+                           KZSF_CONFIG=str(folder/'settings.ini'))
     if args.turn_speed_test:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-turn-speed.exe')
-        spec['env'].update(KZSF_ENGINE_TURN='1',GOW3_PAD_TURN_SPEED='150',GOW3_PAD_PITCH_SPEED='150',
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-turn-speed.exe')
+        spec['env'].update(KZSF_ENGINE_TURN='1',KZSF_PAD_TURN_SPEED='150',KZSF_PAD_PITCH_SPEED='150',
                            KZSF_TURN_LOG='1',
-                           GOW3_PAD_LOOK_GAIN='100',GOW3_PAD_AIM_GAIN='100',
-                           GOW3_CONFIG=str(folder/'settings.ini'))
+                           KZSF_PAD_LOOK_GAIN='100',KZSF_PAD_AIM_GAIN='100',
+                           KZSF_CONFIG=str(folder/'settings.ini'))
     if args.player_turn_test:
-        spec['command'][0]=str(ui.ROOT/'out/gow3-probe-player-turn.exe')
-        spec['env'].update(KZSF_PLAYER_TURN='1',GOW3_PAD_TURN_SPEED='150',GOW3_PAD_PITCH_SPEED='150',
-                           GOW3_PAD_LOOK_GAIN='100',GOW3_PAD_AIM_GAIN='100',
-                           GOW3_CONFIG=str(folder/'settings.ini'))
-    spec['env'].update(KZSF_DIRECT_TSC='1',KZSF_HEALTH_TRACE='0',GOW3_UPSCALER='none',GOW3_READBACK_LINEAR='1')
+        spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-player-turn.exe')
+        spec['env'].update(KZSF_PLAYER_TURN='1',KZSF_PAD_TURN_SPEED='150',KZSF_PAD_PITCH_SPEED='150',
+                           KZSF_PAD_LOOK_GAIN='100',KZSF_PAD_AIM_GAIN='100',
+                           KZSF_CONFIG=str(folder/'settings.ini'))
+    spec['env'].update(KZSF_DIRECT_TSC='1',KZSF_HEALTH_TRACE='0',KZSF_UPSCALER='none',KZSF_READBACK_LINEAR='1')
     spec['env'].pop('KZSF_ALLOCATION_DUMP',None)
-    spec['env']['GOW3_PRECOMPILE']='1' if args.precompile else '0'
+    spec['env']['KZSF_PRECOMPILE']='1' if args.precompile else '0'
     if args.precompile:
         # Startup compilation intentionally runs before the first game frame.
-        spec['env'].update(GOW3_BACKGROUND_WARMUP='0',GOW3_FREEZE_SECONDS='0')
+        spec['env'].update(KZSF_BACKGROUND_WARMUP='0',KZSF_FREEZE_SECONDS='0')
     if args.fsr_test:
-        spec['env'].update(GOW3_UPSCALER_DIAGNOSTICS='1',GOW3_UPSCALE_PRESET='0',
-            GOW3_FSR1='1' if args.fsr_test=='spatial' else '0',
-            GOW3_JITTER='1' if args.fsr_test=='temporal' else '0',
-            GOW3_UPSCALER='none' if args.fsr_test=='spatial' else 'fsr3',
-            GOW3_CONFIG=str(folder/'settings.ini'))
+        spec['env'].update(KZSF_UPSCALER_DIAGNOSTICS='1',KZSF_UPSCALE_PRESET='0',
+            KZSF_FSR1='1' if args.fsr_test=='spatial' else '0',
+            KZSF_JITTER='1' if args.fsr_test=='temporal' else '0',
+            KZSF_UPSCALER='none' if args.fsr_test=='spatial' else 'fsr3',
+            KZSF_CONFIG=str(folder/'settings.ini'))
     if args.capture:
-        spec['env'].update(GOW3_CAPTURE_TRIGGER=str(folder/'capture.trigger'),
-                           GOW3_CAPTURE_DIR=str(folder/'frames'))
+        spec['env'].update(KZSF_CAPTURE_TRIGGER=str(folder/'capture.trigger'),
+                           KZSF_CAPTURE_DIR=str(folder/'frames'))
     report={'executable':spec['command'][0], 'settings':{k:spec['env'][k] for k in (
-        'KZSF_DIRECT_TSC','KZSF_VIRTUAL_TSC','GOW3_FPS_LIMIT','GOW3_DMEM_MB','GOW3_UPSCALER',
-        'GOW3_READBACK_LINEAR','KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO','GOW3_PRECOMPILE',
-        'GOW3_FREEZE_SECONDS','GOW3_PAD_LOOK_GAIN','GOW3_PAD_AIM_GAIN','GOW3_PAD_TURN_SPEED',
-        'GOW3_PAD_PITCH_SPEED')},'vsync':values['vsync']}
+        'KZSF_DIRECT_TSC','KZSF_VIRTUAL_TSC','KZSF_FPS_LIMIT','KZSF_DMEM_MB','KZSF_UPSCALER',
+        'KZSF_READBACK_LINEAR','KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO','KZSF_PRECOMPILE',
+        'KZSF_FREEZE_SECONDS','KZSF_PAD_LOOK_GAIN','KZSF_PAD_AIM_GAIN','KZSF_PAD_TURN_SPEED',
+        'KZSF_PAD_PITCH_SPEED')},'vsync':values['vsync']}
     report['settings']['KZSF_ENGINE_TURN']=spec['env'].get('KZSF_ENGINE_TURN','0')
     report['settings']['KZSF_TURN_LOG']=spec['env'].get('KZSF_TURN_LOG','0')
     report['settings']['KZSF_PLAYER_TURN']=spec['env'].get('KZSF_PLAYER_TURN','0')
     if args.fsr_test:
         report['fsr_test']=args.fsr_test
         report['settings'].update({k:spec['env'][k] for k in
-            ('GOW3_FSR1','GOW3_JITTER','GOW3_UPSCALE_PRESET','GOW3_UPSCALER_DIAGNOSTICS')})
+            ('KZSF_FSR1','KZSF_JITTER','KZSF_UPSCALE_PRESET','KZSF_UPSCALER_DIAGNOSTICS')})
     if args.capture:
-        report['capture']={'folder':str(folder),'trigger':spec['env']['GOW3_CAPTURE_TRIGGER'],
-                           'frames':spec['env']['GOW3_CAPTURE_DIR']}
+        report['capture']={'folder':str(folder),'trigger':spec['env']['KZSF_CAPTURE_TRIGGER'],
+                           'frames':spec['env']['KZSF_CAPTURE_DIR']}
     if args.report_only: print(json.dumps(report,indent=2)); return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
         capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the current Killzone game first, then run this BAT again.'); return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok: print(reason); return 1
@@ -125,7 +125,7 @@ def main():
     print('Logs:',folder,flush=True)
     if args.capture:
         print('In gameplay, run python tools/request-fsr-capture.py --sequence 3, switch back within 5 seconds, and slowly turn the camera for 15 seconds.',flush=True)
-    os.environ.pop('GOW3_FREEZE_EXIT',None)
+    os.environ.pop('KZSF_FREEZE_EXIT',None)
     os.environ.update(env); ui.run_session(manifest)
     print('Game closed. Report the FPS and whether timing stayed normal.')
     return 0

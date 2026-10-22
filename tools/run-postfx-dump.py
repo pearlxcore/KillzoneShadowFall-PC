@@ -26,24 +26,24 @@ def main():
     values=ui.load_preferences()
     folder=ui.ROOT/'out'/('postfx-dump-'+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/'out/gow3-probe-postfx-dump.exe')
-    spec['env']['GOW3_CONFIG']=str(folder/'settings.ini')
+    spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-postfx-dump.exe')
+    spec['env']['KZSF_CONFIG']=str(folder/'settings.ini')
     spec['env']['KZSF_POSTFX_DUMP']='1'
     # Keep the frame rate low so the three dumped frames are well separated.
-    spec['env']['GOW3_STALL_SECONDS']='0'; spec['env']['GOW3_FREEZE_SECONDS']='0'
+    spec['env']['KZSF_STALL_SECONDS']='0'; spec['env']['KZSF_FREEZE_SECONDS']='0'
     report={'diagnostic':'postfx-dump','executable':spec['command'][0],
-            'config':spec['env']['GOW3_CONFIG']}
+            'config':spec['env']['KZSF_CONFIG']}
     if args.report_only:
         print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
                            capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the current Killzone game first, then run this BAT again.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:
         print(reason);return 1
     if not Path(spec['command'][0]).is_file():
-        print('The diagnostic build is missing: out/gow3-probe-postfx-dump.exe');return 1
+        print('The diagnostic build is missing: out/kzsf-probe-postfx-dump.exe');return 1
     folder.mkdir(parents=True)
     if ui.CONFIG.is_file():shutil.copyfile(ui.CONFIG,folder/'settings.ini')
     (folder/'comparison.json').write_text(json.dumps(report,indent=2),encoding='utf-8')

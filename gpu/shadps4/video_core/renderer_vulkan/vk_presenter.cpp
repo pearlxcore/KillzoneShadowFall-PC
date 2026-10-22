@@ -12,9 +12,9 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
-#include "gow3_overlay.h"
-#include "gow3_settings.h"
-#include "gow3_graphics.h"
+#include "kzsf_overlay.h"
+#include "kzsf_settings.h"
+#include "kzsf_graphics.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_warmup_inbox.h"
@@ -42,7 +42,7 @@
 #include <vector>
 #include <vk_mem_alloc.h>
 #ifdef MemoryBarrier
-#undef MemoryBarrier // gow3: winnt.h macro (through fmt), clashes with vk::MemoryBarrier
+#undef MemoryBarrier // kzsf: winnt.h macro (through fmt), clashes with vk::MemoryBarrier
 #endif
 
 namespace Vulkan {
@@ -128,7 +128,7 @@ static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_widt
                          dst_rect.offset.x, dst_rect.offset.y);
 }
 
-// gow3: screenshot capture and ImGui overlays removed; the port presents directly.
+// kzsf: screenshot capture and ImGui overlays removed; the port presents directly.
 
 Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_)
     : window{window_}, liverpool{liverpool_},
@@ -153,31 +153,31 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     }
 
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
-    if (Gow3Settings::Get().startup_frame_gen == Gow3Settings::FrameGenFsr3)
+    if (KzsfSettings::Get().startup_frame_gen == KzsfSettings::FrameGenFsr3)
         hudless_fsr_pass.Create(device, instance.GetAllocator(), num_images);
-    // gow3: frames are composed in RGBA8 (what frame generation reads and writes) and blitted
+    // kzsf: frames are composed in RGBA8 (what frame generation reads and writes) and blitted
     // into the swapchain's format.
-    pp_pass.Create(device, Gow3Settings::Get().startup_frame_gen == Gow3Settings::FrameGenFsr3
+    pp_pass.Create(device, KzsfSettings::Get().startup_frame_gen == KzsfSettings::FrameGenFsr3
                                ? FrameGenerator::ColorFormat : swapchain.GetSurfaceFormat().format);
-    Gow3Overlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
+    KzsfOverlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
     frame_generator = std::make_unique<FrameGenerator>(instance, draw_scheduler);
     rasterizer->GetUpscaler().SetFrameGenerator(frame_generator.get());
 
-    const bool binary_cache = EmulatorSettingsImpl::Flag("GOW3_PIPELINE_BINARIES", true) &&
+    const bool binary_cache = EmulatorSettingsImpl::Flag("KZSF_PIPELINE_BINARIES", true) &&
                               EmulatorSettings.IsPipelineCacheEnabled();
-    const bool capture_only = EmulatorSettingsImpl::Flag("GOW3_PIPELINE_BINARY_ISOLATED", false) &&
-                              EmulatorSettingsImpl::Flag("GOW3_PIPELINE_CAPTURE_ONLY", false);
-    const bool precompile = EmulatorSettingsImpl::Flag("GOW3_PRECOMPILE", false);
+    const bool capture_only = EmulatorSettingsImpl::Flag("KZSF_PIPELINE_BINARY_ISOLATED", false) &&
+                              EmulatorSettingsImpl::Flag("KZSF_PIPELINE_CAPTURE_ONLY", false);
+    const bool precompile = EmulatorSettingsImpl::Flag("KZSF_PRECOMPILE", false);
     if (UseOnDemandPipelines(binary_cache, instance.GetPipelineBinaryGlobalKey().keySize != 0,
                             capture_only, precompile)) {
         rasterizer->GetPipelineCache().StartOnDemand();
         return;
     }
 
-    // gow3: by default the cached pipelines load while the game runs (a corner note shows the
+    // kzsf: by default the cached pipelines load while the game runs (a corner note shows the
     // progress). Otherwise rebuilding them takes up to minutes before the first game frame:
     // show what is happening instead of a black window.
-    const char* background_warmup = std::getenv("GOW3_BACKGROUND_WARMUP");
+    const char* background_warmup = std::getenv("KZSF_BACKGROUND_WARMUP");
     if (!precompile && (!background_warmup || *background_warmup != '0') &&
         rasterizer->GetPipelineCache().StartBackgroundWarmUp()) {
         return;
@@ -186,20 +186,20 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         std::printf("Pipeline startup: precompile recorded cache before gameplay; pipeline binary cache retained\n");
         std::fflush(stdout);
     }
-    Gow3Overlay::SetLoading(true, 0, 0);
+    KzsfOverlay::SetLoading(true, 0, 0);
     PresentLoadingFrame();
     auto last = std::chrono::steady_clock::now();
     rasterizer->GetPipelineCache().WarmUp([&](u32 done, u32 total, const char* stage) {
-        Gow3Overlay::SetLoadingStatus(stage);
+        KzsfOverlay::SetLoadingStatus(stage);
         const auto now = std::chrono::steady_clock::now();
         if (now - last < std::chrono::milliseconds(250)) {
             return;
         }
         last = now;
-        Gow3Overlay::SetLoading(true, done, total);
+        KzsfOverlay::SetLoading(true, done, total);
         PresentLoadingFrame();
     });
-    Gow3Overlay::SetLoading(false, 0, 0);
+    KzsfOverlay::SetLoading(false, 0, 0);
     // Isolated startup benchmark only: finish accepted cache writes before
     // exiting, without entering gameplay or touching saves. Never a UI option.
     if (precompile && EmulatorSettingsImpl::Flag("KZSF_CACHE_STARTUP_BENCHMARK", false)) {
@@ -300,7 +300,7 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
     }
     DestroyGenerated(frame); // made again at the new size when needed
 
-    const vk::Format format = Gow3Settings::Get().startup_frame_gen == Gow3Settings::FrameGenFsr3
+    const vk::Format format = KzsfSettings::Get().startup_frame_gen == KzsfSettings::FrameGenFsr3
         ? FrameGenerator::ColorFormat : swapchain.GetSurfaceFormat().format;
     const vk::ImageCreateInfo image_info = {
         .flags = vk::ImageCreateFlagBits::eMutableFormat,
@@ -429,7 +429,7 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
     return {};
 }
 
-// gow3: raw copy of an image for GOW3_FRAME_DUMP_TRIGGER, written once the GPU is done.
+// kzsf: raw copy of an image for KZSF_FRAME_DUMP_TRIGGER, written once the GPU is done.
 static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                     vk::Image image, vk::ImageLayout layout, u32 w, u32 h, const char* name,
                     int index) {
@@ -449,7 +449,7 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
     cmdbuf.copyImageToBuffer(image, layout, buffer,
                              vk::BufferImageCopy{.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
                                                  .imageExtent = {w, h, 1}});
-    const char* dir = std::getenv("GOW3_DUMP_DIR");
+    const char* dir = std::getenv("KZSF_DUMP_DIR");
     char path[512];
     std::snprintf(path, sizeof(path), "%s/%s_%03d_%ux%u.raw", dir && *dir ? dir : "out/dump", name,
                   index, w, h);
@@ -464,22 +464,22 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
     });
 }
 
-/// gow3: the guest's scan-out format is BGRA (A8R8G8B8): its display copy writes swapped channels
+/// kzsf: the guest's scan-out format is BGRA (A8R8G8B8): its display copy writes swapped channels
 /// through an RGBA render target, and the port's own display blit must write the same bytes.
-std::atomic<bool> g_gow3_display_bgra{true};
+std::atomic<bool> g_kzsf_display_bgra{true};
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
-    g_gow3_display_bgra.store(attribute.attrib.pixel_format ==
+    g_kzsf_display_bgra.store(attribute.attrib.pixel_format ==
                                   Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb,
                               std::memory_order_relaxed);
-    // gow3: GOW3_FRAME_DUMP_TRIGGER=<file>: when the file exists it is removed and this frame's
-    // guest display buffer and presented image are written to GOW3_DUMP_DIR (default out/dump)
+    // kzsf: KZSF_FRAME_DUMP_TRIGGER=<file>: when the file exists it is removed and this frame's
+    // guest display buffer and presented image are written to KZSF_DUMP_DIR (default out/dump)
     // as raw 32-bit pixels (menus and movies included; the upscaler dumps scene frames only).
-    static const char* frame_dump_trigger = std::getenv("GOW3_FRAME_DUMP_TRIGGER");
+    static const char* frame_dump_trigger = std::getenv("KZSF_FRAME_DUMP_TRIGGER");
     static int frame_dump_index = 0;
     const bool frame_dump = frame_dump_trigger && std::remove(frame_dump_trigger) == 0;
-    // gow3: scaled upscaler presets: the output-size display buffer drawn by the port.
+    // kzsf: scaled upscaler presets: the output-size display buffer drawn by the port.
     TemporalUpscaler::Display display{};
     const bool upscaled = rasterizer->GetUpscaler().DisplayOverride(cpu_address, display);
     VideoCore::ImageId image_id{};
@@ -566,12 +566,12 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
     expected_ratio = static_cast<float>(image_size.width) / static_cast<float>(image_size.height);
 
-    // gow3: FSR 1, RCAS and its strength come from the in-game menu, every frame.
-    const auto& graphics = Gow3Settings::Get();
+    // kzsf: FSR 1, RCAS and its strength come from the in-game menu, every frame.
+    const auto& graphics = KzsfSettings::Get();
     fsr_settings.enable = graphics.fsr1;
     fsr_settings.use_rcas = graphics.rcas;
-    fsr_settings.rcas_attenuation = Gow3Graphics::RcasAttenuation(graphics.rcas_strength);
-    if (const char* diagnostic_env = std::getenv("GOW3_UPSCALER_DIAGNOSTICS");
+    fsr_settings.rcas_attenuation = KzsfGraphics::RcasAttenuation(graphics.rcas_strength);
+    if (const char* diagnostic_env = std::getenv("KZSF_UPSCALER_DIAGNOSTICS");
         diagnostic_env && diagnostic_env[0] == '1') {
         static bool reported = false;
         if (!reported) {
@@ -582,13 +582,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             std::fflush(stdout);
         }
     }
-    Gow3Settings::Get().image_width = int(image_size.width);
-    Gow3Settings::Get().image_height = int(image_size.height);
-    Gow3Settings::Get().window_width = int(frame->width);
-    Gow3Settings::Get().window_height = int(frame->height);
-    Gow3Settings::Get().rcas_applied =
+    KzsfSettings::Get().image_width = int(image_size.width);
+    KzsfSettings::Get().image_height = int(image_size.height);
+    KzsfSettings::Get().window_width = int(frame->width);
+    KzsfSettings::Get().window_height = int(frame->height);
+    KzsfSettings::Get().rcas_applied =
         fsr_settings.use_rcas &&
-        Gow3Graphics::FsrPassRuns(fsr_settings.enable, true, int(image_size.width), int(image_size.height),
+        KzsfGraphics::FsrPassRuns(fsr_settings.enable, true, int(image_size.width), int(image_size.height),
                                   int(frame->width), int(frame->height));
     image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
                                  fsr_settings, frame->is_hdr);
@@ -599,7 +599,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
     pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
 
-    // gow3: frame generation: the frame between the previous frame and this one. Killzone's
+    // kzsf: frame generation: the frame between the previous frame and this one. Killzone's
     // scene frames come through the port's display buffer (upscaled), unlike uncharted_pc.
     frame->generated_count = 0;
     // Above about 165 FPS (6 ms) the game is faster than displays show generated frames:
@@ -673,13 +673,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     SubmitInfo info{};
     draw_scheduler.Flush(info);
 
-    // gow3: the GPU command thread runs at most GOW3_FRAMES_AHEAD (default 1) guest frames
+    // kzsf: the GPU command thread runs at most KZSF_FRAMES_AHEAD (default 1) guest frames
     // ahead of the GPU: it waits here for the frame that many flips back. When the GPU is the
     // bottleneck it finishes frames at an even rate; without this bound the command thread ran
     // ahead and then blocked wherever a resource ran out, so flips (and the guest's frame
     // timing) came in bursts: 12.5/25 ms alternation at 80 FPS. 0 turns it off.
-    // The in-game menu changes it live (Gow3Settings::frames_queued; GOW3_FRAMES_AHEAD at start).
-    const u32 frames_ahead = u32(std::max(0, Gow3Settings::Get().frames_queued.load()));
+    // The in-game menu changes it live (KzsfSettings::frames_queued; KZSF_FRAMES_AHEAD at start).
+    const u32 frames_ahead = u32(std::max(0, KzsfSettings::Get().frames_queued.load()));
     if (!frames_ahead) {
         recent_frame_ticks.clear();
     } else {
@@ -810,7 +810,7 @@ void Presenter::PresentLoadingFrame() {
                            range);
     barrier(vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
             vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eColorAttachmentWrite);
-    Gow3Overlay::Render(cmdbuf, swapchain.ImageView(), extent);
+    KzsfOverlay::Render(cmdbuf, swapchain.ImageView(), extent);
     barrier(vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
             vk::AccessFlagBits::eColorAttachmentWrite, {});
     SubmitInfo info{};
@@ -836,7 +836,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     };
 
-    // gow3: a minimized window has no pixels on Windows (0x0); keep the swapchain and skip
+    // kzsf: a minimized window has no pixels on Windows (0x0); keep the swapchain and skip
     // presenting until the window is restored.
     if (window.GetWidth() == 0 || window.GetHeight() == 0) {
         free_frame();
@@ -849,7 +849,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
     }
 
-    // gow3: frame generation: the generated frame first, then the game's own, evenly spaced
+    // kzsf: frame generation: the generated frame first, then the game's own, evenly spaced
     // over the interval between the game's frames (the generated one belongs to the time
     // before this frame). A frame shown again has none.
     u32 generated = is_reusing_frame || !frame_generator->Wanted() ? 0 : frame->generated_count;
@@ -861,7 +861,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             game_frame_ms = game_frame_ms + (ms - game_frame_ms) * 0.1;
         }
         last_game_present = start;
-        Gow3Settings::Get().game_frame_ms = float(game_frame_ms.load());
+        KzsfSettings::Get().game_frame_ms = float(game_frame_ms.load());
     }
     const auto step = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::duration<double, std::milli>(game_frame_ms / (generated + 1)));
@@ -900,9 +900,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (shown && !behind()) {
         wait_until(start + step * shown);
     }
-    Gow3Settings::Get().frame_gen_active = shown != 0;
+    KzsfSettings::Get().frame_gen_active = shown != 0;
     if (!is_reusing_frame && is_game_frame &&
-        Gow3Settings::Get().startup_frame_gen == Gow3Settings::FrameGenFsr3) {
+        KzsfSettings::Get().startup_frame_gen == KzsfSettings::FrameGenFsr3) {
         static u32 real_frames = 0, prepared_frames = 0, shown_frames = 0;
         ++real_frames;
         prepared_frames += frame->generated_count != 0;
@@ -945,7 +945,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
                    vk::to_string(reset_result));
     }
 
-    // gow3: the frame is blitted (letterboxed) straight into the swapchain image.
+    // kzsf: the frame is blitted (letterboxed) straight into the swapchain image.
     const vk::Image swapchain_image = swapchain.Image();
     auto& scheduler = present_scheduler;
     const auto cmdbuf = scheduler.CommandBuffer();
@@ -1004,8 +1004,8 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
                          vk::ImageLayout::eTransferDstOptimal,
                          MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
                          vk::Filter::eLinear);
-        // gow3: the settings menu / FPS counter over the frame, at display resolution.
-        const bool overlay = Gow3Overlay::Visible();
+        // kzsf: the settings menu / FPS counter over the frame, at display resolution.
+        const bool overlay = KzsfOverlay::Visible();
         const std::array post_barriers{
             vk::ImageMemoryBarrier{
                 .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
@@ -1035,7 +1035,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
                                vk::PipelineStageFlagBits::eAllCommands,
                                vk::DependencyFlagBits::eByRegion, {}, {}, post_barriers);
         if (overlay) {
-            Gow3Overlay::Render(cmdbuf, swapchain.ImageView(), extent);
+            KzsfOverlay::Render(cmdbuf, swapchain.ImageView(), extent);
             const vk::ImageMemoryBarrier to_present{
                 .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
                 .dstAccessMask = vk::AccessFlagBits::eNone,

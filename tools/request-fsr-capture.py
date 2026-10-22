@@ -20,7 +20,7 @@ def main():
         if 'exit_code' in status: raise ValueError('The capture game has already closed.')
         tasks=subprocess.run(['tasklist','/FI',f'PID eq {int(status["pid"])}','/FO','CSV','/NH'],
             capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-        if not any(name in tasks.stdout.lower() for name in ('gow3-probe-fsr-test.exe','gow3-probe-fsr-capture.exe')):
+        if not any(name in tasks.stdout.lower() for name in ('kzsf-probe-fsr-test.exe','kzsf-probe-fsr-capture.exe')):
             raise ValueError('The FSR capture game is not running.')
     except (OSError,ValueError,KeyError) as exc:
         print('Start python tools/run-fps-test.py --fsr-test temporal-no-jitter --capture first.',exc); return 1

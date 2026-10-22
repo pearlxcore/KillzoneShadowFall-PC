@@ -12,14 +12,14 @@ import kzsf_local as ui
 
 MODES={
     'baseline': {},
-    'linear-readback': {'GOW3_READBACK_LINEAR':'1'},
-    'strict-readback': {'GOW3_STALE_READBACK':'0','GOW3_DEFERRED_READBACK':'0'},
-    'no-fsr': {'GOW3_UPSCALER':'none'},
-    'native-linear': {'GOW3_UPSCALER':'none','GOW3_READBACK_LINEAR':'1'},
+    'linear-readback': {'KZSF_READBACK_LINEAR':'1'},
+    'strict-readback': {'KZSF_STALE_READBACK':'0','KZSF_DEFERRED_READBACK':'0'},
+    'no-fsr': {'KZSF_UPSCALER':'none'},
+    'native-linear': {'KZSF_UPSCALER':'none','KZSF_READBACK_LINEAR':'1'},
 }
-KEYS=('KZSF_BETA_MEMORY_LAYOUT','GOW3_DMEM_MB','GOW3_FPS_LIMIT','GOW3_UPSCALER',
-      'GOW3_READBACK_LINEAR','GOW3_STALE_READBACK','GOW3_DEFERRED_READBACK',
-      'GOW3_ASYNC_SHADERS','GOW3_DRAW_PIPE','KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO')
+KEYS=('KZSF_BETA_MEMORY_LAYOUT','KZSF_DMEM_MB','KZSF_FPS_LIMIT','KZSF_UPSCALER',
+      'KZSF_READBACK_LINEAR','KZSF_STALE_READBACK','KZSF_DEFERRED_READBACK',
+      'KZSF_ASYNC_SHADERS','KZSF_DRAW_PIPE','KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO')
 
 def main():
     parser=argparse.ArgumentParser()
@@ -30,7 +30,7 @@ def main():
     folder=ui.ROOT/'out'/('foliage-'+args.mode+'-'+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
     # Isolate these comparisons from diagnostics inherited through a BAT window.
-    spec['env']['GOW3_READBACK_LINEAR']='0'
+    spec['env']['KZSF_READBACK_LINEAR']='0'
     spec['env']['KZSF_HEALTH_TRACE']='0'
     spec['env'].pop('KZSF_ALLOCATION_DUMP',None)
     spec['env'].update(MODES[args.mode])
@@ -38,9 +38,9 @@ def main():
             'settings':{k:spec['env'][k] for k in KEYS}}
     if args.report_only:
         print(json.dumps(report,indent=2)); return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
                            capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the current game before running this comparison.'); return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok: print(reason); return 1

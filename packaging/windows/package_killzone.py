@@ -15,8 +15,36 @@ import subprocess
 import sys
 import time
 import zipfile
+import struct
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def cj_package_files(source):
+    """Allowlist the installed CJ manifest and its checksummed payloads only."""
+    manifest=source/'model.kzmd'
+    data=manifest.read_bytes()
+    if len(data)<32: raise ValueError('CJ manifest is truncated')
+    h=struct.unpack_from('<8I',data)
+    if data[:4]!=b'KZMD' or h[1]!=1 or h[2]!=98 or not 1<=h[3]<=16 or not 1<=h[4]<=16 or h[5]!=1 or h[7] or len(data)!=32+h[3]*40+h[4]*12:
+        raise ValueError('Unsupported CJ manifest')
+    files=[manifest]
+    def payload(name,size,crc):
+        path=source/name
+        if size>64*1024*1024+16: raise ValueError('CJ payload too large')
+        raw=path.read_bytes()
+        if len(raw)!=size or zlib.crc32(raw)!=crc: raise ValueError('CJ payload checksum mismatch: '+name)
+        files.append(path)
+    for i in range(h[3]):
+        r=struct.unpack_from('<10I',data,32+i*40)
+        if not r[0] or r[3]!=68+r[0]*44 or r[2]>=h[4] or any(r[7:]): raise ValueError('Unsupported CJ geometry')
+        payload(f'primitive-{i}.va',r[3],r[5]);payload(f'primitive-{i}.ia',r[4],r[6])
+    for i in range(h[4]):
+        size,crc,reserved=struct.unpack_from('<3I',data,32+h[3]*40+i*12)
+        if reserved: raise ValueError('Unsupported CJ texture record')
+        payload(f'texture-{i}.rgba',size,crc)
+    return files
 
 
 def main():
@@ -38,8 +66,8 @@ def main():
         shutil.copy2(source, target)
 
     strip = args.msys / 'clang64/bin/llvm-strip.exe'
-    for binary, target in [('gow3-probe.exe', 'out/gow3-probe-launcher.exe'),
-                           ('gow3-gpu-capabilities.exe', 'out/gow3-gpu-capabilities.exe')]:
+    for binary, target in [('kzsf-probe.exe', 'out/kzsf-game.exe'),
+                           ('kzsf-gpu-capabilities.exe', 'out/kzsf-gpu-capabilities.exe')]:
         (dest / 'out').mkdir(exist_ok=True)
         subprocess.run([str(strip), '--strip-debug', '-o', str(dest / target),
                         str(ROOT / 'out' / binary)], check=True)
@@ -53,11 +81,16 @@ def main():
     copy(ROOT / 'packaging/windows/prepare_killzone.py', 'packaging/windows/prepare_killzone.py')
     copy(ROOT / 'LICENSE', 'LICENSE')
     copy(ROOT / 'README.md', 'SOURCE-README.md')
+    copy(ROOT / 'CHANGELOG.md', 'CHANGELOG.md')
+    cj_files=cj_package_files(ROOT/'user/models/cj')
+    cj_allowlist={Path('user/models/cj')/p.name for p in cj_files}
+    for source in cj_files:
+        copy(source,Path('user/models/cj')/source.name)
     # Read PE imports recursively. ldd can return a partial DLL graph when Windows
     # loader probing fails; static traversal must account for every dependency.
     bindir = args.msys / 'clang64/bin'
     available = {p.name.lower(): p for p in bindir.glob('*.dll')}
-    pending = [ROOT / 'out/gow3-probe.exe', ROOT / 'out/gow3-gpu-capabilities.exe',
+    pending = [ROOT / 'out/kzsf-probe.exe', ROOT / 'out/kzsf-gpu-capabilities.exe',
                ROOT / 'Killzone Launcher.exe']
     bundled = set()
     while pending:
@@ -105,7 +138,7 @@ def main():
         '   Start with Standard, 60 FPS, Native. Prepare Game.bat is a setup fallback.\n\n'
         'Python and runtime DLLs are included. MSYS2 is not required to play.\n'
         'A Vulkan 1.3 capable GPU/driver and 64-bit Windows 10/11 are required.\n'
-        'No game files, saves, settings or shader caches are included.\n'
+        'CJ model assets are included. No Killzone game files, saves, settings or shader caches are included.\n'
         'Preparation generates game-derived files locally under out/.\n'
         'Keep user/ for saves/settings; session logs are under out/.\n'
         'Offline Botzone loading has been tested on The Divide; extended combat\n'
@@ -127,8 +160,8 @@ def main():
     smoke_user = ROOT / 'out' / (name + '-smoke-user-' + str(time.time_ns()))
     smoke_user.mkdir(exist_ok=False)
     clean_env = dict(os.environ, PATH=os.environ['SystemRoot'] + '/System32;' + os.environ['SystemRoot'],
-                     PYTHONDONTWRITEBYTECODE='1', GOW3_USER_DIR=str(smoke_user),
-                     GOW3_GPU_USER_DIR=str(smoke_user))
+                     PYTHONDONTWRITEBYTECODE='1', KZSF_USER_DIR=str(smoke_user),
+                     KZSF_GPU_USER_DIR=str(smoke_user))
     for key in ('PYTHONHOME', 'PYTHONPATH'):
         clean_env.pop(key, None)
     subprocess.run([str(dest / 'runtime/python.exe'), '-B', '-c',
@@ -138,18 +171,19 @@ def main():
                     'runpy.run_path("packaging/windows/prepare_killzone.py",run_name="verify_setup");'
                     'print("Packaged launcher and setup imports: OK")'],
                    cwd=dest, env=clean_env, check=True, timeout=25)
-    native = subprocess.run([str(dest / 'out/gow3-probe-launcher.exe')], cwd=dest,
+    native = subprocess.run([str(dest / 'out/kzsf-game.exe')], cwd=dest,
                             env=clean_env, capture_output=True, timeout=20)
     if b'usage:' not in (native.stdout + native.stderr).lower():
         raise RuntimeError(f'Packaged runtime failed its no-argument startup check: {native.returncode}')
     files = [p for p in dest.rglob('*') if p.is_file()]
     for path in files:
         rel = path.relative_to(dest)
-        if (rel.parts[0].lower() in ('user', 'cache', 'savedata') or
+        if ((rel.parts[0].lower() in ('user', 'cache', 'savedata') and rel not in cj_allowlist) or
             path.name.lower() in forbidden or path.suffix.lower() in ('.dmp', '.log', '.prx', '.sprx', '.pkg')):
             raise RuntimeError('Unexpected artifact after startup checks: ' + str(rel))
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    manifest = {'version': version, 'source_commit': revision, 'built_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+    dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True).strip())
+    manifest = {'version': version, 'source_commit': revision, 'source_dirty':dirty, 'built_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
                 'files': {str(p.relative_to(dest)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in files}}
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')

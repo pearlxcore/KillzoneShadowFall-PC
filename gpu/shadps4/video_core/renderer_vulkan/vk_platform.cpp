@@ -62,7 +62,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
 
     // Diagnostic mode: retain the first invalid Vulkan command instead of
     // continuing into the driver with a known-invalid recording.
-    const char* stop = std::getenv("GOW3_VK_STOP_ON_ERROR");
+    const char* stop = std::getenv("KZSF_VK_STOP_ON_ERROR");
     if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError && stop && stop[0] == '1') {
         std::fprintf(stderr, "STOP: Vulkan validation error: %s\n%s\n",
                      callback_data->pMessageIdName ? callback_data->pMessageIdName : "<null>",
@@ -302,7 +302,7 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
 
     const auto layers = GetInstanceLayers(enable_validation, enable_crash_diagnostic);
     auto extensions = GetLayerExtensions(GetInstanceExtensions(window_type, true), layers);
-    // gow3: DLSS (optional bridge DLL) needs its own instance extensions.
+    // kzsf: DLSS (optional bridge DLL) needs its own instance extensions.
     if (Dlss* dlss = Dlss::Get()) {
         dlss->AppendInstanceExtensions(extensions);
     }

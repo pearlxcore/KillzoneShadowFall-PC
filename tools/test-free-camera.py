@@ -18,16 +18,16 @@ def main():
     values=ui.load_preferences()
     folder=ui.ROOT/'out'/('free-camera-'+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/('out/gow3-probe-free-camera-body.exe' if args.body else 'out/gow3-probe-free-camera.exe'))
+    spec['command'][0]=str(ui.ROOT/('out/kzsf-probe-free-camera-body.exe' if args.body else 'out/kzsf-probe-free-camera.exe'))
     spec['env'].update(KZSF_FREE_CAMERA_TEST='1',KZSF_FREE_CAMERA_BODY='1' if args.body else '0',
-                       GOW3_CONFIG=str(folder/'settings.ini'))
+                       KZSF_CONFIG=str(folder/'settings.ini'))
     report={'executable':spec['command'][0],'flag':spec['env']['KZSF_FREE_CAMERA_TEST'],'body_test':args.body,
             'controls':'F8 toggle, F7 recenter; W/S or left stick up/down rise/lower; A/D or left stick left/right strafe; R1/E forward, L1/Q backward; mouse/right stick/arrows look; PageUp/PageDown also rise/lower; Shift fast, Ctrl slow'}
     if args.report_only:
         print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
                            capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the running game before starting the free-camera test.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:print(reason);return 1
@@ -39,7 +39,7 @@ def main():
         profile=folder/'user';profile.mkdir()
         if (ui.ROOT/'user/savedata').is_dir():
             shutil.copytree(ui.ROOT/'user/savedata',profile/'savedata')
-        spec['env'].update(GOW3_USER_DIR=str(profile),GOW3_PRECOMPILE='0',GOW3_WINDOW_FOCUS='0')
+        spec['env'].update(KZSF_USER_DIR=str(profile),KZSF_PRECOMPILE='0',KZSF_WINDOW_FOCUS='0')
         with (folder/'stdout.log').open('wb') as out,(folder/'stderr.log').open('wb') as err:
             game=subprocess.Popen(spec['command'],cwd=ui.ROOT,env=spec['env'],stdout=out,stderr=err,
                                   creationflags=subprocess.CREATE_NO_WINDOW)

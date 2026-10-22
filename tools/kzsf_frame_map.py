@@ -1,4 +1,4 @@
-"""Map captured Killzone frame evidence without assuming GOW3's camera or post shaders.
+"""Map captured Killzone frame evidence without assuming KZSF's camera or post shaders.
 
 Usage: python tools/kzsf_frame_map.py <frame.txt> [...]
 Prints JSON; addresses are capture-local evidence, never runtime patch constants.
@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import sys
 
-from gow3_frame_map import buffers, depth, passes, targets
+from kzsf_frame_map_common import buffers, depth, passes, targets
 
 
 def multiply(a,b):
@@ -27,7 +27,7 @@ def camera_candidate(values,float_digits=6):
     residual=max(abs(v-(1.0 if i%5==0 else 0.0))
                  for i,v in enumerate(multiply(view,inverse)))
     if residual>0.02: return None
-    # The observed perspective has w=-view_z; verify rather than reusing GOW3's +z.
+    # The observed perspective has w=-view_z; verify rather than reusing KZSF's +z.
     if (projection[0]<=0 or projection[5]<=0 or abs(projection[11]+1)>1e-5
             or abs(projection[15])>1e-5 or projection[14]>=0):
         return None
@@ -101,7 +101,7 @@ def analyze(path):
             'scene_depth_other_passes':[p[0] for p in ps if depth(p[3])==scene_depth],
             'camera_candidates':cameras,'projection_groups':projection_groups,
             'hdr_transition_candidates':transitions,
-            'gow3_compute_trigger_present':any(p[1]=='COMPUTE' and
+            'kzsf_compute_trigger_present':any(p[1]=='COMPUTE' and
                 '000000009a9cf8a9' in p[3].splitlines()[0] for p in ps),
             'limitations':['Capture-local addresses must not become hardcoded pointers.',
                 'Text matrices need full-precision validation and camera-motion tests.',

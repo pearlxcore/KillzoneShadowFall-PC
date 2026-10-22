@@ -32,14 +32,14 @@ Os arquivos do jogo nunca são alterados. A cada início é montada uma árvore 
 leitura; os saves continuam na pasta de sempre.
 
 Mods que trocam `eboot.bin`, `sce_module` ou `sce_sys`, injetores de DLL e plugins de script não
-são suportados. Patches de código ficam em `patches/` / `GOW3_PATCHES`. Links simbólicos dentro
+são suportados. Patches de código ficam em `patches/` / `KZSF_PATCHES`. Links simbólicos dentro
 do mod são recusados.
 
 Pelo terminal:
 
 ```sh
-GOW3_GAME_DIR=/caminho/CUSA01623 GOW3_MODS_DIR=/caminho/mods python run.py
-GOW3_GAME_DIR=/caminho/CUSA01623 GOW3_MODS_ENABLED=0 python run.py
+KZSF_GAME_DIR=/caminho/CUSA01623 KZSF_MODS_DIR=/caminho/mods python run.py
+KZSF_GAME_DIR=/caminho/CUSA01623 KZSF_MODS_ENABLED=0 python run.py
 ```
 
 Ordem e desativações ficam em `mods.json` no diretório de dados:
@@ -48,7 +48,7 @@ Ordem e desativações ficam em `mods.json` no diretório de dados:
 {"order": ["Primeiro", "Segundo"], "disabled": ["Primeiro"]}
 ```
 
-Pastas novas entram ativadas, no fim da lista, em ordem alfabética. `GOW3_MODS_CONFIG` muda o
+Pastas novas entram ativadas, no fim da lista, em ordem alfabética. `KZSF_MODS_CONFIG` muda o
 caminho desse arquivo.
 
 # Patches de terceiros (XML do shadPS4)
@@ -67,4 +67,4 @@ Tipos de linha aceitos: `bytes`, `bytes16/32/64`, `float32/64`, `utf8`, `utf16`.
 linhas `mask` (busca por padrão) ou com endereço fora do eboot é ignorado inteiro, com aviso no
 log. Os patches de terceiros são aplicados depois dos embutidos
 (`patches/God_of_War_III_Remastered.xml`): onde os dois escrevem, vence o de terceiros. Pelo
-terminal: `GOW3_PATCHES_DIR=/caminho GOW3_PATCHES_CONFIG=/caminho/patches.json python run.py`.
+terminal: `KZSF_PATCHES_DIR=/caminho KZSF_PATCHES_CONFIG=/caminho/patches.json python run.py`.

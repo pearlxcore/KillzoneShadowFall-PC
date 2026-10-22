@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tools/restart.sh [run.sh args]: restarts the game with frame stats, GOW3_PAD_FILE and
-# GOW3_TOGGLE_FILE (out/pad, out/toggles) and enters the level (title: cross, cross).
+# tools/restart.sh [run.sh args]: restarts the game with frame stats, KZSF_PAD_FILE and
+# KZSF_TOGGLE_FILE (out/pad, out/toggles) and enters the level (title: cross, cross).
 cd -- "$(dirname -- "$0")/.."
 T=tools
-pkill -x gow3-probe; sleep 2; pkill -9 -x gow3-probe; sleep 1
+pkill -x kzsf-probe; sleep 2; pkill -9 -x kzsf-probe; sleep 1
 : > out/pad; echo ${BASE_MASK:-0} > out/toggles
-GOW3_PAD_FILE=$PWD/out/pad GOW3_FRAME_STATS=1 GOW3_TOGGLE_FILE=$PWD/out/toggles GOW3_FPS_LIMIT=0 \
+KZSF_PAD_FILE=$PWD/out/pad KZSF_FRAME_STATS=1 KZSF_TOGGLE_FILE=$PWD/out/toggles KZSF_FPS_LIMIT=0 \
     ${CPUS:+taskset -c $CPUS} setsid stdbuf -oL -eL bash run.sh "$@" > out/session.log 2>&1 < /dev/null &
 # Title menu: the pad is opened and frame stats report a light scene for a while.
 for i in $(seq 1 180); do

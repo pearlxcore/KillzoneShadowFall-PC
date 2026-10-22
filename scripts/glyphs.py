@@ -17,7 +17,7 @@ import struct
 
 VERSION = 1  # of the drawing: a change redraws the cached copies
 WADS = ('EXEC/WAD/PS4_LE/R_UI.WAD', 'EXEC/WAD/PS4_LE/R_PERM.WAD')
-FONT = Path(__file__).resolve().parent.parent / 'launcher' / 'gowfont.ttf'
+FONT = Path(__file__).resolve().parent.parent / 'launcher' / 'kzsf-font.ttf'
 
 # Texture (the first hash of its name) -> how it is drawn and the game button(s) it shows.
 # inline: the 64 px icons inside text; qte: the large prompt on black; atlas: two QTE labels,
@@ -64,7 +64,7 @@ def entries(data):
 
 
 def pad_buttons(pad_map):
-    """Game button -> gamepad button, with a GOW3_PAD_MAP value ('cross=b,circle=a') applied.
+    """Game button -> gamepad button, with a KZSF_PAD_MAP value ('cross=b,circle=a') applied.
     L2/R2 stay on the triggers, as in the runtime."""
     buttons = dict(DEFAULT_MAP)
     for entry in (pad_map or '').split(','):
@@ -89,7 +89,7 @@ def glyph(host, style, faces=None):
 
 
 def parse_gamepad(output):
-    """(style, faces, name) from the line `gow3-probe --gamepad` prints, None without a gamepad."""
+    """(style, faces, name) from the line `kzsf-probe --gamepad` prints, None without a gamepad."""
     for line in output.splitlines():
         if line.startswith('Gamepad: type='):
             fields, _, name = line[len('Gamepad: '):].partition(' name=')
@@ -102,7 +102,7 @@ def parse_gamepad(output):
 
 
 def resolve(choice, probe_output=''):
-    """(style, faces, controller name) for a GOW3_GLYPH_STYLE value. 'auto' follows the connected
+    """(style, faces, controller name) for a KZSF_GLYPH_STYLE value. 'auto' follows the connected
     gamepad (the PlayStation glyphs without one); a chosen style uses its own letters."""
     if choice in STYLES:
         return choice, None, ''

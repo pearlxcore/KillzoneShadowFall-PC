@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 ROOT = Path(__file__).resolve().parent.parent
-LAUNCHER_VERSION = '0.2.0'
+LAUNCHER_VERSION = '0.3.0'
 KOFI_URL = 'https://ko-fi.com/R6R524N7X'
 sys.path.insert(0, str(ROOT / 'scripts'))
 from graphics_options import read_ini, write_keys
@@ -32,7 +32,7 @@ OPTION_LABELS = {
     'upscaler': {'none': 'Native', 'fsr3': 'FSR 3.1 AA', 'taa': 'TAA'},
     'display_mode': {'windowed': 'Windowed', 'borderless': 'Borderless', 'fullscreen': 'Fullscreen'},
     'frames_queued': {'0': 'Automatic', '1': '1 frame', '2': '2 frames'},
-    'frame_gen': {'off':'Off', 'fsr3':'FSR 3.1 — 2x'},
+    'frame_gen': {'off':'Off', 'fsr3':'FSR 3.1 - 2x'},
     'render_output': {'1920x1080':'1080p (1920 × 1080)', '2560x1440':'1440p (2560 × 1440)',
                       '3200x1800':'1800p (3200 × 1800)', '3840x2160':'4K (3840 × 2160)'},
     'anisotropy': {'0':'Game default', '2':'2x', '4':'4x', '8':'8x', '16':'16x'},
@@ -40,9 +40,9 @@ OPTION_LABELS = {
                      '0':'Game default', '0.5':'Slightly softer (+0.5)', '1':'Softer (+1)', '2':'Softer (+2)'},
 }
 RENDER_OUTPUTS = ('1920x1080','2560x1440','3200x1800','3840x2160')
-GRAPHICS_EXE = 'out/gow3-probe-launcher.exe'
-PROFILES = {'Current build': 'out/gow3-probe-launcher.exe',
-            'Beta memory layout (test)': 'out/gow3-probe-launcher.exe'}
+GRAPHICS_EXE = 'out/kzsf-game.exe'
+PROFILES = {'Current build': 'out/kzsf-game.exe',
+            'Beta memory layout (test)': 'out/kzsf-game.exe'}
 BUTTONS = [('cross','Cross / Jump','Space','a'), ('circle','Circle','Left Ctrl','b'),
            ('square','Square','E','x'), ('triangle','Triangle','Q','y'),
            ('l1','L1','1','leftshoulder'), ('r1','R1','3','rightshoulder'),
@@ -171,7 +171,7 @@ def persist(values):
     temp.write_text(json.dumps(values, indent=2)+'\n', encoding='utf-8')
     temp.replace(PREFS)
     if not CONFIG.exists():
-        CONFIG.write_text((ROOT/'gow3.ini').read_text(encoding='utf-8') if (ROOT/'gow3.ini').exists() else '', encoding='utf-8')
+        CONFIG.write_text((ROOT/'kzsf.ini').read_text(encoding='utf-8') if (ROOT/'kzsf.ini').exists() else '', encoding='utf-8')
     updates = {k:str(int(values[k])) for k in ('vsync','rcas','show_fps','async_shaders','stale_readback','deferred_readback')}
     updates.update(display_mode=values['display_mode'], fps_limit=values['fps'],
                    frames_queued=values['frames_queued'], upscaler=values['upscaler'],
@@ -237,19 +237,20 @@ def prepare_storage(values):
 
 def launch_spec(values, folder):
     env = dict(os.environ)
-    for key,variable in (('cache_dir','GOW3_CACHE_DIR'),('savedata_dir','GOW3_SAVEDATA_DIR')):
+    for key,variable in (('cache_dir','KZSF_CACHE_DIR'),('savedata_dir','KZSF_SAVEDATA_DIR')):
         env.pop(variable,None)
         if values.get(key,'').strip(): env[variable]=storage_directory(values,key).as_posix()
     for key in PLAYER_HOOK_ENV:
         env.pop(key,None)
     for key in ('KZSF_ORIGINAL_CLOCK','KZSF_UNIFIED_TSC','KZSF_FILE_TRACE','KZSF_RWLOCK_TRACE',
-                'GOW3_TRACE_IMPORTS','GOW3_TSC_HZ','VK_INSTANCE_LAYERS','VK_LOADER_LAYERS_ENABLE',
-                'GOW3_PAD_FILE','GOW3_NO_MOVIES','GOW3_AUDIO','GOW3_AUDIO_DUMP','GOW3_WRITE_LOG',
-                'GOW3_USER_DIR','GOW3_GPU_USER_DIR','GOW3_DATA_DIR','GOW3_FREEZE_EXIT','KZSF_ENGINE_TURN',
-                'KZSF_TURN_LOG','KZSF_PLAYER_TURN','KZSF_FSR_NATIVE','KZSF_FSR_QUALITY','GOW3_RENDER_RES',
-                'GOW3_SCENE_NATIVE','GOW3_NATIVE_AA','GOW3_FRAME_GEN','GOW3_GAME_TAA_PS',
-                'GOW3_UI_TRIGGER_VS','GOW3_KZ_VELOCITY','GOW3_DISPLAY_BLIT',
-                'GOW3_PRESET_FILE','GOW3_SCENE_DEBUG','KZSF_DIRECT_TEXTURE_MEMO','KZSF_FREE_CAMERA_TEST',
+                'KZSF_TRACE_IMPORTS','KZSF_TSC_HZ','VK_INSTANCE_LAYERS','VK_LOADER_LAYERS_ENABLE',
+                'KZSF_PAD_FILE','KZSF_NO_MOVIES','KZSF_AUDIO','KZSF_AUDIO_DUMP','KZSF_WRITE_LOG',
+                'KZSF_USER_DIR','KZSF_GPU_USER_DIR','KZSF_DATA_DIR','KZSF_FREEZE_EXIT','KZSF_ENGINE_TURN',
+                'KZSF_CUSTOM_VERTEX_PROBE_FILE','KZSF_CUSTOM_INDEX_PROBE_FILE','KZSF_CUSTOM_MATERIAL_PROBE','KZSF_CUSTOM_TEXTURE_PROBE_FILE','KZSF_CUSTOM_OWNED_TEXTURE_PROBE','KZSF_CUSTOM_MODEL_PROBE_DIR','KZSF_CUSTOM_MODEL_PREVIEW','KZSF_CJ_MODEL_DIR',
+                'KZSF_TURN_LOG','KZSF_PLAYER_TURN','KZSF_FSR_NATIVE','KZSF_FSR_QUALITY','KZSF_RENDER_RES',
+                'KZSF_SCENE_NATIVE','KZSF_NATIVE_AA','KZSF_FRAME_GEN','KZSF_GAME_TAA_PS',
+                'KZSF_UI_TRIGGER_VS','KZSF_KZ_VELOCITY','KZSF_DISPLAY_BLIT',
+                'KZSF_PRESET_FILE','KZSF_SCENE_DEBUG','KZSF_DIRECT_TEXTURE_MEMO','KZSF_FREE_CAMERA_TEST',
                 'KZSF_FREE_CAMERA_BODY','KZSF_CAMERA_OBSERVER','KZSF_CAMERA_CALL_BRIDGE','KZSF_THIRD_PERSON_TEST','KZSF_THIRD_PERSON_AUTOTEST'):
         env.pop(key, None)
     beta = values['profile'] == 'Beta memory layout (test)'
@@ -265,63 +266,63 @@ def launch_spec(values, folder):
         KZSF_DISABLE_FILM_GRAIN=str(int(not values.get('film_grain',True))),
         KZSF_CAMERA_CONTROLS='1',KZSF_FOV_PERCENT=values.get('fov_percent','100'),
         KZSF_CAMERA_SHAKE=str(int(values.get('camera_shake',True))),
-        GOW3_DMEM_MB='4608' if beta else '6144', GOW3_FPS_LIMIT=values['fps'], GOW3_VBLANK_HZ='60',
-        GOW3_VK_VALIDATION='0', GOW3_VK_VALIDATION_SYNC='0', GOW3_VK_STOP_ON_ERROR='0',
-        VK_LOADER_LAYERS_DISABLE='~implicit~', GOW3_VK_RECORD_THREAD='0', GOW3_DRAW_PIPE='0',
-        GOW3_FULL_BARRIERS='0', GOW3_TOGGLE_FILE=str(ROOT/'out/renderer-stability-toggles.txt'),
-        GOW3_GPU_LOG='error', GOW3_AUDIO_STATS='1', GOW3_FRAME_STATS='1',
-        GOW3_FREEZE_SECONDS='15', GOW3_STALL_SECONDS='60',
-        GOW3_WINDOW_FOCUS='1', GOW3_CONFIG=str(CONFIG), GOW3_WINDOW_SIZE=values['window_size'],
-        GOW3_USER_DIR=str(ROOT/'user'), GOW3_GPU_USER_DIR=str(ROOT/'user'),
-        GOW3_ASYNC_SHADERS=str(int(values['async_shaders'])), GOW3_UPSCALER=values['upscaler'],
-        GOW3_READBACK_LINEAR='1', GOW3_RCAS=str(int(values['rcas'])),
+        KZSF_DMEM_MB='4608' if beta else '6144', KZSF_FPS_LIMIT=values['fps'], KZSF_VBLANK_HZ='60',
+        KZSF_VK_VALIDATION='0', KZSF_VK_VALIDATION_SYNC='0', KZSF_VK_STOP_ON_ERROR='0',
+        VK_LOADER_LAYERS_DISABLE='~implicit~', KZSF_VK_RECORD_THREAD='0', KZSF_DRAW_PIPE='0',
+        KZSF_FULL_BARRIERS='0', KZSF_TOGGLE_FILE=str(ROOT/'out/renderer-stability-toggles.txt'),
+        KZSF_GPU_LOG='error', KZSF_AUDIO_STATS='1', KZSF_FRAME_STATS='1',
+        KZSF_FREEZE_SECONDS='15', KZSF_STALL_SECONDS='60',
+        KZSF_WINDOW_FOCUS='1', KZSF_CONFIG=str(CONFIG), KZSF_WINDOW_SIZE=values['window_size'],
+        KZSF_USER_DIR=str(ROOT/'user'), KZSF_GPU_USER_DIR=str(ROOT/'user'),
+        KZSF_ASYNC_SHADERS=str(int(values['async_shaders'])), KZSF_UPSCALER=values['upscaler'],
+        KZSF_READBACK_LINEAR='1', KZSF_RCAS=str(int(values['rcas'])),
         KZSF_NATIVE_PROMPTS='1', KZSF_PROMPT_STYLE=str(values.get('prompt_style','0')),
-        GOW3_MOUSE_AIM=str(int(values.get('mouse_aim',True))),
-        GOW3_MOUSE_SENSITIVITY=str(values.get('mouse_sensitivity','100')),
-        GOW3_MOUSE_ADS_SENSITIVITY=str(values.get('mouse_ads_sensitivity',values.get('mouse_sensitivity','100'))),
-        GOW3_MOUSE_HORIZONTAL_SPEED=str(values.get('mouse_horizontal_speed','100')),
-        GOW3_MOUSE_VERTICAL_SPEED=str(values.get('mouse_vertical_speed','100')),
-        GOW3_MOUSE_INVERT_Y=str(int(values.get('mouse_invert_y',False))),
-        GOW3_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
+        KZSF_MOUSE_AIM=str(int(values.get('mouse_aim',True))),
+        KZSF_MOUSE_SENSITIVITY=str(values.get('mouse_sensitivity','100')),
+        KZSF_MOUSE_ADS_SENSITIVITY=str(values.get('mouse_ads_sensitivity',values.get('mouse_sensitivity','100'))),
+        KZSF_MOUSE_HORIZONTAL_SPEED=str(values.get('mouse_horizontal_speed','100')),
+        KZSF_MOUSE_VERTICAL_SPEED=str(values.get('mouse_vertical_speed','100')),
+        KZSF_MOUSE_INVERT_Y=str(int(values.get('mouse_invert_y',False))),
+        KZSF_PAD_LOOK_GAIN=str(values.get('controller_look_gain','100')),
         KZSF_PAD_DRIFT_DEADZONE=str(values.get('controller_drift_deadzone','8')),
-        GOW3_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
-        GOW3_PAD_TURN_SPEED=str(values.get('controller_turn_speed','100')),
+        KZSF_PAD_AIM_GAIN=str(values.get('controller_aim_gain','100')),
+        KZSF_PAD_TURN_SPEED=str(values.get('controller_turn_speed','100')),
         KZSF_SPRINT_TURN_SPEED=str(values.get('sprint_turn_speed','100')),
         KZSF_LOOK_CURVE=str(values.get('look_curve','1')),
         KZSF_LOOK_DEADZONE=str(values.get('look_deadzone','8')),
         KZSF_LOOK_RAMP=str(int(values.get('look_ramp',False))),
         KZSF_LOOK_ASSIST=str(int(values.get('look_assist',True))),
-        GOW3_PAD_PITCH_SPEED=str(values.get('controller_pitch_speed','100')),
-        GOW3_DEFERRED_READBACK=str(int(values['deferred_readback'])),
-        GOW3_STALE_READBACK=str(int(values['stale_readback'])), GOW3_FRAMES_AHEAD=values['frames_queued'])
+        KZSF_PAD_PITCH_SPEED=str(values.get('controller_pitch_speed','100')),
+        KZSF_DEFERRED_READBACK=str(int(values['deferred_readback'])),
+        KZSF_STALE_READBACK=str(int(values['stale_readback'])), KZSF_FRAMES_AHEAD=values['frames_queued'])
     keyboard_defaults={key:keyboard for key,label,keyboard,pad in BUTTONS}
     keyboard_defaults.update(values['keys'])
-    env['GOW3_KEY_MAP'] = ','.join(f'{k}={v}' for k,v in keyboard_defaults.items() if v)
-    env['GOW3_PAD_MAP'] = ','.join(f'{k}={v}' for k,v in values['pads'].items() if v)
+    env['KZSF_KEY_MAP'] = ','.join(f'{k}={v}' for k,v in keyboard_defaults.items() if v)
+    env['KZSF_PAD_MAP'] = ','.join(f'{k}={v}' for k,v in values['pads'].items() if v)
     executable=executable_for(values)
-    env.update(KZSF_DIRECT_TSC='1',GOW3_PRECOMPILE='1',GOW3_BACKGROUND_WARMUP='0',GOW3_FREEZE_SECONDS='0')
+    env.update(KZSF_DIRECT_TSC='1',KZSF_PRECOMPILE='1',KZSF_BACKGROUND_WARMUP='0',KZSF_FREEZE_SECONDS='0')
     # Preserve a serial diagnostic override; normal startup uses the existing
     # bounded compiler pool and still waits for every cached pipeline.
-    env['GOW3_PARALLEL_WARMUP']='0' if env.get('GOW3_PARALLEL_WARMUP')=='0' else '1'
+    env['KZSF_PARALLEL_WARMUP']='0' if env.get('KZSF_PARALLEL_WARMUP')=='0' else '1'
     # Keep the guarded player hook available for live overlay adjustments from 100%.
     env['KZSF_PLAYER_TURN']='1'
     if values['upscaler'] in ('fsr3','taa'):
-        env.update(KZSF_FSR_NATIVE='1',GOW3_UPSCALE_PRESET='0',GOW3_OUTPUT_RES='1920x1080',
-                   GOW3_JITTER='0',GOW3_REACTIVE='0',GOW3_OBJECT_MOTION='0')
+        env.update(KZSF_FSR_NATIVE='1',KZSF_UPSCALE_PRESET='0',KZSF_OUTPUT_RES='1920x1080',
+                   KZSF_JITTER='0',KZSF_REACTIVE='0',KZSF_OBJECT_MOTION='0')
     output=values.get('render_output',DEFAULTS['render_output'])
     fg=values.get('frame_gen','off')
-    env.update(GOW3_FRAME_GEN=fg,GOW3_OUTPUT_RES=output,
-               GOW3_ANISOTROPY=values.get('anisotropy','0'),
-               GOW3_MIP_LOD_BIAS=values.get('mip_lod_bias','0'),
-               GOW3_FSR1=str(int(values.get('fsr1',False))),
-               GOW3_RCAS_STRENGTH=values.get('rcas_strength','75'))
+    env.update(KZSF_FRAME_GEN=fg,KZSF_OUTPUT_RES=output,
+               KZSF_ANISOTROPY=values.get('anisotropy','0'),
+               KZSF_MIP_LOD_BIAS=values.get('mip_lod_bias','0'),
+               KZSF_FSR1=str(int(values.get('fsr1',False))),
+               KZSF_RCAS_STRENGTH=values.get('rcas_strength','75'))
     # Keep the stable native/AA paths at 1080p. The output reconstruction path retains
     # all guest scene targets at 1080p and draws HUD/menu pixels at the selected output.
     if output!='1920x1080' or fg!='off':
-        env.update(GOW3_UPSCALER='fsr3',KZSF_FSR_NATIVE='1',GOW3_SCENE_NATIVE='1',
-                   GOW3_NATIVE_AA='1' if output=='1920x1080' else '0',
-                   GOW3_UPSCALE_PRESET='0',GOW3_UI_TRIGGER_VS='6a09714a',
-                   GOW3_JITTER='0',GOW3_REACTIVE='0',GOW3_OBJECT_MOTION='0')
+        env.update(KZSF_UPSCALER='fsr3',KZSF_FSR_NATIVE='1',KZSF_SCENE_NATIVE='1',
+                   KZSF_NATIVE_AA='1' if output=='1920x1080' else '0',
+                   KZSF_UPSCALE_PRESET='0',KZSF_UI_TRIGGER_VS='6a09714a',
+                   KZSF_JITTER='0',KZSF_REACTIVE='0',KZSF_OBJECT_MOTION='0')
     # Freecam and character rendering share the validated follow-camera bridge.
     # Checkboxes enable controls; camera mode/model selection stays an in-game action.
     if any(values.get(k,False) for k in ('third_person','free_camera','model_switching')):
@@ -361,11 +362,11 @@ def run_session(manifest):
     try:
         with (folder/'stdout.log').open('wb') as out, (folder/'stderr.log').open('wb') as err:
             env = dict(spec.get('env', os.environ))
-            env.pop('GOW3_WINDOW_ICON', None)
+            env.pop('KZSF_WINDOW_ICON', None)
             try:
                 icon = session_window_icon(spec['command'], folder)
                 if icon:
-                    env['GOW3_WINDOW_ICON'] = str(icon)
+                    env['KZSF_WINDOW_ICON'] = str(icon)
             except (ImportError, OSError, ValueError, IndexError) as exc:
                 err.write(f'Window icon unavailable: {exc}\n'.encode('utf-8'))
                 err.flush()
@@ -380,13 +381,27 @@ def run_session(manifest):
     (folder/'status.json').write_text(json.dumps(result), encoding='utf-8')
     with (folder/'run.txt').open('a',encoding='utf-8') as log: log.write(f'Exit code: {result["exit_code"]}\n')
 
+def log_tail(path,limit=128*1024):
+    """Bound disk reads even when a running game's log grows very large."""
+    try:
+        with path.open('rb') as stream:
+            size=stream.seek(0,os.SEEK_END)
+            stream.seek(max(0,size-limit))
+            data=stream.read(limit)
+        if size>limit:
+            data=data.partition(b'\n')[2] if b'\n' in data else data
+        text=data.decode('utf-8',errors='replace')
+        return ('[Showing the latest part of this log]\n' if size>limit else '')+(text or 'No output yet.')
+    except FileNotFoundError: return 'This log has not been created yet.'
+    except OSError as exc: return f'Cannot read this log: {exc}'
+
 class Launcher:
     def __init__(self, root):
         self.root, self.values = root, load_preferences()
         self.monitor = None
         self.preparing = None
         self.session = None
-        root.title(f'Killzone Shadow Fall — v{LAUNCHER_VERSION}')
+        root.title(f'Killzone Shadow Fall - v{LAUNCHER_VERSION}')
         try:
             self.icon=tk.PhotoImage(file=str(ROOT/'launcher/killzone.png'))
             root.iconphoto(True,self.icon)
@@ -420,7 +435,7 @@ class Launcher:
         navigation=tk.Frame(root,bg=BG,padx=32);navigation.pack(fill='x')
         self.tab_buttons = {}
         self.tab_indicators={}
-        for name in ('Game','Graphics','Controls','Cheats','Advanced'):
+        for name in ('Game','Graphics','Controls','Cheats','Advanced','Logs'):
             tab=tk.Frame(navigation,bg=BG);tab.pack(side='left',padx=(0,6))
             b=self.button(tab,'HOME' if name=='Game' else name.upper(),lambda n=name:self.show_tab(n))
             b.configure(bg=BG,pady=12,padx=20,font=('Segoe UI',10,'bold'))
@@ -451,7 +466,7 @@ class Launcher:
         self.pages={}
         for name in self.tab_buttons:
             page=tk.Frame(self.body,bg=PANEL,padx=20,pady=18); self.pages[name]=page
-        self.build_game(); self.build_graphics(); self.build_controls(); self.build_cheats(); self.build_advanced()
+        self.build_game(); self.build_graphics(); self.build_controls(); self.build_cheats(); self.build_advanced(); self.build_logs()
         self.show_tab('Game'); self.refresh_ready(); self.poll()
         root.protocol('WM_DELETE_WINDOW',self.close)
         for index,name in enumerate(self.pages,1):
@@ -496,6 +511,7 @@ class Launcher:
         self.root.bind('<MouseWheel>',wheel,add='+')
         return content
     def show_tab(self,name):
+        self.active_tab=name
         for page in self.pages.values(): page.pack_forget()
         self.pages[name].pack(fill='both',expand=True)
         for key,b in self.tab_buttons.items():
@@ -505,9 +521,11 @@ class Launcher:
                 'Graphics':('Graphics','Display, image quality and frame pacing.'),
                 'Controls':('Controls','Tune your controller and customize button mappings.'),
                 'Cheats':('Cheats','Optional assists for your game.'),
-                'Advanced':('Advanced','Additional rendering options and session logs.')}
+                'Advanced':('Advanced','Additional rendering options.'),
+                'Logs':('Logs','Follow log output from your current game session.')}
         title,description=titles[name]
         self.page_title.configure(text=title); self.page_description.configure(text=description)
+        if name=='Logs': self.refresh_logs()
 
     def build_game(self):
         page=self.pages['Game']
@@ -544,8 +562,9 @@ class Launcher:
         row=tk.Frame(p,bg=PANEL); row.pack(fill='x')
         self.button(row,'Saved games',lambda:self.open_folder(storage_directory(self.gather(),'savedata_dir')/'1/CUSA00190/KZ4')).pack(side='left',padx=(0,9))
         self.button(row,'Shader cache',lambda:self.open_folder(storage_directory(self.gather(),'cache_dir')/'CUSA00190')).pack(side='left',padx=(0,9))
-        for name,path in [('Screenshots',ROOT/'user/screenshots'),('Logs',ROOT/'out')]:
+        for name,path in [('Screenshots',ROOT/'user/screenshots')]:
             self.button(row,name,lambda f=path:self.open_folder(f)).pack(side='left',padx=(0,9))
+        self.button(row,'Logs',lambda:self.show_tab('Logs')).pack(side='left',padx=(0,9))
         self.label(p,'Both memory profiles use the same saved games. A separate log is kept for each session.',True).pack(fill='x',pady=15)
         self.heading(p,'Camera & player model')
         self.check(p,'Enable third-person controls · F8','third_person',lambda:self.player_feature_changed('third_person'))
@@ -711,7 +730,43 @@ class Launcher:
         self.choice(p,'Frames queued (0 = automatic)','frames_queued',('1','2','0'))
         note=self.label(p,'Changes apply on the next launch. Background compilation defaults off for stability.',True)
         note.configure(wraplength=420); note.pack(fill='x',pady=22)
-        self.button(p,'Open latest session logs',lambda:self.open_folder(self.session or ROOT/'out')).pack(anchor='w')
+
+    def build_logs(self):
+        p=self.pages['Logs']
+        self.log_follow=tk.BooleanVar(value=True); self.log_content=None
+        row=tk.Frame(p,bg=PANEL); row.pack(fill='x',pady=(0,12))
+        self.log_caption=self.label(row,'Current session'); self.log_caption.pack(side='left',fill='x',expand=True)
+        actions=tk.Frame(p,bg=PANEL); actions.pack(fill='x',pady=(0,12))
+        self.button(actions,'Refresh',self.refresh_logs).pack(side='left',padx=(0,8))
+        self.log_folder_button=self.button(actions,'Open folder',lambda:self.open_folder(self.session) if self.session else None)
+        self.log_folder_button.pack(side='left',padx=(0,8))
+        self.button(actions,'Copy visible log',self.copy_log).pack(side='left')
+        ttk.Checkbutton(actions,text='Follow live output',variable=self.log_follow).pack(side='right')
+        frame=tk.Frame(p,bg=FIELD); frame.pack(fill='both',expand=True)
+        self.log_text=tk.Text(frame,bg=FIELD,fg=TEXT,insertbackground=CYAN,font=('Consolas',10),
+                              wrap='word',state='disabled',relief='flat',padx=12,pady=12)
+        scroll=ttk.Scrollbar(frame,orient='vertical',command=self.log_text.yview)
+        scroll.pack(side='right',fill='y'); self.log_text.pack(fill='both',expand=True)
+        self.log_text.configure(yscrollcommand=scroll.set)
+
+    def refresh_logs(self):
+        folder=self.session
+        self.log_caption.configure(text=f'Current session: {folder.name}' if folder else 'Current session')
+        self.log_folder_button.configure(state='normal' if folder else 'disabled')
+        text=log_tail(folder/'stderr.log') if folder else 'Start the game from this launcher to view its session logs.'
+        content=(folder,text)
+        if content!=self.log_content:
+            changed=self.log_content is None or folder!=self.log_content[0]
+            position=self.log_text.yview()[0]
+            self.log_text.configure(state='normal'); self.log_text.delete('1.0','end')
+            self.log_text.insert('1.0',text); self.log_text.configure(state='disabled')
+            if changed or self.log_follow.get(): self.log_text.see('end')
+            else: self.log_text.yview_moveto(position)
+            self.log_content=content
+
+    def copy_log(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.log_text.get('1.0','end-1c'))
 
     def build_cheats(self):
         p=self.scroll_content(self.pages['Cheats'])
@@ -762,10 +817,12 @@ class Launcher:
         if self.preparing is not None: return
         if self.monitor and self.monitor.poll() is None: return
         if os.name=='nt':
-            running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
-                capture_output=True,text=True,errors='replace',creationflags=subprocess.CREATE_NO_WINDOW)
-            if 'gow3-probe' in running.stdout.lower():
-                messagebox.showinfo('Game already running','Close the current Killzone game before starting another session.',parent=self.root); return
+            # Recognize both the renamed game and older local/test runtimes.
+            for executable in ('kzsf-game.exe','kzsf-probe*'):
+                running=subprocess.run(['tasklist','/FI',f'IMAGENAME eq {executable}','/FO','CSV','/NH'],
+                    capture_output=True,text=True,errors='replace',creationflags=subprocess.CREATE_NO_WINDOW)
+                if 'kzsf-game.exe' in running.stdout.lower() or 'kzsf-probe' in running.stdout.lower():
+                    messagebox.showinfo('Game already running','Close the current Killzone game before starting another session.',parent=self.root); return
         self.refresh_ready()
         if not self.game_ok: self.show_tab('Game'); self.browse(); return
         values=self.gather()
@@ -793,17 +850,18 @@ class Launcher:
                 return
             folder=ROOT/'out'/('dialogue-'+time.strftime('%Y%m%d-%H%M%S')+f'-{time.time_ns()%1000000:06d}-modelauncher')
             folder.mkdir(parents=True); self.session=folder
+            self.refresh_logs()
             spec=launch_spec(values,folder)
             # Environment is passed directly, never persisted (it may contain credentials).
             manifest={k:v for k,v in spec.items() if k!='env'}
             (folder/'session.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
             (folder/'run.txt').write_text(f'Mode: launcher\nStarted: {time.strftime("%Y-%m-%d %H:%M:%S")}\nBuild: {values["profile"]}\nFPS limit: {values["fps"]}; virtual PS4 clock: 1\n',encoding='utf-8')
             with (folder/'run.txt').open('a',encoding='utf-8') as log:
-                for key in ('KZSF_BETA_MEMORY_LAYOUT','GOW3_DMEM_MB','GOW3_DRAW_PIPE',
-                            'GOW3_VK_RECORD_THREAD','GOW3_VK_VALIDATION','GOW3_ASYNC_SHADERS',
-                            'GOW3_UPSCALER','GOW3_READBACK_LINEAR','GOW3_DEFERRED_READBACK','GOW3_STALE_READBACK',
+                for key in ('KZSF_BETA_MEMORY_LAYOUT','KZSF_DMEM_MB','KZSF_DRAW_PIPE',
+                            'KZSF_VK_RECORD_THREAD','KZSF_VK_VALIDATION','KZSF_ASYNC_SHADERS',
+                            'KZSF_UPSCALER','KZSF_READBACK_LINEAR','KZSF_DEFERRED_READBACK','KZSF_STALE_READBACK',
                             'KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO','KZSF_UNLIMITED_SPRINT','KZSF_CONTINUOUS_SCAN',
-                            'GOW3_OUTPUT_RES','GOW3_FRAME_GEN','GOW3_ANISOTROPY','GOW3_MIP_LOD_BIAS'):
+                            'KZSF_OUTPUT_RES','KZSF_FRAME_GEN','KZSF_ANISOTROPY','KZSF_MIP_LOD_BIAS'):
                     log.write(f'{key}={spec["env"][key]}\n')
             self.monitor=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--run-session',str(folder/'session.json')],
                 env=spec['env'],cwd=ROOT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -835,6 +893,7 @@ class Launcher:
                 text='Game closed. Ready to play again.' if result.get('exit_code')==0 else 'Game stopped unexpectedly. See session logs.'
             except (OSError,ValueError): text='Game session ended. See session logs.'
             self.session_label.configure(text=text,fg=MUTED); self.play_button.configure(text='PLAY GAME',state='normal'); self.monitor=None
+        if self.active_tab=='Logs' and self.log_follow.get(): self.refresh_logs()
         self.root.after(1000,self.poll)
     def close(self):
         try: persist(self.gather())

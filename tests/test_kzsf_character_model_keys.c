@@ -14,7 +14,12 @@ int main(void) {
     assert(kzsf_character_model_mask()&high);
     assert(kzsf_character_next_loaded(0,-1,high)==last);
     assert(kzsf_character_next_loaded(last,1,high)==0);
-    assert(kzsf_character_model_index("ISA_Lamb_SpaceSuit")==last);
+    assert(kzsf_character_model_index("Custom_CJ")==last);
+    assert(last==KZSF_CHARACTER_MODEL_CJ);
+    assert(!kzsf_character_model_selectable(13) && !kzsf_character_model_selectable(16));
+    assert(kzsf_character_next_loaded(12,1,(UINT64_C(1)<<13)|(UINT64_C(1)<<16))==0);
+    assert(kzsf_character_next_loaded(17,-1,kzsf_character_model_mask())==15);
+    assert(kzsf_character_model_index("ISA_Lamb_SpaceSuit")==16);
     assert(kzsf_character_model_index("ISA_Lamb_Prisoner")>=0);
     assert(kzsf_character_model_index("ISA_Lamb_Civilian_Disguise")>=0);
     assert(kzsf_character_model_index("VSA_Massar")==-1);
@@ -24,7 +29,8 @@ int main(void) {
     }
     for(int a=0;a<KZSF_CHARACTER_MODEL_COUNT;a++)for(int b=a+1;b<KZSF_CHARACTER_MODEL_COUNT;b++)
         assert(strcmp(kzsf_character_model_name(a),kzsf_character_model_name(b)));
-    for(int model=1;model<KZSF_CHARACTER_MODEL_COUNT;model++)assert(*kzsf_character_model_bundle(model));
+    for(int model=1;model<KZSF_CHARACTER_MODEL_CJ;model++)assert(*kzsf_character_model_bundle(model));
+    assert(!*kzsf_character_model_bundle(KZSF_CHARACTER_MODEL_CJ));
     assert(!kzsf_character_model_keys(&keys,1,1,0,0));
     assert(kzsf_character_model_keys(&keys,1,1,0,1)==1);
     assert(!kzsf_character_model_keys(&keys,1,1,0,1));

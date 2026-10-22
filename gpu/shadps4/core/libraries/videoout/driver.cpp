@@ -16,9 +16,9 @@
 #include <sys/resource.h>
 #endif
 #include "common/assert.h"
-#include "gow3_toggles.h"
-#include "gow3_settings.h"
-#include "gow3_graphics.h"
+#include "kzsf_toggles.h"
+#include "kzsf_settings.h"
+#include "kzsf_graphics.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -38,11 +38,11 @@ extern std::unique_ptr<Vulkan::Presenter> presenter;
 extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
 
 namespace Vulkan {
-extern std::atomic<u64> g_gow3_compile_ns;
-extern std::atomic<u32> g_gow3_compiles;
-extern std::atomic<u64> g_gow3_capture_ns, g_gow3_async_ns, g_gow3_compile_wait_ns;
-extern std::atomic<u64> g_gow3_snapshot_ns, g_gow3_guest_wait_ns;
-extern std::atomic<u32> g_gow3_pending_draws;
+extern std::atomic<u64> g_kzsf_compile_ns;
+extern std::atomic<u32> g_kzsf_compiles;
+extern std::atomic<u64> g_kzsf_capture_ns, g_kzsf_async_ns, g_kzsf_compile_wait_ns;
+extern std::atomic<u64> g_kzsf_snapshot_ns, g_kzsf_guest_wait_ns;
+extern std::atomic<u32> g_kzsf_pending_draws;
 } // namespace Vulkan
 
 namespace Libraries::VideoOut {
@@ -74,7 +74,7 @@ VideoOutDriver::VideoOutDriver(u32 width, u32 height) {
     main_port.resolution.full_height = height;
     main_port.resolution.pane_width = width;
     main_port.resolution.pane_height = height;
-    const char* separate = std::getenv("GOW3_PRESENT_THREAD");
+    const char* separate = std::getenv("KZSF_PRESENT_THREAD");
     separate_swap = !(separate && separate[0] == '0');
     if (separate_swap) {
         swap_thread = std::jthread([&](std::stop_token token) { SwapThread(token); });
@@ -98,7 +98,7 @@ void VideoOutDriver::RunPresenter(std::function<void()> work, bool if_idle) {
 }
 
 void VideoOutDriver::SwapThread(std::stop_token token) {
-    Common::SetCurrentThreadName("gow3:Present");
+    Common::SetCurrentThreadName("kzsf:Present");
     while (true) {
         std::function<void()> work;
         {
@@ -305,11 +305,11 @@ namespace {
 std::atomic<unsigned long long> g_flip_total{0};
 }
 /* Diagnostic: total presented flips, so the runtime can notice a stall quickly. */
-extern "C" unsigned long long gow3gpu_flip_count(void) { return g_flip_total.load(std::memory_order_relaxed); }
+extern "C" unsigned long long kzsfgpu_flip_count(void) { return g_flip_total.load(std::memory_order_relaxed); }
 
 void VideoOutDriver::Flip(const Request& req) {
     g_flip_total.fetch_add(1, std::memory_order_relaxed);
-    // Update HDR status before presenting, then present the frame (gow3: on the swap thread).
+    // Update HDR status before presenting, then present the frame (kzsf: on the swap thread).
     RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr] {
         presenter->SetHDR(hdr);
         presenter->Present(frame);
@@ -317,8 +317,8 @@ void VideoOutDriver::Flip(const Request& req) {
     Vulkan::FrameCapture::OnFlip(req.index >= 0 ? req.port->buffer_slots[req.index].address_left
                                                 : 0);
 
-    // gow3: GOW3_FRAME_STATS=1 prints flip rate and frame time spread every 5 seconds.
-    static const bool frame_stats = EmulatorSettingsImpl::Flag("GOW3_FRAME_STATS", false);
+    // kzsf: KZSF_FRAME_STATS=1 prints flip rate and frame time spread every 5 seconds.
+    static const bool frame_stats = EmulatorSettingsImpl::Flag("KZSF_FRAME_STATS", false);
     if (frame_stats) {
         using Clock = std::chrono::steady_clock;
         static Clock::time_point window_start = Clock::now(), last = window_start;
@@ -333,16 +333,16 @@ void VideoOutDriver::Flip(const Request& req) {
         // Stall diagnostics: what happened during a long frame.
         static u64 last_gpu_ns, last_images, last_image_bytes, last_buffer_bytes;
         static u64 last_t[6], last_minflt, last_sigf, last_pc, last_pp, last_rc, last_rp;
-        const u64 pc = Gow3Stats::protect_calls.load(), pp = Gow3Stats::protect_pages.load(),
-                  rc = Gow3Stats::protect_revoke_calls.load(), rp = Gow3Stats::protect_revoke_pages.load();
-        const u64 minflt = Gow3Stats::gpu_minor_faults.load(), sigf = Gow3Stats::gpu_signal_faults.load();
+        const u64 pc = KzsfStats::protect_calls.load(), pp = KzsfStats::protect_pages.load(),
+                  rc = KzsfStats::protect_revoke_calls.load(), rp = KzsfStats::protect_revoke_pages.load();
+        const u64 minflt = KzsfStats::gpu_minor_faults.load(), sigf = KzsfStats::gpu_signal_faults.load();
         static u64 last_copy_cpu, last_copy_sys, last_copy_flt;
-        const u64 copy_cpu = Gow3Stats::t_copy_cpu.load(), copy_sys = Gow3Stats::copy_sys_us.load(),
-                  copy_flt = Gow3Stats::copy_minflt.load();
+        const u64 copy_cpu = KzsfStats::t_copy_cpu.load(), copy_sys = KzsfStats::copy_sys_us.load(),
+                  copy_flt = KzsfStats::copy_minflt.load();
         static u64 last_proc_flt, last_copy_ns, last_copy_bytes, last_rf, last_trf, last_twf;
-        const u64 rf = Gow3Stats::read_faults.load(), trf = Gow3Stats::t_read_faults.load(),
-                  twf = Gow3Stats::t_write_faults.load();
-        // gow3: every frame over 40 ms after the first, at most 10 per 5 s window.
+        const u64 rf = KzsfStats::read_faults.load(), trf = KzsfStats::t_read_faults.load(),
+                  twf = KzsfStats::t_write_faults.load();
+        // kzsf: every frame over 40 ms after the first, at most 10 per 5 s window.
         static bool primed = false;
         static u32 stalls_shown = 0;
         const bool stall = primed && frame_ms > 40.0 && stalls_shown < 10;
@@ -351,10 +351,10 @@ void VideoOutDriver::Flip(const Request& req) {
         // Waits and work inside the long frame (window counters are reset every 5 s, so the
         // previous values are reset with them).
         static u64 last_wait[7];
-        const u64 wait_now[7] = {Gow3Stats::t_readback_wait.load(), Gow3Stats::tick_wait_ns.load(),
-                                 Gow3Stats::sync_recording_ns.load(), Gow3Stats::host_copies_wait_ns.load(),
-                                 u64(Vulkan::g_gow3_compile_ns.load()), u64(Vulkan::g_gow3_compiles.load()),
-                                 Gow3Stats::t_gc.load()};
+        const u64 wait_now[7] = {KzsfStats::t_readback_wait.load(), KzsfStats::tick_wait_ns.load(),
+                                 KzsfStats::sync_recording_ns.load(), KzsfStats::host_copies_wait_ns.load(),
+                                 u64(Vulkan::g_kzsf_compile_ns.load()), u64(Vulkan::g_kzsf_compiles.load()),
+                                 KzsfStats::t_gc.load()};
         if (stall) {
             std::printf("Stall: %.1f ms frame; waits: readback %.1f ms, GPU ticks %.1f ms, "
                         "recorder %.1f ms, host copies %.1f ms; %llu compiles %.1f ms; GC %.1f ms\n",
@@ -372,27 +372,27 @@ void VideoOutDriver::Flip(const Request& req) {
         last_rf = rf;
         last_trf = trf;
         last_twf = twf;
-        const u64 copy_ns = Gow3Stats::t_copy.load(), copy_bytes = Gow3Stats::copy_bytes.load();
+        const u64 copy_ns = KzsfStats::t_copy.load(), copy_bytes = KzsfStats::copy_bytes.load();
         u64 proc_flt = 0;
 #ifndef _WIN32
         if (rusage usage{}; getrusage(RUSAGE_SELF, &usage) == 0) {
             proc_flt = usage.ru_minflt;
         }
 #endif
-        const u64 t_now[6] = {Gow3Stats::t_resident.load(), Gow3Stats::t_protect.load(),
-                              Gow3Stats::t_image_create.load(), Gow3Stats::t_refresh.load(),
-                              Gow3Stats::t_staging.load(), Gow3Stats::t_host_wait.load()};
+        const u64 t_now[6] = {KzsfStats::t_resident.load(), KzsfStats::t_protect.load(),
+                              KzsfStats::t_image_create.load(), KzsfStats::t_refresh.load(),
+                              KzsfStats::t_staging.load(), KzsfStats::t_host_wait.load()};
         static u64 last_draws, last_dispatches, last_subs, last_sys, last_user, last_invol, last_vol;
-        const u64 draws = Gow3Stats::draws.load(), dispatches = Gow3Stats::dispatches.load(),
-                  subs = Gow3Stats::submissions.load(), sys_us = Gow3Stats::gpu_sys_us.load(),
-                  user_us = Gow3Stats::gpu_user_us.load(), invol = Gow3Stats::gpu_invol_switches.load(),
-                  vol = Gow3Stats::gpu_vol_switches.load();
+        const u64 draws = KzsfStats::draws.load(), dispatches = KzsfStats::dispatches.load(),
+                  subs = KzsfStats::submissions.load(), sys_us = KzsfStats::gpu_sys_us.load(),
+                  user_us = KzsfStats::gpu_user_us.load(), invol = KzsfStats::gpu_invol_switches.load(),
+                  vol = KzsfStats::gpu_vol_switches.load();
         u64 gpu_ns = 0;
 #ifdef _WIN32
-        // gow3: Windows has no per-thread clock id; the thread's user + kernel time instead.
+        // kzsf: Windows has no per-thread clock id; the thread's user + kernel time instead.
         static HANDLE gpu_thread = nullptr;
         if (!gpu_thread) {
-            if (const unsigned long id = Gow3Stats::gpu_thread_id.load()) {
+            if (const unsigned long id = KzsfStats::gpu_thread_id.load()) {
                 gpu_thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, id);
             }
         }
@@ -404,15 +404,15 @@ void VideoOutDriver::Flip(const Request& req) {
             gpu_ns = ns(kernel) + ns(user);
         }
 #else
-        if (const int clock = Gow3Stats::gpu_thread_clock.load(); clock != -1) {
+        if (const int clock = KzsfStats::gpu_thread_clock.load(); clock != -1) {
             timespec ts{};
             clock_gettime(static_cast<clockid_t>(clock), &ts);
             gpu_ns = u64(ts.tv_sec) * 1000000000ull + u64(ts.tv_nsec);
         }
 #endif
-        const u64 images = Gow3Stats::images_registered.load();
-        const u64 image_bytes = Gow3Stats::image_upload_bytes.load();
-        const u64 buffer_bytes = Gow3Stats::buffer_upload_bytes.load();
+        const u64 images = KzsfStats::images_registered.load();
+        const u64 image_bytes = KzsfStats::image_upload_bytes.load();
+        const u64 buffer_bytes = KzsfStats::buffer_upload_bytes.load();
         if (stall) {
             std::printf("       GPU thread on CPU %.1f ms; %llu images registered, "
                         "%.1f MB image uploads, %.1f MB buffer uploads\n",
@@ -479,21 +479,21 @@ void VideoOutDriver::Flip(const Request& req) {
         ++frames;
         const double window = std::chrono::duration<double>(now - window_start).count();
         if (window >= 5.0) {
-            const u32 compiles = Vulkan::g_gow3_compiles.exchange(0);
-            const u64 compile_ns = Vulkan::g_gow3_compile_ns.exchange(0);
-            const double capture_ms = Vulkan::g_gow3_capture_ns.exchange(0) / 1e6;
-            const double async_ms = Vulkan::g_gow3_async_ns.exchange(0) / 1e6;
-            const double wait_ms = Vulkan::g_gow3_compile_wait_ns.exchange(0) / 1e6;
-            const double snapshot_ms = Vulkan::g_gow3_snapshot_ns.exchange(0) / 1e6;
-            const double guest_wait_ms = Vulkan::g_gow3_guest_wait_ns.exchange(0) / 1e6;
-            const u32 pending_draws = Vulkan::g_gow3_pending_draws.exchange(0);
+            const u32 compiles = Vulkan::g_kzsf_compiles.exchange(0);
+            const u64 compile_ns = Vulkan::g_kzsf_compile_ns.exchange(0);
+            const double capture_ms = Vulkan::g_kzsf_capture_ns.exchange(0) / 1e6;
+            const double async_ms = Vulkan::g_kzsf_async_ns.exchange(0) / 1e6;
+            const double wait_ms = Vulkan::g_kzsf_compile_wait_ns.exchange(0) / 1e6;
+            const double snapshot_ms = Vulkan::g_kzsf_snapshot_ns.exchange(0) / 1e6;
+            const double guest_wait_ms = Vulkan::g_kzsf_guest_wait_ns.exchange(0) / 1e6;
+            const u32 pending_draws = Vulkan::g_kzsf_pending_draws.exchange(0);
             const u64 direct = Vulkan::Scheduler::direct_recordings.exchange(0);
-            const u64 faults = Gow3Stats::tracker_faults.exchange(0);
+            const u64 faults = KzsfStats::tracker_faults.exchange(0);
             // GPU command thread CPU time per draw: comparable between builds even when the scene
             // (and so the frame rate) differs a little.
             static u64 window_draws = 0, window_gpu_us = 0;
-            const u64 all_draws = Gow3Stats::draws.load();
-            const u64 gpu_us = Gow3Stats::gpu_user_us.load() + Gow3Stats::gpu_sys_us.load();
+            const u64 all_draws = KzsfStats::draws.load();
+            const u64 gpu_us = KzsfStats::gpu_user_us.load() + KzsfStats::gpu_sys_us.load();
             const double us_per_draw = all_draws > window_draws
                                            ? double(gpu_us - window_gpu_us) / (all_draws - window_draws)
                                            : 0.0;
@@ -512,16 +512,16 @@ void VideoOutDriver::Flip(const Request& req) {
                         compile_ns / 1e6, capture_ms, async_ms, wait_ms, snapshot_ms, guest_wait_ms,
                         pending_draws,
                         static_cast<unsigned long long>(direct),
-                        faults / window, static_cast<long long>(Gow3Stats::hot_pages.load()),
+                        faults / window, static_cast<long long>(KzsfStats::hot_pages.load()),
                         us_per_draw, draws_per_frame,
-                        Gow3Stats::gpu_idle_ns.exchange(0) / (window * 1e7),
-                        Gow3Stats::sync_recording_ns.exchange(0) / (window * 1e7),
-                        Gow3Stats::host_copies_wait_ns.exchange(0) / (window * 1e7),
-                        frames ? double(Gow3Stats::host_copy_waits.exchange(0)) / frames : 0.0,
-                        Gow3Stats::copy_threads_wait_ns.exchange(0) / (window * 1e7),
-                        Gow3Stats::tick_wait_ns.exchange(0) / (window * 1e7),
-                        frames ? double(Gow3Stats::reduced_draws.exchange(0)) / frames : 0.0,
-                        frames ? double(Gow3Stats::scene_draws.exchange(0)) / frames : 0.0);
+                        KzsfStats::gpu_idle_ns.exchange(0) / (window * 1e7),
+                        KzsfStats::sync_recording_ns.exchange(0) / (window * 1e7),
+                        KzsfStats::host_copies_wait_ns.exchange(0) / (window * 1e7),
+                        frames ? double(KzsfStats::host_copy_waits.exchange(0)) / frames : 0.0,
+                        KzsfStats::copy_threads_wait_ns.exchange(0) / (window * 1e7),
+                        KzsfStats::tick_wait_ns.exchange(0) / (window * 1e7),
+                        frames ? double(KzsfStats::reduced_draws.exchange(0)) / frames : 0.0,
+                        frames ? double(KzsfStats::scene_draws.exchange(0)) / frames : 0.0);
             presenter->GetRasterizer().GetPipelineCache().ReportCompilerStats();
             Vulkan::WaitDiagnostics::Report();
             // Frame pacing: spread of the guest flip intervals (judder that the mean hides).
@@ -663,15 +663,15 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     Common::AccurateTimer timer{vblank_period};
 
-    // gow3: frame limit (see EmulatorSettings::GetFrameLimit). A request waits in the queue
+    // kzsf: frame limit (see EmulatorSettings::GetFrameLimit). A request waits in the queue
     // until its slot; slots advance by one period (no drift) but never lag behind by more.
-    // gow3: the in-game menu changes the limit live (Gow3Settings::fps_limit); GOW3_FPS_LIMIT
+    // kzsf: the in-game menu changes the limit live (KzsfSettings::fps_limit); KZSF_FPS_LIMIT
     // and the uncapped presets keep their fixed limit.
-    const bool fixed_limit = std::getenv("GOW3_FPS_LIMIT") || EmulatorSettings.GetVblankFrequency() == 480;
+    const bool fixed_limit = std::getenv("KZSF_FPS_LIMIT") || EmulatorSettings.GetVblankFrequency() == 480;
     const auto current_limit = [&] {
-        const auto& s = Gow3Settings::Get();
+        const auto& s = KzsfSettings::Get();
         return fixed_limit ? EmulatorSettings.GetFrameLimit()
-                           : u32(Gow3Graphics::PresentLimit(s.fps_limit, s.applied_engine_fps));
+                           : u32(KzsfGraphics::PresentLimit(s.fps_limit, s.applied_engine_fps));
     };
     u32 frame_limit = current_limit();
     auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
@@ -690,7 +690,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         return {};
     };
 
-    // gow3: with a frame limit (uncapped presets) a queued flip is presented as soon as it
+    // kzsf: with a frame limit (uncapped presets) a queued flip is presented as soon as it
     // arrives and its slot allows, between vblanks, instead of on the next vblank tick.
     bool immediate_flips = frame_limit != 0;
 

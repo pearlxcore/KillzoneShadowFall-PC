@@ -41,8 +41,8 @@ struct Frame {
     u64 ready_tick;
     bool is_hdr{false};
     u8 id{};
-    vk::Format format{}; ///< gow3: of `image` (screenshots)
-    /// gow3: frame generation: the frames made between the previous frame and this one,
+    vk::Format format{}; ///< kzsf: of `image` (screenshots)
+    /// kzsf: frame generation: the frames made between the previous frame and this one,
     /// presented before it (FrameGenerator), the first `generated_count` of them. Made on use.
     struct Generated {
         vk::Image image;
@@ -112,7 +112,7 @@ public:
     Frame* PrepareBlankFrame(bool present_thread);
 
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
-    /// gow3: a black frame with the loading screen (Gow3Overlay::SetLoading) only.
+    /// kzsf: a black frame with the loading screen (KzsfOverlay::SetLoading) only.
     void PresentLoadingFrame();
     Frame* PrepareLastFrame();
 
@@ -120,10 +120,10 @@ private:
     Frame* GetRenderFrame();
 
     void RecreateFrame(Frame* frame, u32 width, u32 height);
-    /// gow3: frame generation's output images of a frame.
+    /// kzsf: frame generation's output images of a frame.
     void EnsureGenerated(Frame* frame, u32 count);
     void DestroyGenerated(Frame* frame);
-    /// gow3: blits `image` (a frame's, or one generated for it) into a swapchain image and
+    /// kzsf: blits `image` (a frame's, or one generated for it) into a swapchain image and
     /// presents it; `last`: the frame's own image, which signals its present fence.
     bool PresentImage(Frame* frame, vk::Image image, bool last);
 
@@ -143,7 +143,7 @@ private:
     HostPasses::PostProcessingPass pp_pass;
     AmdGpu::Liverpool* liverpool;
     Scheduler draw_scheduler;
-    std::deque<u64> recent_frame_ticks; ///< gow3: GOW3_FRAMES_AHEAD bound (PrepareFrame)
+    std::deque<u64> recent_frame_ticks; ///< kzsf: KZSF_FRAMES_AHEAD bound (PrepareFrame)
     Scheduler present_scheduler;
     Scheduler flip_scheduler;
     Swapchain swapchain;
@@ -158,7 +158,7 @@ private:
     std::condition_variable free_cv;
     std::condition_variable_any frame_cv;
     std::vector<VAddr> vo_buffers_addr;
-    // gow3: frame generation. hudless_frame: the picture without UI composed like a frame.
+    // kzsf: frame generation. hudless_frame: the picture without UI composed like a frame.
     std::unique_ptr<FrameGenerator> frame_generator;
     Frame hudless_frame{};
     std::atomic<double> game_frame_ms{16.6}; ///< smoothed interval of the game's frames

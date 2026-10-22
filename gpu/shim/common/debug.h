@@ -1,4 +1,4 @@
-// gow3: shadPS4 debug/profiler helpers without Tracy.
+// kzsf: shadPS4 debug/profiler helpers without Tracy.
 #pragma once
 #include <tracy/Tracy.hpp>
 #define BREAKPOINT __builtin_trap

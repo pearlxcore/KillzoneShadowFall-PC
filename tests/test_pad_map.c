@@ -1,11 +1,11 @@
-/* GOW3_PAD_MAP / GOW3_KEY_MAP parsing (src/runtime_pad.c). */
+/* KZSF_PAD_MAP / KZSF_KEY_MAP parsing (src/runtime_pad.c). */
 #define _GNU_SOURCE
 #include <assert.h>
 #include "../src/runtime_pad.c"
 
-int gow3gpu_overlay_captures_input(void) { return 0; }
-int gow3gpu_controller_aim_gain(int aiming) { (void)aiming; return 100; }
-int gow3gpu_controller_drift_deadzone(void) { return 8; }
+int kzsfgpu_overlay_captures_input(void) { return 0; }
+int kzsfgpu_controller_aim_gain(int aiming) { (void)aiming; return 100; }
+int kzsfgpu_controller_drift_deadzone(void) { return 8; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;

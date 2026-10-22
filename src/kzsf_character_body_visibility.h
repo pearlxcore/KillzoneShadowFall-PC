@@ -7,7 +7,7 @@ typedef void (KZSF_CHARACTER_ABI *KzsfCharacterBodyEnd)(uintptr_t);
 typedef struct {int32_t index;uintptr_t part;int enabled;} KzsfCharacterBodyVisibility;
 /* Only exact full-body resources for the owned player's chosen appearance.
  * Preserve unrelated attachments and respect a native all-hidden body state. */
-static inline int kzsf_character_body_visibility_plan_ex(uintptr_t owner,uintptr_t desired,uintptr_t other,int show_body,
+static inline int kzsf_character_body_visibility_plan_follow(uintptr_t owner,uintptr_t desired,uintptr_t other,int show_body,int follow_other,
         KzsfZoomRead read,void *opaque,uintptr_t *model,KzsfCharacterBodyVisibility changes[128],int *change_count) {
     uintptr_t m=0,parent=0,array=0;int32_t count=0;int keeper=-1,first=-1,n=0;
     uintptr_t parts[128];uint32_t flags[128];
@@ -21,6 +21,9 @@ static inline int kzsf_character_body_visibility_plan_ex(uintptr_t owner,uintptr
            !kzsf_zoom_read(read,opaque,array,(size_t)i*0xf0+0xe0,&flags[i],4))return 0;
         if(keeper<0 && parts[i]==desired && (flags[i]&0x100))keeper=i;
         if(first<0 && parts[i]==desired)first=i;
+        /* Traversal may enable the native body after disabling the selected
+         * one. Transfer that visibility only for callers opting into it. */
+        if(follow_other && other && parts[i]==other && (flags[i]&0x100))show_body=1;
     }
     /* Checkpoint restore can leave every full-body slot disabled. A caller
      * that has established normal third-person ownership may recover exactly
@@ -31,6 +34,10 @@ static inline int kzsf_character_body_visibility_plan_ex(uintptr_t owner,uintptr
     if(keeper>=0)for(int i=0;i<count;i++)if((parts[i]==desired || (other && parts[i]==other)) &&
             i!=keeper && (flags[i]&0x100))changes[n++]=(KzsfCharacterBodyVisibility){i,parts[i],0};
     *model=m;*change_count=n;return 1;
+}
+static inline int kzsf_character_body_visibility_plan_ex(uintptr_t owner,uintptr_t desired,uintptr_t other,int show_body,
+        KzsfZoomRead read,void *opaque,uintptr_t *model,KzsfCharacterBodyVisibility changes[128],int *change_count) {
+    return kzsf_character_body_visibility_plan_follow(owner,desired,other,show_body,0,read,opaque,model,changes,change_count);
 }
 static inline int kzsf_character_body_visibility_plan(uintptr_t owner,uintptr_t desired,uintptr_t other,
         KzsfZoomRead read,void *opaque,uintptr_t *model,KzsfCharacterBodyVisibility changes[128],int *change_count) {

@@ -66,7 +66,7 @@ public:
         return !copying && tracked.contains(image_uid);
     }
     void ResolveAll();
-    bool debug = false; ///< GOW3_SCENE_DEBUG frame: print resolves and fills
+    bool debug = false; ///< KZSF_SCENE_DEBUG frame: print resolves and fills
 private:
     struct Entry {
         VideoCore::ImageId source{};

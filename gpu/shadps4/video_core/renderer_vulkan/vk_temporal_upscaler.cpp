@@ -15,8 +15,8 @@
 
 #include <vk_mem_alloc.h>
 
-#include "gow3_settings.h"
-#include "gow3_toggles.h"
+#include "kzsf_settings.h"
+#include "kzsf_toggles.h"
 #include "ffx_vk_portable.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
 #include "video_core/host_shaders/upscale_reactive_comp.h"
@@ -52,12 +52,12 @@ FfxVkPortableImage Describe(vk::Image image, vk::Format format, u32 width, u32 h
     return out;
 }
 
-/// gow3: GOW3_DUMP_TRIGGER=<file> GOW3_DUMP_DIR=<dir> (default out/dump): creating the file dumps
-/// the upscaler's images of the next GOW3_DUMP_FRAMES (8) frames as raw files
+/// kzsf: KZSF_DUMP_TRIGGER=<file> KZSF_DUMP_DIR=<dir> (default out/dump): creating the file dumps
+/// the upscaler's images of the next KZSF_DUMP_FRAMES (8) frames as raw files
 /// <dir>/fNNN_<name>_<w>x<h>_<format>.raw, for checking temporal stability offline.
 /// Returns the frame number to dump, or -1.
 int DumpFrame() {
-    static const char* trigger = std::getenv("GOW3_DUMP_TRIGGER");
+    static const char* trigger = std::getenv("KZSF_DUMP_TRIGGER");
     static int remaining = 0, index = 0, polls = 0;
     if (!trigger) {
         return -1;
@@ -66,7 +66,7 @@ int DumpFrame() {
         if (++polls % 30 != 0 || std::remove(trigger) != 0) {
             return -1;
         }
-        const char* frames = std::getenv("GOW3_DUMP_FRAMES");
+        const char* frames = std::getenv("KZSF_DUMP_FRAMES");
         remaining = frames ? std::max(1, std::atoi(frames)) : 8;
         index = 0;
     }
@@ -87,7 +87,7 @@ struct DumpImage {
 void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                 int frame, std::initializer_list<DumpImage> images) {
     static const std::string dir = [] {
-        const char* env = std::getenv("GOW3_DUMP_DIR");
+        const char* env = std::getenv("KZSF_DUMP_DIR");
         return std::string{env && env[0] ? env : "out/dump"};
     }();
     const vk::MemoryBarrier2 before{
@@ -164,31 +164,31 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     : instance{instance_}, scheduler{scheduler_}, texture_cache{texture_cache_},
       runtime{runtime_}, camera_motion{camera_motion_}, scene_targets{scene_targets_} {
     // Reject unsupported shaders before allocating resources or recording a frame.
-    Gow3Settings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
+    KzsfSettings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
                                          instance.IsFsr411Supported());
     fsr4 = std::make_unique<Fsr4Upscaler>(instance, scheduler);
     {
         const Dlss* dlss = Dlss::Get();
         static std::string problem;
-        problem = !dlss ? "gow3_dlss.dll and nvngx_dlss.dll are not installed"
+        problem = !dlss ? "kzsf_dlss.dll and nvngx_dlss.dll are not installed"
                         : dlss->Problem();
-        Gow3Settings::ConfigureDlssSupport(dlss && dlss->Available(), problem.c_str());
+        KzsfSettings::ConfigureDlssSupport(dlss && dlss->Available(), problem.c_str());
     }
-    // Available unless GOW3_UPSCALER=none; on/off and the parameters are the menu's settings.
-    const char* env = std::getenv("GOW3_UPSCALER");
+    // Available unless KZSF_UPSCALER=none; on/off and the parameters are the menu's settings.
+    const char* env = std::getenv("KZSF_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0);
     const char* quality_env = std::getenv("KZSF_FSR_QUALITY");
     killzone_quality = camera_motion.KillzoneNative() && quality_env &&
                       std::strcmp(quality_env, "1") == 0;
-    const char* diagnostic_env = std::getenv("GOW3_UPSCALER_DIAGNOSTICS");
+    const char* diagnostic_env = std::getenv("KZSF_UPSCALER_DIAGNOSTICS");
     diagnostics = diagnostic_env && diagnostic_env[0] == '1';
-    if (const char* hash = std::getenv("GOW3_UPSCALE_BEFORE_CS")) {
+    if (const char* hash = std::getenv("KZSF_UPSCALE_BEFORE_CS")) {
         trigger_hash = std::strtoull(hash, nullptr, 16);
     }
-    if (const char* hash = std::getenv("GOW3_UI_TRIGGER_VS")) {
+    if (const char* hash = std::getenv("KZSF_UI_TRIGGER_VS")) {
         ui_trigger_vs = std::strtoull(hash, nullptr, 16);
     }
-    if (const char* res = std::getenv("GOW3_OUTPUT_RES")) {
+    if (const char* res = std::getenv("KZSF_OUTPUT_RES")) {
         u32 w = 0, h = 0;
         if (std::sscanf(res, "%ux%u", &w, &h) == 2 && w && h) {
             target_width = w;
@@ -197,10 +197,10 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     }
     // Explicit resolution overrides retain the old compatibility path. Normal presets
     // keep guest allocations/UI native and change only host raster targets at frame boundaries.
-    scaled_session = std::getenv("GOW3_RENDER_RES") && std::getenv("GOW3_RENDER_RES")[0];
+    scaled_session = std::getenv("KZSF_RENDER_RES") && std::getenv("KZSF_RENDER_RES")[0];
     render_width = 1920;
     render_height = 1080;
-    if (const char* res = std::getenv("GOW3_RENDER_RES")) {
+    if (const char* res = std::getenv("KZSF_RENDER_RES")) {
         u32 w = 0, h = 0;
         if (std::sscanf(res, "%ux%u", &w, &h) == 2 && w && h) {
             render_width = w;
@@ -220,11 +220,11 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     if (enabled) {
         if(camera_motion.KillzoneNative()) {
             std::printf("Upscaler: Killzone %s native integration, graphics PS857a8dc0, jitter forced OFF\n",
-                        Gow3Settings::Get().upscaler==Gow3Settings::UpscalerTaa ? "TAA" : "FSR3");
+                        KzsfSettings::Get().upscaler==KzsfSettings::UpscalerTaa ? "TAA" : "FSR3");
         } else {
         std::printf("Upscaler: FSR 3.1 available (%s) on scene color before compute shader "
                     "%016llx\n",
-                    Gow3Settings::Get().upscaler != Gow3Settings::UpscalerOff ? "on" : "off",
+                    KzsfSettings::Get().upscaler != KzsfSettings::UpscalerOff ? "on" : "off",
                     static_cast<unsigned long long>(trigger_hash));
         }
     }
@@ -241,26 +241,26 @@ TemporalUpscaler::~TemporalUpscaler() {
 bool TemporalUpscaler::Active() const {
     if(camera_motion.KillzoneNative() &&
        (scaled_session ||
-        (Gow3Settings::Get().upscaler!=Gow3Settings::UpscalerFsr3 &&
-         Gow3Settings::Get().upscaler!=Gow3Settings::UpscalerTaa) ||
-        (Gow3Settings::Get().upscaler==Gow3Settings::UpscalerTaa &&
-         Gow3Settings::RenderPreset()!=Gow3Settings::NativeAA) ||
-        (Gow3Settings::RenderPreset()!=Gow3Settings::NativeAA &&
-         !(killzone_quality && Gow3Settings::RenderPreset()==1)))) return false;
+        (KzsfSettings::Get().upscaler!=KzsfSettings::UpscalerFsr3 &&
+         KzsfSettings::Get().upscaler!=KzsfSettings::UpscalerTaa) ||
+        (KzsfSettings::Get().upscaler==KzsfSettings::UpscalerTaa &&
+         KzsfSettings::RenderPreset()!=KzsfSettings::NativeAA) ||
+        (KzsfSettings::RenderPreset()!=KzsfSettings::NativeAA &&
+         !(killzone_quality && KzsfSettings::RenderPreset()==1)))) return false;
     // Toggle 1 << 24 switches it off at run time (A/B); history restarts after.
     return enabled && !failed &&
-           (Gow3Settings::Get().upscaler == Gow3Settings::UpscalerFsr3 ||
-            Gow3Settings::IsFsr4(Gow3Settings::Get().upscaler) ||
-            Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa ||
-            Gow3Settings::Get().upscaler == Gow3Settings::UpscalerDlss) &&
-           !Gow3Toggle::Disabled(1u << 24);
+           (KzsfSettings::Get().upscaler == KzsfSettings::UpscalerFsr3 ||
+            KzsfSettings::IsFsr4(KzsfSettings::Get().upscaler) ||
+            KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa ||
+            KzsfSettings::Get().upscaler == KzsfSettings::UpscalerDlss) &&
+           !KzsfToggle::Disabled(1u << 24);
 }
 
 bool TemporalUpscaler::ReactiveOn() const {
     if(camera_motion.KillzoneNative()) return false; // no verified Killzone transparency mask yet
     // FSR 4 takes no reactive mask: the opaque snapshot and the mask pass would be wasted.
-    return Gow3Settings::Get().reactive && !Gow3Toggle::Disabled(1u << 27) && !UseFsr4() && !UseDlss() &&
-           Gow3Settings::Get().upscaler != Gow3Settings::UpscalerTaa;
+    return KzsfSettings::Get().reactive && !KzsfToggle::Disabled(1u << 27) && !UseFsr4() && !UseDlss() &&
+           KzsfSettings::Get().upscaler != KzsfSettings::UpscalerTaa;
 }
 
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
@@ -299,13 +299,13 @@ bool TemporalUpscaler::OnFrameStart() {
                         "dispatched=%u preset=%d jitter=%d\n", diagnostic_frames,
                         diagnostic_camera_frames, diagnostic_scene_frames,
                         diagnostic_trigger_frames, diagnostic_dispatch_frames,
-                        Gow3Settings::RenderPreset(), int(Gow3Settings::Get().jitter.load()));
+                        KzsfSettings::RenderPreset(), int(KzsfSettings::Get().jitter.load()));
             std::fflush(stdout);
         }
     }
-    // gow3: GOW3_PRESET_FILE=<file> holding a preset number, read about once a second: switches
+    // kzsf: KZSF_PRESET_FILE=<file> holding a preset number, read about once a second: switches
     // the preset like the menu does (scripted tests of live preset changes).
-    static const char* preset_file = std::getenv("GOW3_PRESET_FILE");
+    static const char* preset_file = std::getenv("KZSF_PRESET_FILE");
     if (preset_file && ++preset_file_frames % 64 == 0) {
         if (FILE* f = std::fopen(preset_file, "r")) {
             int value = 0;
@@ -313,33 +313,33 @@ bool TemporalUpscaler::OnFrameStart() {
             int provider = -1;
             const int fields = std::fscanf(f, "%d %d %d", &value, &output, &provider);
             if (fields >= 1 && value >= 0 &&
-                value < Gow3Settings::PresetCount) {
-                Gow3Settings::Get().preset.store(value);
+                value < KzsfSettings::PresetCount) {
+                KzsfSettings::Get().preset.store(value);
             }
-            if (fields >= 2 && output >= 0 && output < Gow3Settings::OutputCount) {
-                Gow3Settings::Get().output_res.store(output);
+            if (fields >= 2 && output >= 0 && output < KzsfSettings::OutputCount) {
+                KzsfSettings::Get().output_res.store(output);
             }
-            if (fields == 3 && provider >= 0 && provider < Gow3Settings::UpscalerCount) {
-                Gow3Settings::Get().upscaler.store(provider);
+            if (fields == 3 && provider >= 0 && provider < KzsfSettings::UpscalerCount) {
+                KzsfSettings::Get().upscaler.store(provider);
             }
             std::fclose(f);
         }
     }
-    const auto& settings = Gow3Settings::Get();
+    const auto& settings = KzsfSettings::Get();
     // The guest's startup resolution patch remains in effect until restart. Keep the FSR
     // model at the applied preset while the menu saves the requested one for run.sh.
-    const int preset = Gow3Settings::RenderPreset();
-    if (applied_preset != preset || settings.upscaler == Gow3Settings::UpscalerOff) failed = false;
+    const int preset = KzsfSettings::RenderPreset();
+    if (applied_preset != preset || settings.upscaler == KzsfSettings::UpscalerOff) failed = false;
     const bool active = Active();
-    const bool jitter_on = !camera_motion.KillzoneNative() && active && settings.jitter && !Gow3Toggle::Disabled(1u << 25);
+    const bool jitter_on = !camera_motion.KillzoneNative() && active && settings.jitter && !KzsfToggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
     // Killzone's scene/HUD integration is chosen by the launcher. Save menu changes for restart.
     const int output = std::clamp(camera_motion.KillzoneNative() ? settings.startup_output_res :
-                                 settings.output_res.load(), 0, Gow3Settings::OutputCount - 1);
+                                 settings.output_res.load(), 0, KzsfSettings::OutputCount - 1);
     const bool output_changed = !scaled_session && applied_output != output;
     if (output_changed) {
-        target_width = Gow3Settings::OutputWidths[output];
-        target_height = Gow3Settings::OutputHeights[output];
+        target_width = KzsfSettings::OutputWidths[output];
+        target_height = KzsfSettings::OutputHeights[output];
         std::printf("Output resolution: %ux%u (live)\n", target_width, target_height);
         failed = false;
         fsr4_failed = false;
@@ -350,16 +350,16 @@ bool TemporalUpscaler::OnFrameStart() {
         // A failed provider keeps a fatal flag internally; a user retry gets a fresh context.
         scheduler.Finish();
         fsr4 = std::make_unique<Fsr4Upscaler>(instance, scheduler);
-        if (Gow3Settings::IsFsr4(upscaler)) Gow3Settings::Get().fsr4_problem = nullptr;
+        if (KzsfSettings::IsFsr4(upscaler)) KzsfSettings::Get().fsr4_problem = nullptr;
     }
     if (applied_upscaler != upscaler) fsr4_failed = false; // retry after a menu change
     // Dynamic scene resolution scaling (live preset switching) works on all GPUs.
     // On GPUs without D32S8 blit support, UI depth is cleared instead of copied from scene.
-    // Killzone (GOW3_SCENE_NATIVE=1): the scene stays at the game's own 1920x1080, without host
+    // Killzone (KZSF_SCENE_NATIVE=1): the scene stays at the game's own 1920x1080, without host
     // proxies (its shaders read many targets at exact pixels: each proxy round trip lost
     // detail, foliage lighting broke); the temporal upscaler alone reaches the output size.
     static const bool scene_native = [] {
-        const char* v = std::getenv("GOW3_SCENE_NATIVE");
+        const char* v = std::getenv("KZSF_SCENE_NATIVE");
         return v && v[0] == '1';
     }();
     if (!scaled_session && scene_native) {
@@ -371,8 +371,8 @@ bool TemporalUpscaler::OnFrameStart() {
         render_width = scene_targets.Size().width;
         render_height = scene_targets.Size().height;
     }
-    Gow3Settings::Get().active_render_width = Scaled() ? render_width : scene_targets.Size().width;
-    Gow3Settings::Get().active_render_height = Scaled() ? render_height : scene_targets.Size().height;
+    KzsfSettings::Get().active_render_width = Scaled() ? render_width : scene_targets.Size().width;
+    KzsfSettings::Get().active_render_height = Scaled() ? render_height : scene_targets.Size().height;
     if (changed || !dispatched_last_frame) reset = true;
     if (changed) jitter_index = 0;
     applied_preset = preset;
@@ -412,7 +412,7 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
         diagnostic_scene |= bool(scene_color);
         diagnostic_trigger |= cs_hash == trigger_hash;
     }
-    if(camera_motion.KillzoneNative()) return; // Killzone's trigger is graphics, not GOW3 compute.
+    if(camera_motion.KillzoneNative()) return; // Killzone's trigger is graphics, not KZSF compute.
     if (cs_hash != trigger_hash || done_this_frame || failed || Scaled()) {
         return;
     }
@@ -445,12 +445,12 @@ void TemporalUpscaler::OnKillzonePost(u64 vs_hash,u64 ps_hash,VideoCore::ImageId
     if(!camera_motion.Ready()) { reset=true; return; }
     Run();
     static int reported=-1;
-    const int provider=Gow3Settings::Get().upscaler;
+    const int provider=KzsfSettings::Get().upscaler;
     if(dispatched_last_frame && reported!=provider) {
         reported=provider;
         std::printf("Killzone %s: recorded real %s dispatch before PS857a8dc0; scene=%ux%u output=1920x1080, jitterOFF, camera-only motion\n",
-                    provider==Gow3Settings::UpscalerTaa ? "TAA" : "FSR",
-                    provider==Gow3Settings::UpscalerTaa ? "TAA" : "FSR3",
+                    provider==KzsfSettings::UpscalerTaa ? "TAA" : "FSR",
+                    provider==KzsfSettings::UpscalerTaa ? "TAA" : "FSR3",
                     render_width,render_height);
         std::fflush(stdout);
     }
@@ -459,9 +459,9 @@ void TemporalUpscaler::OnKillzonePost(u64 vs_hash,u64 ps_hash,VideoCore::ImageId
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     // DLSS, like FSR 4, has its own context: no portable FSR 3 context is made.
     const bool use_fsr4 = UseFsr4() || UseDlss();
-    const bool use_taa = Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa;
+    const bool use_taa = KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa;
     if (use_taa && (w != ow || h != oh)) {
-        std::printf("TAA: remove GOW3_RENDER_RES to use native-resolution TAA\n");
+        std::printf("TAA: remove KZSF_RENDER_RES to use native-resolution TAA\n");
         return false;
     }
     if (resources_ready && w == width && h == height && ow == out_width && oh == out_height &&
@@ -766,18 +766,18 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
         std::array<float, 2> jitter;
         u32 reset, pad;
         std::array<std::array<float, 4>, 3> depth;
-    } params{jitter, reset ? 1u : 0u, std::getenv("GOW3_TAA_DIAGNOSTICS") ?
-                 u32(std::clamp(std::atoi(std::getenv("GOW3_TAA_DIAGNOSTICS")),1,3)) : 0u,
+    } params{jitter, reset ? 1u : 0u, std::getenv("KZSF_TAA_DIAGNOSTICS") ?
+                 u32(std::clamp(std::atoi(std::getenv("KZSF_TAA_DIAGNOSTICS")),1,3)) : 0u,
              camera_motion.TaaDepthParameters()};
-    // Optional techniques for A/B in one run (GOW3_TOGGLE_FILE bits 51-54): tonemapped blending,
+    // Optional techniques for A/B in one run (KZSF_TOGGLE_FILE bits 51-54): tonemapped blending,
     // YCoCg clipping, variance clipping, 3x3 reconstruction. Measured in game on 2026-10-02
     // (static and panning camera, interleaved captures): none improved stability beyond run
     // noise; YCoCg clipping and the reconstruction made it worse. Default: all off.
-    params.pad |= (Gow3Toggle::Disabled(Gow3Toggle::TaaTonemapBlend) ? 1u << 8 : 0u) |
-                  (Gow3Toggle::Disabled(Gow3Toggle::TaaClip) ? 2u << 8 : 0u) |
-                  (Gow3Toggle::Disabled(Gow3Toggle::TaaVariance) ? 4u << 8 : 0u) |
-                  (Gow3Toggle::Disabled(Gow3Toggle::TaaFilter) ? 8u << 8 : 0u) |
-                  (Gow3Toggle::Disabled(Gow3Toggle::TaaKeepNearerHistory) ? 16u << 8 : 0u);
+    params.pad |= (KzsfToggle::Disabled(KzsfToggle::TaaTonemapBlend) ? 1u << 8 : 0u) |
+                  (KzsfToggle::Disabled(KzsfToggle::TaaClip) ? 2u << 8 : 0u) |
+                  (KzsfToggle::Disabled(KzsfToggle::TaaVariance) ? 4u << 8 : 0u) |
+                  (KzsfToggle::Disabled(KzsfToggle::TaaFilter) ? 8u << 8 : 0u) |
+                  (KzsfToggle::Disabled(KzsfToggle::TaaKeepNearerHistory) ? 16u << 8 : 0u);
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *taa_pipeline);
     if (params.pad & 0xffu) {
         static u32 diagnostic_frames = 0;
@@ -789,7 +789,7 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
     cmdbuf.pushConstants(*taa_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
                          sizeof(params), &params);
     cmdbuf.dispatch((out_width + 7) / 8, (out_height + 7) / 8, 1);
-    const auto& settings = Gow3Settings::Get();
+    const auto& settings = KzsfSettings::Get();
     const float strength = std::clamp(settings.sharpness.load(), 0.0f, 2.0f);
     if (settings.sharpen && strength > 0.0f && !(params.pad & 0xffu)) {
         const vk::MemoryBarrier2 resolved{
@@ -818,7 +818,7 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
 
 void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w,
                                     u32 h) {
-    const auto& settings = Gow3Settings::Get();
+    const auto& settings = KzsfSettings::Get();
     const float extra = std::clamp(settings.sharpness.load(), 0.0f, 2.0f) - 1.0f;
     if (!settings.sharpen || extra <= 0.0f) {
         return;
@@ -907,7 +907,7 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
 }
 
 void TemporalUpscaler::OnBlendedSceneDraw() {
-    // The mask is opt-in (menu, GOW3_REACTIVE=1): on thin mist it traded trails for
+    // The mask is opt-in (menu, KZSF_REACTIVE=1): on thin mist it traded trails for
     // jitter shimmer, which looked worse. Toggle 1 << 27 switches it off.
     if (snapshot_taken || !scene_color || !Active() || !ReactiveOn()) {
         return;
@@ -1026,7 +1026,7 @@ bool TemporalUpscaler::RecordReactive(vk::ImageView color_view) {
     const u32 w = width, h = height;
     // Relative color change times the scale (default 1), zero below the threshold (0.2), at
     // most the maximum (0.9, never fully reactive) — the defaults of AMD's mask generator.
-    const auto& settings = Gow3Settings::Get();
+    const auto& settings = KzsfSettings::Get();
     const std::array<float, 3> params{settings.reactive_scale, settings.reactive_max,
                                       settings.reactive_threshold};
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
@@ -1084,7 +1084,7 @@ bool TemporalUpscaler::RecordReactive(vk::ImageView color_view) {
 
 void TemporalUpscaler::Run() {
     if (auto* profiler = GpuProfiler::Get()) {
-        const char* label = Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa
+        const char* label = KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa
             ? "upscaler Run (TAA)" : "upscaler Run (FSR)";
         profiler->Mark(0xF5A0'0000ull ^ std::hash<std::string_view>{}(label),
                        [label] { return std::string{label}; });
@@ -1187,7 +1187,7 @@ void TemporalUpscaler::Run() {
     last_frame = now;
 
     bool dispatched = false;
-    if (Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa) {
+    if (KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa) {
         RecordTaa(cmdbuf, input_color_view, input_depth_view);
         dispatched = true;
     } else if (UseFsr4()) {
@@ -1230,7 +1230,7 @@ void TemporalUpscaler::Run() {
         }
         info.transparencyAndCompositionMask.structSize = sizeof(info.transparencyAndCompositionMask);
         // Toggle 1 << 26 (tests): the opposite sign convention for FSR.
-        const float sign = Gow3Toggle::Disabled(1u << 26) ? -1.0f : 1.0f;
+        const float sign = KzsfToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
         info.jitterOffset = {sign * jitter[0], sign * jitter[1]};
         info.motionVectorScale = {1.0f, 1.0f};
         info.renderSize = {w, h};
@@ -1241,10 +1241,10 @@ void TemporalUpscaler::Run() {
         info.cameraFar = camera_motion.Far();
         info.cameraVerticalFovRadians = camera_motion.VerticalFov();
         info.viewSpaceToMeters = 1.0f;
-        // RCAS strength 0..1 (menu, GOW3_FSR_SHARPNESS); jitter at 1:1 softens the image slightly.
+        // RCAS strength 0..1 (menu, KZSF_FSR_SHARPNESS); jitter at 1:1 softens the image slightly.
         // AMD's RCAS ends at 1; ExtraSharpen adds the rest of the menu's 0..2.
-        info.sharpness = std::min(Gow3Settings::Get().sharpness.load(), 1.0f);
-        info.enableSharpening = Gow3Settings::Get().sharpen ? VK_TRUE : VK_FALSE;
+        info.sharpness = std::min(KzsfSettings::Get().sharpness.load(), 1.0f);
+        info.enableSharpening = KzsfSettings::Get().sharpen ? VK_TRUE : VK_FALSE;
         info.reset = reset ? VK_TRUE : VK_FALSE;
         info.frameId = frame_id++;
     
@@ -1279,7 +1279,7 @@ void TemporalUpscaler::Run() {
                 std::fflush(stdout);
             }
         }
-        if (Gow3Settings::Get().upscaler != Gow3Settings::UpscalerTaa) {
+        if (KzsfSettings::Get().upscaler != KzsfSettings::UpscalerTaa) {
             ExtraSharpen(cmdbuf, vk::Image(output_image), false, ow, oh);
         }
         // The result replaces the scene color's RGB (its alpha carries data for the post).
@@ -1326,11 +1326,11 @@ void TemporalUpscaler::Run() {
         }};
         // Debug (menu or toggle 1 << 28): the reactive mask in red over a darkened frame;
         // or the motion vectors (menu).
-        const int debug_view = Gow3Settings::Get().debug_view;
-        const u32 mode = has_reactive && (debug_view == Gow3Settings::DebugReactive ||
-                                          Gow3Toggle::Disabled(1u << 28))
+        const int debug_view = KzsfSettings::Get().debug_view;
+        const u32 mode = has_reactive && (debug_view == KzsfSettings::DebugReactive ||
+                                          KzsfToggle::Disabled(1u << 28))
                              ? 1
-                         : debug_view == Gow3Settings::DebugMotion ? 2
+                         : debug_view == KzsfSettings::DebugMotion ? 2
                                                                  : 0;
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *merge_pipeline);
         cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *merge_pipeline_layout, 0,
@@ -1381,7 +1381,7 @@ namespace Vulkan {
 
 std::array<u32, 2> TemporalUpscaler::SceneSize(u32 w, u32 h) const {
     if (!scaled_session) return {render_width, render_height};
-    // The game's own render size (scene constants); GOW3_RENDER_RES until the first camera.
+    // The game's own render size (scene constants); KZSF_RENDER_RES until the first camera.
     auto size = camera_motion.RenderSize();
     if (size[0] == 0 || size[1] == 0) {
         size = {render_width, render_height};
@@ -1390,17 +1390,17 @@ std::array<u32, 2> TemporalUpscaler::SceneSize(u32 w, u32 h) const {
 }
 
 float TemporalUpscaler::SceneMipBias() const {
-    if (!Active() || Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa) return 0.0f;
-    const float render = float(Gow3Settings::Get().active_render_width.load());
+    if (!Active() || KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa) return 0.0f;
+    const float render = float(KzsfSettings::Get().active_render_width.load());
     const float output = float(Scaled() ? target_width : 1920u);
     return render > 0.0f && render < output ? std::log2(render / output) : 0.0f;
 }
 
 bool TemporalUpscaler::Scaled() const {
-    // GOW3_NATIVE_AA=1: FSR / DLSS at the game's own 1920x1080 (anti-aliasing only, like DLAA),
+    // KZSF_NATIVE_AA=1: FSR / DLSS at the game's own 1920x1080 (anti-aliasing only, like DLAA),
     // through the same path as an upscale (frame generation takes its inputs there).
     static const bool native_aa = [] {
-        const char* v = std::getenv("GOW3_NATIVE_AA");
+        const char* v = std::getenv("KZSF_NATIVE_AA");
         return v && v[0] == '1';
     }();
     return scaled_session || native_aa || target_width != 1920 || target_height != 1080;
@@ -1685,7 +1685,7 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
 
 void TemporalUpscaler::RunScaled() {
     if (auto* profiler = GpuProfiler::Get()) {
-        const char* label = Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa
+        const char* label = KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa
             ? "upscaler RunScaled (TAA)" : "upscaler RunScaled (FSR)";
         profiler->Mark(0xF5A0'0000ull ^ std::hash<std::string_view>{}(label),
                        [label] { return std::string{label}; });
@@ -1730,10 +1730,10 @@ void TemporalUpscaler::RunScaled() {
         runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
         // Killzone: the game's own velocity target replaces the camera reprojection wherever
-        // the scene was drawn (its first-person weapon has its own camera). GOW3_KZ_VELOCITY=0:
+        // the scene was drawn (its first-person weapon has its own camera). KZSF_KZ_VELOCITY=0:
         // camera reprojection only.
         static const bool use_velocity = [] {
-            const char* v = std::getenv("GOW3_KZ_VELOCITY");
+            const char* v = std::getenv("KZSF_KZ_VELOCITY");
             return !v || v[0] != '0';
         }();
         if (const auto velocity_id = camera_motion.Velocity(); use_velocity && velocity_id) {
@@ -1802,13 +1802,13 @@ void TemporalUpscaler::RunScaled() {
     }
     last_frame = now;
 
-    // gow3: FSR 4 writes its HDR-format output, copied into the output-size UI image.
-    if (UseFsr4() || UseDlss() || Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa) {
+    // kzsf: FSR 4 writes its HDR-format output, copied into the output-size UI image.
+    if (UseFsr4() || UseDlss() || KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa) {
         barrier(vk::Image(output_image), vk::ImageAspectFlagBits::eColor,
                 vk::ImageLayout::eUndefined, all, vk::AccessFlagBits2::eNone,
                 vk::ImageLayout::eGeneral, all, rw);
         bool ok4 = true;
-        if (Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa) {
+        if (KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa) {
             RecordTaa(cmdbuf, color_view, depth_view);
         } else if (UseDlss()) {
             ok4 = RecordDlss(cmdbuf,
@@ -1823,7 +1823,7 @@ void TemporalUpscaler::RunScaled() {
                             oh, frame_ms);
         }
         if (ok4) {
-            if (Gow3Settings::Get().upscaler != Gow3Settings::UpscalerTaa) {
+            if (KzsfSettings::Get().upscaler != KzsfSettings::UpscalerTaa) {
                 ExtraSharpen(cmdbuf, vk::Image(output_image), false, ow, oh);
             }
             barrier(vk::Image(output_image), vk::ImageAspectFlagBits::eColor,
@@ -1861,8 +1861,8 @@ void TemporalUpscaler::RunScaled() {
                 DumpImages(instance, scheduler, cmdbuf, dump,
                            {{depth_image, source_width, source_height, 4, "depth", "f32",
                              vk::ImageAspectFlagBits::eDepth}});
-                if (Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa &&
-                    std::getenv("GOW3_TAA_DIAGNOSTICS")) {
+                if (KzsfSettings::Get().upscaler == KzsfSettings::UpscalerTaa &&
+                    std::getenv("KZSF_TAA_DIAGNOSTICS")) {
                     DumpImages(instance, scheduler, cmdbuf, dump,
                                {{vk::Image(taa_history[taa_next]),ow,oh,16,
                                  "previous_history","rgba32f"},
@@ -1885,7 +1885,7 @@ void TemporalUpscaler::RunScaled() {
         return;
     }
 
-    const auto& settings = Gow3Settings::Get();
+    const auto& settings = KzsfSettings::Get();
     FfxVkPortableUpscaleDispatchInfo info{};
     info.structSize = sizeof(info);
     info.commandBuffer = cmdbuf;
@@ -1914,7 +1914,7 @@ void TemporalUpscaler::RunScaled() {
     }
 
     info.transparencyAndCompositionMask.structSize = sizeof(info.transparencyAndCompositionMask);
-    const float sign = Gow3Toggle::Disabled(1u << 26) ? -1.0f : 1.0f;
+    const float sign = KzsfToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
     info.jitterOffset = {sign * jitter[0], sign * jitter[1]};
     info.motionVectorScale = {1.0f, 1.0f};
     info.renderSize = {w, h};
@@ -2015,15 +2015,15 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
     // Killzone: its display copy (the first pass of a frame) reads the scene color with integer
     // coordinates of the 1920x1080 guest image, so on the output-size UI image it showed only the
     // top-left part, stretched (1.33x zoom at 1440p). The port blits the UI image (format
-    // conversion included) and sends the game's draw to a sink. GOW3_DISPLAY_BLIT=0: old way.
+    // conversion included) and sends the game's draw to a sink. KZSF_DISPLAY_BLIT=0: old way.
     static const bool display_blit = [] {
-        const char* v = std::getenv("GOW3_DISPLAY_BLIT");
+        const char* v = std::getenv("KZSF_DISPLAY_BLIT");
         return !v || v[0] != '0';
     }();
     // A BGRA scan-out read through the guest's RGBA buffer: the blit writes BGRA bytes.
-    extern std::atomic<bool> g_gow3_display_bgra;
+    extern std::atomic<bool> g_kzsf_display_bgra;
     auto host_format = image.info.pixel_format;
-    if (display_blit && g_gow3_display_bgra.load(std::memory_order_relaxed)) {
+    if (display_blit && g_kzsf_display_bgra.load(std::memory_order_relaxed)) {
         if (host_format == vk::Format::eR8G8B8A8Srgb) host_format = vk::Format::eB8G8R8A8Srgb;
         else if (host_format == vk::Format::eR8G8B8A8Unorm) host_format = vk::Format::eB8G8R8A8Unorm;
     }
@@ -2213,10 +2213,10 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
     }
     display = {vk::Image(it->second.image), it->second.format, it->second.width, it->second.height};
     // Diagnostic capture of the actual completed display buffer, including native UI.
-    // GOW3_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
-    static const char* dump = std::getenv("GOW3_PRESENT_DUMP_TRIGGER");
+    // KZSF_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
+    static const char* dump = std::getenv("KZSF_PRESENT_DUMP_TRIGGER");
     static const int dump_count = [] {
-        const char* env = std::getenv("GOW3_PRESENT_DUMP_COUNT");
+        const char* env = std::getenv("KZSF_PRESENT_DUMP_COUNT");
         return env ? std::max(1, std::atoi(env)) : 1;
     }();
     static int dump_index = 0;
@@ -2241,20 +2241,20 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
 namespace Vulkan {
 
 bool TemporalUpscaler::UseFsr4() const {
-    const int selected = Gow3Settings::Get().upscaler;
-    const bool supported = selected == Gow3Settings::UpscalerFsr411
+    const int selected = KzsfSettings::Get().upscaler;
+    const bool supported = selected == KzsfSettings::UpscalerFsr411
                                ? instance.IsFsr411Supported()
                                : instance.IsFsr4Int8Supported();
-    return Gow3Settings::IsFsr4(selected) && supported && !fsr4_failed;
+    return KzsfSettings::IsFsr4(selected) && supported && !fsr4_failed;
 }
 
 bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image color,
                                   Fsr4Upscaler::Image depth, u32 w, u32 h, u32 ow, u32 oh,
                                   float frame_ms) {
-    const auto& settings = Gow3Settings::Get();
+    const auto& settings = KzsfSettings::Get();
     // Same jitter convention as FSR 3; the menu (or toggle 1 << 26) flips it for tests.
     const float sign =
-        Gow3Toggle::Disabled(1u << 26) != settings.fsr4_invert_jitter.load() ? -1.0f : 1.0f;
+        KzsfToggle::Disabled(1u << 26) != settings.fsr4_invert_jitter.load() ? -1.0f : 1.0f;
     const bool ok = fsr4->Record({
         .cmdbuf = cmdbuf,
         .color = color,
@@ -2278,18 +2278,18 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
     static std::string shown;
     const char* problem = fsr4->Problem();
     if (!problem) {
-        Gow3Settings::Get().fsr4_problem = nullptr;
+        KzsfSettings::Get().fsr4_problem = nullptr;
     } else if (shown != problem) {
         shown = problem;
         static std::array<std::string, 8> kept;
         static u32 next = 0;
         kept[next] = shown;
-        Gow3Settings::Get().fsr4_problem = kept[next].c_str();
+        KzsfSettings::Get().fsr4_problem = kept[next].c_str();
         next = (next + 1) % kept.size();
     }
     if (!ok && fsr4->Fatal()) {
         std::printf("Upscaler: falling back to FSR 3.1\n");
-        Gow3Settings::Get().upscaler = Gow3Settings::UpscalerFsr3;
+        KzsfSettings::Get().upscaler = KzsfSettings::UpscalerFsr3;
         fsr4_failed = true; // EnsureResources creates the FSR 3 context next frame
         reset = true;
     }
@@ -2298,7 +2298,7 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
 
 bool TemporalUpscaler::UseDlss() const {
     const Dlss* dlss = Dlss::Get();
-    return Gow3Settings::Get().upscaler == Gow3Settings::UpscalerDlss && dlss && dlss->Available() &&
+    return KzsfSettings::Get().upscaler == KzsfSettings::UpscalerDlss && dlss && dlss->Available() &&
            !dlss_failed;
 }
 
@@ -2317,8 +2317,8 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
     }
     if (ok) {
         // The jitter and motion vectors FSR 3 gets: render pixels, current to previous.
-        const float sign = Gow3Toggle::Disabled(1u << 26) ? -1.0f : 1.0f;
-        const auto& settings = Gow3Settings::Get();
+        const float sign = KzsfToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
+        const auto& settings = KzsfSettings::Get();
         ok = dlss->Evaluate(cmdbuf, {
             .color = color,
             .depth = depth,
@@ -2335,7 +2335,7 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
     }
     if (!ok) {
         std::printf("Upscaler: DLSS failed; falling back to FSR 3.1\n");
-        Gow3Settings::Get().upscaler = Gow3Settings::UpscalerFsr3;
+        KzsfSettings::Get().upscaler = KzsfSettings::UpscalerFsr3;
         dlss_failed = true; // EnsureResources creates the FSR 3 context next frame
         reset = true;
     }

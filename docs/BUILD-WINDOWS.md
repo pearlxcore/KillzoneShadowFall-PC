@@ -20,10 +20,10 @@ git clone --recursive --branch main https://github.com/pearlxcore/KillzoneShadow
 cd KillzoneShadowFall-PC
 export CXXFLAGS='-include cstdlib -include cstdio -include cwchar -include cmath -include new'
 export CFLAGS="$CXXFLAGS"
-GOW3_LTO=OFF bash build.sh
+KZSF_LTO=OFF bash build.sh
 ```
 
-The build supplies `out/gow3-probe-launcher.exe` for all launcher features. Internal `gow3` names are inherited from upstream.
+The build supplies `out/kzsf-game.exe` for all launcher features. Internal `kzsf` names are inherited from upstream.
 
 ## Prepare the game
 

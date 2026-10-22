@@ -1,4 +1,4 @@
-// gow3: SDL3 window for the Vulkan swapchain (X11 or Wayland).
+// kzsf: SDL3 window for the Vulkan swapchain (X11 or Wayland).
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -6,9 +6,9 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
-#include "gow3_overlay.h"
-#include "gow3_graphics.h"
-#include "gow3_settings.h"
+#include "kzsf_overlay.h"
+#include "kzsf_graphics.h"
+#include "kzsf_settings.h"
 #include "kzsf_mouse_input.h"
 #include "kzsf_prompt_device.h"
 #include <chrono>
@@ -30,31 +30,31 @@ uint64_t MouseNow() {
 }
 }
 
-extern "C" int gow3gpu_pc_prompts_active(void) {
-    int style=Gow3Settings::Get().prompt_style.load();
+extern "C" int kzsfgpu_pc_prompts_active(void) {
+    int style=KzsfSettings::Get().prompt_style.load();
     if(style)return style==1;
     int device=prompt_device.load();
     return device ? device==1 : !prompt_gamepad_connected.load();
 }
 
-extern "C" int gow3gpu_mouse_state(int16_t* x,int16_t* y,uint32_t* buttons) {
+extern "C" int kzsfgpu_mouse_state(int16_t* x,int16_t* y,uint32_t* buttons) {
     std::scoped_lock lock{mouse_mutex};
     mouse_input.Sample(MouseNow(),*x,*y);
     *buttons=mouse_input.captured ? mouse_input.buttons : 0;
     return mouse_input.captured;
 }
 
-extern "C" void gow3gpu_free_camera_input(int active) {
+extern "C" void kzsfgpu_free_camera_input(int active) {
     if(free_camera_input.exchange(active!=0)==(active!=0))return;
     std::scoped_lock lock{mouse_mutex};
     free_camera_look.Clear();
     mouse_input.Reset(mouse_input.captured,MouseNow());
 }
-extern "C" void gow3gpu_free_camera_mouse(float* yaw,float* pitch) {
+extern "C" void kzsfgpu_free_camera_mouse(float* yaw,float* pitch) {
     std::scoped_lock lock{mouse_mutex};
     *yaw=*pitch=0;
     if(free_camera_input.load() && mouse_input.captured) {
-        const auto& s=Gow3Settings::Get();
+        const auto& s=KzsfSettings::Get();
         free_camera_look.Take(*yaw,*pitch,s.mouse_sensitivity.load()/100.f,
             s.mouse_horizontal_speed.load()/100.f,s.mouse_vertical_speed.load()/100.f,
             s.mouse_invert_y.load());
@@ -70,11 +70,11 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     }
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
-    // Normal launch: a focusable window centred on the primary display. GOW3_MONITOR=<index>
+    // Normal launch: a focusable window centred on the primary display. KZSF_MONITOR=<index>
     // optionally places it on another monitor (0 = first display; SDL display IDs are opaque, so
-    // the value is an index into SDL_GetDisplays()). GOW3_WINDOW_FOCUS=0 makes the window
+    // the value is an index into SDL_GetDisplays()). KZSF_WINDOW_FOCUS=0 makes the window
     // non-focusable so it will not steal the foreground from a game on another display.
-    const char* monitor_env = std::getenv("GOW3_MONITOR");
+    const char* monitor_env = std::getenv("KZSF_MONITOR");
     SDL_Rect display{};
     bool placed = false;
     if (monitor_env) {
@@ -84,16 +84,16 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         if (displays && index >= 0 && index < display_count) {
             placed = SDL_GetDisplayBounds(displays[index], &display);
             if (placed) {
-                std::printf("Window: GOW3_MONITOR=%s -> display %d at %d,%d %dx%d (of %d)\n",
+                std::printf("Window: KZSF_MONITOR=%s -> display %d at %d,%d %dx%d (of %d)\n",
                             monitor_env, index, display.x, display.y, display.w, display.h, display_count);
             }
         }
         if (!placed) {
-            LOG_WARNING(Frontend, "GOW3_MONITOR={} is out of range ({} display(s))", monitor_env, display_count);
+            LOG_WARNING(Frontend, "KZSF_MONITOR={} is out of range ({} display(s))", monitor_env, display_count);
         }
         SDL_free(displays);
     }
-    const char* focus_env = std::getenv("GOW3_WINDOW_FOCUS");
+    const char* focus_env = std::getenv("KZSF_WINDOW_FOCUS");
     if (focus_env && focus_env[0] == '0') {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FOCUSABLE_BOOLEAN, false);
     }
@@ -112,8 +112,8 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
-    // gow3: the game's own icon (run.py converts sce_sys/icon0.png to BMP, SDL's built-in format).
-    if (const char* icon_path = std::getenv("GOW3_WINDOW_ICON")) {
+    // kzsf: the game's own icon (run.py converts sce_sys/icon0.png to BMP, SDL's built-in format).
+    if (const char* icon_path = std::getenv("KZSF_WINDOW_ICON")) {
         if (SDL_Surface* icon = SDL_LoadBMP(icon_path)) {
             SDL_SetWindowIcon(window, icon);
             SDL_DestroySurface(icon);
@@ -139,17 +139,17 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     } else {
         UNREACHABLE_MSG("Unsupported SDL video driver {}", driver ? driver : "(none)");
     }
-    // gow3: GOW3_FULLSCREEN=1 (older launchers) still asks for fullscreen.
-    if (const char* fullscreen = std::getenv("GOW3_FULLSCREEN"); fullscreen && fullscreen[0] == '1' &&
-        Gow3Settings::Get().display_mode == Gow3Graphics::Windowed) {
-        Gow3Settings::Get().display_mode = Gow3Graphics::Borderless;
+    // kzsf: KZSF_FULLSCREEN=1 (older launchers) still asks for fullscreen.
+    if (const char* fullscreen = std::getenv("KZSF_FULLSCREEN"); fullscreen && fullscreen[0] == '1' &&
+        KzsfSettings::Get().display_mode == KzsfGraphics::Windowed) {
+        KzsfSettings::Get().display_mode = KzsfGraphics::Borderless;
     }
-    ApplyDisplayMode(Gow3Settings::Get().display_mode);
-    mouse_enabled=Gow3Settings::Get().mouse_aim.load();
+    ApplyDisplayMode(KzsfSettings::Get().display_mode);
+    mouse_enabled=KzsfSettings::Get().mouse_aim.load();
     {
         std::scoped_lock lock{mouse_mutex};
         mouse_input.Reset(false,MouseNow());
-        const auto& s=Gow3Settings::Get();
+        const auto& s=KzsfSettings::Get();
         mouse_input.gain=s.mouse_sensitivity.load()/100.f;
         mouse_input.aim_gain=s.mouse_ads_sensitivity.load()/100.f;
         mouse_input.horizontal_gain=s.mouse_horizontal_speed.load()/100.f;
@@ -168,18 +168,18 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
 // mode. Window thread only (SDL). The swapchain follows the size events.
 void WindowSDL::ApplyDisplayMode(int mode) {
     display_mode = mode;
-    if (mode == Gow3Graphics::Windowed) {
+    if (mode == KzsfGraphics::Windowed) {
         SDL_SetWindowFullscreen(window, false);
     } else {
         const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(window));
-        const bool exclusive = mode == Gow3Graphics::Fullscreen && desktop;
+        const bool exclusive = mode == KzsfGraphics::Fullscreen && desktop;
         if (!SDL_SetWindowFullscreenMode(window, exclusive ? desktop : nullptr)) {
             LOG_WARNING(Frontend, "Fullscreen mode: {}", SDL_GetError());
         }
         SDL_SetWindowFullscreen(window, true);
     }
     SDL_SyncWindow(window);
-    std::printf("Window: %s\n", Gow3Graphics::DisplayModeNames[mode]);
+    std::printf("Window: %s\n", KzsfGraphics::DisplayModeNames[mode]);
 }
 
 WindowSDL::~WindowSDL() {
@@ -221,12 +221,12 @@ void WindowSDL::UpdateTextTitle() {
     const std::string title = text_active ? base_title + " \u2014 " + text_prompt + ": " + text + "_  (Enter = OK, Esc = cancel)"
                                           : base_title;
     SDL_SetWindowTitle(window, title.c_str());
-    Gow3Overlay::SetTextEntry(text_active, text_prompt, text);
+    KzsfOverlay::SetTextEntry(text_active, text_prompt, text);
 }
 
 bool WindowSDL::PollEvents() {
     prompt_gamepad_connected.store(SDL_HasGamepad());
-    const auto& mouse_settings=Gow3Settings::Get();
+    const auto& mouse_settings=KzsfSettings::Get();
     const bool mouse_requested=mouse_settings.mouse_aim.load() || free_camera_input.load();
     if (mouse_enabled && !mouse_requested) SetMouseCapture(false);
     mouse_enabled=mouse_requested;
@@ -238,7 +238,7 @@ bool WindowSDL::PollEvents() {
         mouse_input.vertical_gain=mouse_settings.mouse_vertical_speed.load()/100.f;
         mouse_input.invert=mouse_settings.mouse_invert_y.load();
     }
-    if (mouse_enabled && (Gow3Overlay::CapturesInput() || text_active ||
+    if (mouse_enabled && (KzsfOverlay::CapturesInput() || text_active ||
         !(SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS))) SetMouseCapture(false);
     {
         std::scoped_lock lock{text_mutex};
@@ -250,9 +250,9 @@ bool WindowSDL::PollEvents() {
         }
     }
     if (!text_active) {
-        Gow3Overlay::UpdateTextInput(window);
+        KzsfOverlay::UpdateTextInput(window);
     }
-    if (const int mode = Gow3Settings::Get().display_mode; mode != display_mode) {
+    if (const int mode = KzsfSettings::Get().display_mode; mode != display_mode) {
         ApplyDisplayMode(mode);
     }
     SDL_Event event;
@@ -263,7 +263,7 @@ bool WindowSDL::PollEvents() {
                  event.key.key==SDLK_RETURN)) ||
                 (event.type==SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button==SDL_GAMEPAD_BUTTON_START))
                 SetMouseCapture(false);
-            const bool blocked=Gow3Overlay::CapturesInput() || text_active ||
+            const bool blocked=KzsfOverlay::CapturesInput() || text_active ||
                                !(SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS);
             if (!blocked && event.type==SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button==SDL_BUTTON_LEFT && !mouse_captured) {
@@ -314,8 +314,8 @@ bool WindowSDL::PollEvents() {
             UpdateTextTitle();
             continue;
         }
-        if (Gow3Overlay::HandleEvent(event)) {
-            if (mouse_enabled && Gow3Overlay::CapturesInput()) SetMouseCapture(false);
+        if (KzsfOverlay::HandleEvent(event)) {
+            if (mouse_enabled && KzsfOverlay::CapturesInput()) SetMouseCapture(false);
             continue;
         }
         // Observe only inputs the game can receive, after overlay/text handling.
@@ -323,12 +323,12 @@ bool WindowSDL::PollEvents() {
         if(event.type==SDL_EVENT_GAMEPAD_AXIS_MOTION) {
             unsigned axis=event.gaxis.axis;
             if(axis<4) {
-                const auto& s=Gow3Settings::Get();
+                const auto& s=KzsfSettings::Get();
                 int zone=std::max(s.controller_drift_deadzone.load(),s.look_deadzone.load());
                 controller_input=prompt_controller.Stick(axis,event.gaxis.value,zone);
             } else if(axis<6)controller_input=prompt_controller.Trigger(axis-4,event.gaxis.value);
         }
-        if(!text_active && !Gow3Overlay::CapturesInput() &&
+        if(!text_active && !KzsfOverlay::CapturesInput() &&
            (SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS)) {
             if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat &&
                runtime_pad_prompt_key(event.key.scancode))prompt_device.store(1);
@@ -358,7 +358,7 @@ bool WindowSDL::PollEvents() {
         }
     }
     if (mouse_enabled && !mouse_captured) {
-        if (Gow3Overlay::CapturesInput()) SDL_HideCursor();
+        if (KzsfOverlay::CapturesInput()) SDL_HideCursor();
         else SDL_ShowCursor();
     }
     return is_open;

@@ -81,7 +81,7 @@ static int make_dirs(const char *path) {
     return mkdir(buffer,0755) && errno!=EEXIST ? -1 : 0;
 }
 static void root(int32_t user, const char *title, char *out, size_t size) {
-    const char *override=getenv("GOW3_SAVEDATA_DIR");
+    const char *override=getenv("KZSF_SAVEDATA_DIR");
     if (override && *override)
         snprintf(out,size,"%s/%d/%s",override,user,title && *title ? title : title_id);
     else

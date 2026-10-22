@@ -43,6 +43,17 @@ int main(void) {
     assert(kzsf_character_body_visibility_plan_ex(origin,origin+0x7000,origin+0x8000,1,read_memory,NULL,&model,changes,&n) && n==2);
     assert(changes[0].index==0 && changes[0].enabled && changes[1].index==7 && !changes[1].enabled);
     assert(kzsf_character_body_visibility_apply(origin,model,changes,n,read_memory,NULL,begin,slot,end));
+    /* Falling/zipline: chosen body disabled, native body re-enabled while
+     * the normal camera show-body flag is false. Transfer visibility to CJ. */
+    integer(0x200e0,0x602);integer(0x20000+7*0xf0+0xe0,0x702);
+    assert(kzsf_character_body_visibility_plan_ex(origin,origin+0x7000,origin+0x8000,0,read_memory,NULL,&model,changes,&n) && n==0);
+    assert(kzsf_character_body_visibility_plan_follow(origin,origin+0x7000,origin+0x8000,0,1,read_memory,NULL,&model,changes,&n) && n==2);
+    assert(changes[0].index==0 && changes[0].enabled && changes[1].index==7 && !changes[1].enabled);
+    assert(kzsf_character_body_visibility_apply(origin,model,changes,n,read_memory,NULL,begin,slot,end));
+    memcpy(&untouched,memory+0x20000+8*0xf0+0xe0,4);assert(untouched==0x702);
+    /* A genuinely hidden native state must stay hidden. */
+    integer(0x200e0,0x602);
+    assert(kzsf_character_body_visibility_plan_follow(origin,origin+0x7000,origin+0x8000,0,1,read_memory,NULL,&model,changes,&n) && n==0);
     ptr(0x5038,origin+1);
     assert(!kzsf_character_body_visibility_plan(origin,origin+0x7000,origin+0x8000,read_memory,NULL,&model,changes,&n));
     puts("body visibility: checkpoint recovery, default/selected bodies, hidden-state gate, duplicate and attachment isolation passed");

@@ -18,7 +18,7 @@
 #include "damage_hook.h"
 #include "kzsf_cheats.h"
 #include "tsc_patch.h"
-#include "gpu/gow3gpu.h"
+#include "gpu/kzsfgpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
 #endif
@@ -48,6 +48,7 @@
 #include "kzsf_sprint_turn_win.h"
 #include "kzsf_aim_controls_win.h"
 #include "kzsf_camera_controls_win.h"
+#include "kzsf_custom_vertex_probe.h"
 #include <tlhelp32.h>
 #else
 #include <sys/mman.h>
@@ -288,7 +289,7 @@ static int trace_imports;
 #define TRACE_STUB_CAP 65536
 static unsigned char trace_stub_store[128*TRACE_STUB_CAP]; /* in the module: RIP-relative stores fit */
 static unsigned char *trace_pool;
-volatile uint32_t gow3_hle_last;
+volatile uint32_t kzsf_hle_last;
 /* Shared call-order ring: the tracer trampoline records the import index in call order,
  * so a stall watchdog can name the most recent HLE calls. */
 static volatile uint32_t hle_seq;
@@ -318,8 +319,8 @@ static void build_trace_stub(unsigned char *o, uint32_t index, uintptr_t target)
     int32_t rel=(int32_t)(target-((uintptr_t)o+p+5));
     o[p++]=0xE9; memcpy(o+p,&rel,4); p+=4;
 #else
-    int32_t disp=(int32_t)((uintptr_t)&gow3_hle_last-((uintptr_t)o+10));
-    o[0]=0xC7; o[1]=0x05; memcpy(o+2,&disp,4); memcpy(o+6,&index,4); /* mov [gow3_hle_last], index */
+    int32_t disp=(int32_t)((uintptr_t)&kzsf_hle_last-((uintptr_t)o+10));
+    o[0]=0xC7; o[1]=0x05; memcpy(o+2,&disp,4); memcpy(o+6,&index,4); /* mov [kzsf_hle_last], index */
     int32_t rel=(int32_t)(target-((uintptr_t)o+15));
     o[10]=0xE9; memcpy(o+11,&rel,4);                                /* jmp target */
 #endif
@@ -473,7 +474,7 @@ static void dump_kzsf_pool(const CONTEXT *c) {
     fprintf(stderr,"KZSF pool: type=%u raw=%016" PRIx64 " low60=%" PRIu64
             " start=%016" PRIx64 " prev=%016" PRIx64 " next=%016" PRIx64 " lock=%u\n",
             node[2]&3,raw,raw&UINT64_C(0x0fffffffffffffff),start,prev,next,lock);
-    if (gpu_enabled) gow3gpu_dump_write_range(c->R15,sizeof(node));
+    if (gpu_enabled) kzsfgpu_dump_write_range(c->R15,sizeof(node));
 }
 static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     if (__atomic_exchange_n(&fatal_reported,1,__ATOMIC_ACQ_REL)) { Sleep(INFINITE); }
@@ -492,7 +493,7 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
 #ifdef _WIN32
     uint32_t hle_last=runtime_thread_trace_get();
 #else
-    uint32_t hle_last=gow3_hle_last;
+    uint32_t hle_last=kzsf_hle_last;
 #endif
     if (trace_imports && hle_last && hle_last-1 < import_count)
         fprintf(stderr,"  last HLE import: %s (index %u)\n",names[hle_last-1],hle_last-1);
@@ -508,7 +509,7 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     }
     dump_kzsf_pool(c);
     dump_kzsf_animation_fault(c);
-    if (gpu_enabled) gow3gpu_dump_guest_writes(info);
+    if (gpu_enabled) kzsfgpu_dump_guest_writes(info);
     /* rbp chain (guest and host code keep frame pointers). */
     uintptr_t rbp=(uintptr_t)c->Rbp;
     for (int depth=0; depth<24 && rbp; ++depth) {
@@ -533,7 +534,7 @@ static void isa_context_regs(CONTEXT *c, IsaRegs *regs, int to_context) {
 }
 static int kzsf_free_key(int key) {return (GetAsyncKeyState(key)&0x8000)!=0;}
 static void kzsf_free_input(int active) {
-    runtime_pad_free_camera(active);gow3gpu_free_camera_input(active);
+    runtime_pad_free_camera(active);kzsfgpu_free_camera_input(active);
 }
 static const float *kzsf_free_camera_update(CONTEXT *c,int combined) {
     ULONGLONG now=GetTickCount64();
@@ -546,9 +547,11 @@ static const float *kzsf_free_camera_update(CONTEXT *c,int combined) {
     }
     DWORD foreground_pid=0;
     GetWindowThreadProcessId(GetForegroundWindow(),&foreground_pid);
-    int allowed=foreground_pid==GetCurrentProcessId() && !gow3gpu_overlay_captures_input();
+    int allowed=foreground_pid==GetCurrentProcessId() && !kzsfgpu_overlay_captures_input();
     int toggle=kzsf_free_key(combined ? VK_F9 : VK_F8),reset=kzsf_free_key(combined ? VK_F10 : VK_F7);
-    if(allowed && toggle && !kzsf_free_camera_toggle_down) {
+    int camera_request=combined ? kzsfgpu_camera_request(1) : -1;
+    if((allowed && toggle && !kzsf_free_camera_toggle_down) ||
+       (camera_request>=0 && camera_request!=kzsf_free_camera.active)) {
         if(kzsf_free_camera.active)kzsf_free_camera.active=0;
         else {
             float native[16];
@@ -568,20 +571,23 @@ static const float *kzsf_free_camera_update(CONTEXT *c,int combined) {
             kzsf_free_camera_start(&kzsf_free_camera,native);
     }
     kzsf_free_camera_toggle_down=toggle;kzsf_free_camera_reset_down=reset;
+    if(combined)kzsfgpu_camera_publish(1,kzsf_free_camera.active);
     if(!kzsf_free_camera.active)return NULL;
     float mouse_yaw=0,mouse_pitch=0;
-    gow3gpu_free_camera_mouse(&mouse_yaw,&mouse_pitch); // consume once, including on focus loss
+    kzsfgpu_free_camera_mouse(&mouse_yaw,&mouse_pitch); // consume once, including on focus loss
     if(allowed) {
         float stick_x=0,stick_y=0,move_x=0,move_y=0,shoulder_forward=0;
         runtime_pad_free_camera_axes(&move_x,&move_y,&stick_x,&stick_y,&shoulder_forward);
-        float stick_gain=gow3gpu_controller_aim_gain(0)/100.f;
+        float stick_gain=kzsfgpu_controller_aim_gain(0)/100.f;
+        /* F7 reserves arrow keys for the model selector while held. */
+        int arrow_look=!kzsf_free_key(VK_F7);
         KzsfFreeCameraInput input={
             .right=kzsf_free_key('D')-kzsf_free_key('A')+move_x,
             .up=combined ? kzsf_free_key('E')-kzsf_free_key('Q')+kzsf_free_key(VK_PRIOR)-kzsf_free_key(VK_NEXT)+shoulder_forward :
                 kzsf_free_key('W')-kzsf_free_key('S')+kzsf_free_key(VK_PRIOR)-kzsf_free_key(VK_NEXT)-move_y,
             .forward=combined ? kzsf_free_key('W')-kzsf_free_key('S')-move_y : kzsf_free_key('E')-kzsf_free_key('Q')+shoulder_forward,
-            .yaw=(kzsf_free_key(VK_RIGHT)-kzsf_free_key(VK_LEFT))*1.5f+stick_x*2.5f*stick_gain,
-            .pitch=(kzsf_free_key(VK_UP)-kzsf_free_key(VK_DOWN))*1.5f-stick_y*2.5f*stick_gain,
+            .yaw=arrow_look*(kzsf_free_key(VK_RIGHT)-kzsf_free_key(VK_LEFT))*1.5f+stick_x*2.5f*stick_gain,
+            .pitch=arrow_look*(kzsf_free_key(VK_UP)-kzsf_free_key(VK_DOWN))*1.5f-stick_y*2.5f*stick_gain,
             .speed=kzsf_free_key(VK_SHIFT) ? 12.f : kzsf_free_key(VK_CONTROL) ? .5f : 3.f};
         float pitch_before=kzsf_free_camera.pitch;
         if(!kzsf_free_camera_step(&kzsf_free_camera,input,seconds) ||
@@ -600,7 +606,7 @@ static const float *kzsf_free_camera_update(CONTEXT *c,int combined) {
         }
         static unsigned look_sources;
         unsigned sources=(mouse_yaw || mouse_pitch ? 1u : 0u) | (stick_x || stick_y ? 2u : 0u) |
-            (kzsf_free_key(VK_LEFT) || kzsf_free_key(VK_RIGHT) || kzsf_free_key(VK_UP) || kzsf_free_key(VK_DOWN) ? 4u : 0u);
+            (!kzsf_free_key(VK_F7) && (kzsf_free_key(VK_LEFT) || kzsf_free_key(VK_RIGHT) || kzsf_free_key(VK_UP) || kzsf_free_key(VK_DOWN)) ? 4u : 0u);
         if(sources&~look_sources) {
             look_sources|=sources;
             fprintf(stderr,"KILLZONE_FREE_LOOK sources=%u mouse=%.4f,%.4f stick=%.3f,%.3f eye=%.3f,%.3f,%.3f\n",
@@ -611,10 +617,24 @@ static const float *kzsf_free_camera_update(CONTEXT *c,int combined) {
     return kzsf_free_camera.matrix;
 }
 static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_call,uintptr_t original) {
+    /* Falling/zipline camera states fail the normal follow-state gate below.
+     * Maintain an already-selected CJ on the engine callback regardless of
+     * camera state. Revalidate both actor type and exact owned model first;
+     * never use a stale owner or create/select a model from traversal. */
+    if(direct_call && kzsf_cj_part &&
+       !__atomic_load_n(&kzsf_character_level_transition,__ATOMIC_ACQUIRE) &&
+       __atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE)==KZSF_CHARACTER_MODEL_CJ &&
+       __atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE)==kzsf_cj_owner &&
+       __atomic_load_n(&kzsf_character_render_part,__ATOMIC_ACQUIRE)==kzsf_cj_part &&
+       kzsf_observer_baseline_type(kzsf_cj_owner,(uintptr_t)image,kzsf_cheat_read,NULL)==(uintptr_t)image+0x3ca98b0) {
+        uintptr_t owned_model=0;
+        if(kzsf_zoom_read(kzsf_cheat_read,NULL,kzsf_cj_owner,0x200,&owned_model,8) && owned_model==kzsf_cj_model)
+            kzsf_observer_body_visibility(stderr,kzsf_cj_owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek());
+    }
     DWORD foreground_pid=0;
     GetWindowThreadProcessId(GetForegroundWindow(),&foreground_pid);
     int key=foreground_pid==GetCurrentProcessId() &&
-        !gow3gpu_overlay_captures_input() && kzsf_free_key(VK_F6);
+        !kzsfgpu_overlay_captures_input() && kzsf_free_key(VK_F6);
     if((hit==1 || (key && !kzsf_camera_observer_key)) &&
        kzsf_camera_observer_samples<KZSF_CAMERA_OBSERVER_LIMIT) {
         fprintf(stderr,"KILLZONE_CAMERA_OBSERVER snapshot=%u tick=%llu reason=%s selector_calls=%u bind_calls=%u view_calls=%u\n",
@@ -646,14 +666,14 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
         character_selector_test=value && !strcmp(value,"1");
     }
     if(character_swap_test && direct_call && !__atomic_load_n(&kzsf_character_level_transition,__ATOMIC_ACQUIRE)) {
-        int input_active=foreground_pid==GetCurrentProcessId() && !gow3gpu_overlay_captures_input();
+        int input_active=foreground_pid==GetCurrentProcessId() && !kzsfgpu_overlay_captures_input();
         int pressed=input_active && kzsf_free_key(VK_F7);
         const char *overlay_keys_mode=getenv("KZSF_CHARACTER_OVERLAY_TEST");
         int overlay_keys=overlay_keys_mode && !strcmp(overlay_keys_mode,"1");
         static KzsfCharacterModelKeys model_keys;
         int key_action=overlay_keys ? kzsf_character_model_keys(&model_keys,input_active,pressed,
             kzsf_free_key(VK_LEFT),kzsf_free_key(VK_RIGHT)) : (pressed && !character_swap_key ? 2 : 0);
-        if(key_action==1 || key_action==-1)gow3gpu_character_cycle(key_action);
+        if(key_action==1 || key_action==-1)kzsfgpu_character_cycle(key_action);
         if(key_action==2) {
             KzsfFollowBaseline baseline;const char *why=NULL;
             if(kzsf_follow_baseline_read(c->R14,c->Rbx,(uintptr_t)image,kzsf_cheat_read,NULL,
@@ -663,7 +683,7 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
                 if(overlay_keys && bundle_mode && !strcmp(bundle_mode,"1")) {
                     int active=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
                     if(__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE)!=baseline.owner)active=0;
-                    gow3gpu_character_select(active ? 0 : kzsf_character_last_model);
+                    kzsfgpu_character_select(active ? 0 : kzsf_character_last_model);
                 } else if(character_selector_test)
                     kzsf_observer_character_cycle(stderr,baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),-1);
                 else kzsf_observer_commando_toggle(stderr,baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek());
@@ -689,7 +709,7 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
             overlay_selector=value && !strcmp(value,"1");
         }
         if(overlay_selector) {
-            uint64_t request=gow3gpu_character_request();
+            uint64_t request=kzsfgpu_character_request();
             if(request){overlay_pending=request;overlay_reply=request;overlay_status=2;bundle_started=GetTickCount64();bundle_polled=0;bundle_result=0;}
             KzsfFollowBaseline b;const char *reason=NULL;
             int baseline_ready=kzsf_follow_baseline_read(c->R14,c->Rbx,(uintptr_t)image,kzsf_cheat_read,NULL,
@@ -710,8 +730,10 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
                         (unsigned long long)(baseline_ready ? kzsf_observer_baseline_type(b.state,(uintptr_t)image,kzsf_cheat_read,NULL)-(uintptr_t)image : 0));
                     fflush(stderr);
                 }
-                gow3gpu_character_publish(overlay_reply,kind,1,available);
+                kzsfgpu_character_publish(overlay_reply,kind,1,available);
             } else {
+                kzsf_custom_model_tick(b.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),kzsf_observer_baseline_type,-1);
+                kind=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
                 if(__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE)!=b.owner)kind=0;
                 if(overlay_pending) {
                     int wanted=(int)(uint32_t)overlay_pending-1;
@@ -726,7 +748,7 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
                     }
                     const char *bundle_mode=getenv("KZSF_CHARACTER_BUNDLE_TEST");
                     int loading=0;
-                    if(wanted>0 && bundle_mode && !strcmp(bundle_mode,"1")) {
+                    if(wanted>0 && wanted!=KZSF_CHARACTER_MODEL_CJ && bundle_mode && !strcmp(bundle_mode,"1")) {
                         ULONGLONG now=GetTickCount64();
                         if(!bundle_polled || now-bundle_polled>=250) {
                             KzsfCameraEngineContext context;const char *why="bundle-engine-context";
@@ -749,6 +771,22 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
                     }
                     if(!overlay_pending || loading) { /* Wait for native resource initialization before touching the player. */ }
                     else if(kind==wanted){overlay_pending=0;overlay_status=0;}
+                    else if(kind==KZSF_CHARACTER_MODEL_CJ || wanted==KZSF_CHARACTER_MODEL_CJ) {
+                        if(kind==KZSF_CHARACTER_MODEL_CJ) {
+                            kzsf_custom_model_tick(b.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),kzsf_observer_baseline_type,0);
+                        } else if(kind!=0) {
+                            /* Restore a native selection before loading CJ against the player's rig. */
+                            if(!kzsf_cj_available()){overlay_pending=0;overlay_status=3;}
+                            else kzsf_observer_character_cycle(stderr,b.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),0);
+                        } else {
+                            kzsf_custom_model_tick(b.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),kzsf_observer_baseline_type,1);
+                        }
+                        int previous=kind;
+                        kind=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
+                        if(kind==wanted){overlay_pending=0;overlay_status=(kind==KZSF_CHARACTER_MODEL_CJ && !kzsf_cj_expires) ? 4 : 0;if(kind && !overlay_status)kzsf_character_last_model=kind;}
+                        else if(previous!=0 && kind==0)overlay_status=2;
+                        else {overlay_pending=0;overlay_status=4;}
+                    }
                     else {
                         int restoring_first=kind!=0;
                         /* Validate the requested named appearance while the
@@ -785,7 +823,8 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
                 if(!overlay_pending && kind!=overlay_last_kind)overlay_status=0;
                 overlay_last_kind=kind;
                 available=kzsf_character_available_owner==b.owner ? kzsf_character_available_models : 1;
-                gow3gpu_character_publish(overlay_reply,kind,overlay_status,available);
+                if(kzsf_cj_available())available|=UINT64_C(1)<<KZSF_CHARACTER_MODEL_CJ;
+                kzsfgpu_character_publish(overlay_reply,kind,overlay_status,available);
             }
         }
         static unsigned visibility_tick;
@@ -805,6 +844,20 @@ static void kzsf_camera_observe_view(const CONTEXT *c,unsigned hit,int direct_ca
     /* One resource capture after stable gameplay ownership. The explicit
      * diagnostic may call the native loaded-object query, never a setter;
      * allocator TLS/code checks apply and it never runs in the VEH path. */
+    static int custom_vertex_probe_enabled=-1;
+    if(custom_vertex_probe_enabled<0) {
+        const char *path=getenv("KZSF_CUSTOM_VERTEX_PROBE_FILE");
+        custom_vertex_probe_enabled=path && *path;
+    }
+    if(custom_vertex_probe_enabled && direct_call) {
+        KzsfFollowBaseline baseline;const char *why=NULL;
+        if(kzsf_follow_baseline_read(c->R14,c->Rbx,(uintptr_t)image,kzsf_cheat_read,NULL,
+                kzsf_observer_baseline_type,&baseline,&why) &&
+           kzsf_follow_model_state(kzsf_observer_baseline_type(baseline.state,(uintptr_t)image,kzsf_cheat_read,NULL),(uintptr_t)image)) {
+            kzsf_custom_vertex_probe(baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),kzsf_observer_baseline_type);
+            kzsf_custom_model_tick(baseline.owner,(uintptr_t)image,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),kzsf_observer_baseline_type,-2);
+        }
+    }
     static int resource_test=-1;
     static uintptr_t resource_owner;
     static unsigned resource_stable,resource_attempts;
@@ -850,8 +903,10 @@ static uintptr_t kzsf_camera_ignore_grenade(void *opaque,uintptr_t association) 
 }
 static void kzsf_third_person_update(uintptr_t render,uintptr_t view,unsigned frame) {
     DWORD pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&pid);
-    int focused=pid==GetCurrentProcessId() && !gow3gpu_overlay_captures_input();
+    int focused=pid==GetCurrentProcessId() && !kzsfgpu_overlay_captures_input();
     int key=focused && kzsf_free_key(VK_F8);const char *why="disabled";
+    int camera_request=kzsfgpu_camera_request(0);
+    if(camera_request>=0)kzsf_third_person.requested=camera_request;
     KzsfFollowBaseline baseline;
     int eligible=(kzsf_third_person.requested || key) &&
         kzsf_follow_baseline_read(view,render,(uintptr_t)image,kzsf_cheat_read,NULL,
@@ -862,6 +917,7 @@ static void kzsf_third_person_update(uintptr_t render,uintptr_t view,unsigned fr
     uintptr_t previous_view=kzsf_third_person.view;uint64_t previous_tick=kzsf_third_person.tick;
     int active=kzsf_third_person_step(&kzsf_third_person,view,tick,focused,key,
                                      eligible,readable ? native : NULL,pose);
+    kzsfgpu_camera_publish(0,kzsf_third_person.requested);
     if(previous && !kzsf_third_person.requested)
         why=previous_view && previous_view!=view ? "view-changed" :
             previous_tick && tick<previous_tick ? "clock-reset" : "f8-disabled";
@@ -1139,7 +1195,7 @@ static uintptr_t kzsf_character_level_exit_original;
 static ABI void kzsf_character_level_exit_visit(uintptr_t state) {
     void (ABI *original)(uintptr_t)=(void (ABI *)(uintptr_t))kzsf_character_level_exit_original;
     if(__atomic_exchange_n(&kzsf_character_level_transition,1,__ATOMIC_ACQ_REL)){original(state);return;}
-    gow3gpu_character_selector_enable(0);
+    kzsfgpu_character_selector_enable(0);
     uintptr_t base=(uintptr_t)image;KzsfCameraEngineContext context;
     int engine=kzsf_camera_engine_context(runtime_thread_tcb_peek(),base,kzsf_cheat_read,NULL,&context) &&
         context.allocate_method==base+0x4f67a0 && kzsf_character_bundle_guards(base,kzsf_cheat_read,NULL);
@@ -1151,8 +1207,10 @@ static ABI void kzsf_character_level_exit_visit(uintptr_t state) {
            kzsf_zoom_read(kzsf_cheat_read,NULL,manager,0xd8,&worker,8) && worker &&
            kzsf_zoom_read(kzsf_cheat_read,NULL,worker,0x88,&busy,1) && busy==1)api.wait(worker);
         uintptr_t owner=__atomic_load_n(&kzsf_character_render_owner,__ATOMIC_ACQUIRE);
-        if(owner && kzsf_observer_baseline_type(owner,base,kzsf_cheat_read,NULL)==base+0x3ca98b0)
-            kzsf_observer_character_cycle(stderr,owner,base,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),0);
+        if(owner && kzsf_observer_baseline_type(owner,base,kzsf_cheat_read,NULL)==base+0x3ca98b0) {
+            if(kzsf_cj_part)kzsf_custom_model_tick(owner,base,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),kzsf_observer_baseline_type,0);
+            else kzsf_observer_character_cycle(stderr,owner,base,kzsf_cheat_read,NULL,runtime_thread_tcb_peek(),0);
+        }
         for(int kind=1;kind<KZSF_CHARACTER_MODEL_COUNT;kind++) {
             if(!kzsf_character_bundle_leases[kind].queued)continue;
             int result=kzsf_character_bundle_release(kind,base,kzsf_cheat_read,NULL,api,&kzsf_character_bundle_leases[kind]);
@@ -1160,6 +1218,7 @@ static ABI void kzsf_character_level_exit_visit(uintptr_t state) {
         }
     }
     original(state);
+    if(engine)kzsf_cj_release(base);
     /* Actors and old render nodes are now gone. Drop host identity tokens,
      * including cached discovery results, before the next level can use them. */
     kzsf_character_render_publish(0,0,-1,0,0,0);
@@ -1169,9 +1228,9 @@ static ABI void kzsf_character_level_exit_visit(uintptr_t state) {
     for(int kind=0;kind<KZSF_CHARACTER_MODEL_COUNT;kind++)__atomic_store_n(&kzsf_character_known_parts[kind],0,__ATOMIC_RELEASE);
     kzsf_character_available_models=1;kzsf_character_available_owner=0;
     kzsf_character_level_epoch++;
-    gow3gpu_character_reset();
+    kzsfgpu_character_reset();
     __atomic_store_n(&kzsf_character_level_transition,0,__ATOMIC_RELEASE);
-    gow3gpu_character_selector_enable(1);
+    kzsfgpu_character_selector_enable(1);
     fputs("KILLZONE_CHARACTER_LEVEL_EXIT phase=complete host_state=reset\n",stderr);fflush(stderr);
 }
 static uintptr_t kzsf_character_draw_original;
@@ -1437,7 +1496,8 @@ static ABI void kzsf_character_draw_visit(uintptr_t node,uintptr_t render) {
     }
     const char *generic_mode=getenv("KZSF_CHARACTER_ALL_MODELS_TEST");
     int generic_test=generic_mode && !strcmp(generic_mode,"1");
-    int generic_needed=generic_test && (__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE)>=3 || (bones!=98 && bones!=103));
+    int draw_kind=__atomic_load_n(&kzsf_character_model_kind,__ATOMIC_ACQUIRE);
+    int generic_needed=generic_test && ((draw_kind>=3 && draw_kind!=KZSF_CHARACTER_MODEL_CJ) || (bones!=98 && bones!=103));
     if(!generic_needed && bones!=98 && (!kzsf_character_body_route_test || bones!=103))goto native_draw;
     if(restoring && bones==98)goto native_draw;
     kzsf_character_draw_visibility(node,source,sequence);
@@ -1824,29 +1884,29 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         if(record->ExceptionAddress==image+KZSF_FOV_SITE) {
             kind=0;
             ok=kzsf_camera_fov_store(info->ContextRecord,(uintptr_t)image,
-                gow3gpu_fov_percent(),kzsf_turn_write,NULL,&fov);
+                kzsfgpu_fov_percent(),kzsf_turn_write,NULL,&fov);
         } else if(record->ExceptionAddress==image+KZSF_SHAKE_SITE) {
             kind=1;
             ok=kzsf_camera_shake_result(info->ContextRecord,(uintptr_t)image,
-                gow3gpu_camera_shake(),kzsf_cheat_read,kzsf_turn_write,NULL);
+                kzsfgpu_camera_shake(),kzsf_cheat_read,kzsf_turn_write,NULL);
         }
         if(kind>=0 && ok) {
             if(__atomic_add_fetch(&kzsf_camera_events[kind],1,__ATOMIC_RELAXED)==1)
                 fprintf(stderr,"KILLZONE_CAMERA %s reached: fov=%d%% shake=%d stored_fov=%.2f\n",
-                    kind==0?"FOV":"shake",gow3gpu_fov_percent(),gow3gpu_camera_shake(),fov);
+                    kind==0?"FOV":"shake",kzsfgpu_fov_percent(),kzsfgpu_camera_shake(),fov);
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
     if(code==EXCEPTION_BREAKPOINT && kzsf_player_turn_enabled) {
         CONTEXT *c=info->ContextRecord;int ok=0,changed=0,kind=-1;
         if(record->ExceptionAddress==image+KZSF_RESPONSE_SITE) {
-            kind=0;ok=kzsf_look_response(c,(uintptr_t)image,gow3gpu_look_curve(),gow3gpu_look_deadzone(),
+            kind=0;ok=kzsf_look_response(c,(uintptr_t)image,kzsfgpu_look_curve(),kzsfgpu_look_deadzone(),
                 kzsf_cheat_read,kzsf_turn_write,NULL,&changed);
         } else if(record->ExceptionAddress==image+KZSF_RAMP_SITE) {
-            kind=1;ok=kzsf_look_ramp(c,(uintptr_t)image,gow3gpu_look_ramp(),
+            kind=1;ok=kzsf_look_ramp(c,(uintptr_t)image,kzsfgpu_look_ramp(),
                 kzsf_cheat_read,kzsf_turn_write,NULL,&changed);
         } else if(record->ExceptionAddress==image+KZSF_ASSIST_SITE) {
-            kind=2;ok=kzsf_look_assist(c,(uintptr_t)image,gow3gpu_look_assist(),kzsf_cheat_read,NULL,&changed);
+            kind=2;ok=kzsf_look_assist(c,(uintptr_t)image,kzsfgpu_look_assist(),kzsf_cheat_read,NULL,&changed);
         }
         if(kind>=0) {
             if(ok) {
@@ -1861,7 +1921,7 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
        record->ExceptionAddress==image+KZSF_SPRINT_SITE) {
         float before,after;
         const int sprinting=(unsigned char)info->ContextRecord->Rax!=0;
-        const int percent=gow3gpu_sprint_turn_speed();
+        const int percent=kzsfgpu_sprint_turn_speed();
         kzsf_sprint_capture(&kzsf_sprint_scope,info->ContextRecord,(uintptr_t)image,
             kzsf_cheat_read,NULL);
         if(kzsf_sprint_turn(info->ContextRecord,(uintptr_t)image,percent,
@@ -1881,7 +1941,7 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         float before[2],after[2];unsigned user;
         const int sprinting=kzsf_sprint_consume(&kzsf_sprint_scope,info->ContextRecord);
         if(kzsf_player_turn(info->ContextRecord,(uintptr_t)image,
-            sprinting?100:gow3gpu_controller_turn_speed(),gow3gpu_controller_pitch_speed(),
+            sprinting?100:kzsfgpu_controller_turn_speed(),kzsfgpu_controller_pitch_speed(),
             kzsf_cheat_read,kzsf_turn_write,NULL,before,after,&user)) {
             unsigned event=__atomic_add_fetch(&kzsf_player_turn_events,1,__ATOMIC_RELAXED);
             if(event==1 || event%256==0) {
@@ -1953,8 +2013,8 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         for(unsigned i=0;i<sizeof(kzsf_pc_calls)/sizeof(*kzsf_pc_calls);++i) {
             if(record->ExceptionAddress!=image+kzsf_pc_calls[i]) continue;
             CONTEXT *c=info->ContextRecord;
-            if(__atomic_load_n(&kzsf_prompt_pc_state,__ATOMIC_ACQUIRE)==2 && gow3gpu_pc_prompts_active()) {
-                KzsfPromptPc *art=gow3gpu_mouse_aim_enabled() ? &kzsf_prompt_pc : &kzsf_prompt_keyboard;
+            if(__atomic_load_n(&kzsf_prompt_pc_state,__ATOMIC_ACQUIRE)==2 && kzsfgpu_pc_prompts_active()) {
+                KzsfPromptPc *art=kzsfgpu_mouse_aim_enabled() ? &kzsf_prompt_pc : &kzsf_prompt_keyboard;
                 int glyph=kzsf_pc_draw_caller(art,c,kzsf_pc_calls[i]+5,
                     kzsf_cheat_read,kzsf_turn_write,NULL);
                 unsigned draws=__atomic_load_n(&art->draws,__ATOMIC_RELAXED);
@@ -1987,7 +2047,7 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         float engine_rate;
         memcpy(&engine_rate,&info->ContextRecord->Xmm0,sizeof(engine_rate));
         float applied=0.0f;
-        int percent=pitch ? gow3gpu_controller_pitch_speed() : gow3gpu_controller_turn_speed();
+        int percent=pitch ? kzsfgpu_controller_pitch_speed() : kzsfgpu_controller_turn_speed();
         if(kzsf_engine_rate_store(info->ContextRecord,(uintptr_t)image,pitch,percent,
                                   kzsf_turn_write,NULL,&applied)) {
             if(kzsf_turn_log)
@@ -2053,17 +2113,17 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     }
     if (code==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
         /* GPU page tracking (write-protected guest pages) is resolved first. */
-        if (gpu_enabled && gow3gpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
+        if (gpu_enabled && kzsfgpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
         if (runtime_fault_recover) {
             /* A speculative guest memory read (GPU draw preparation) faulted: the thread resumes
-             * in gow3_longjmp, outside the exception dispatcher, back at its recovery point. */
+             * in kzsf_longjmp, outside the exception dispatcher, back at its recovery point. */
             unsigned long long *buffer=*runtime_fault_recover;
             runtime_fault_recover=NULL;
             CONTEXT *c=info->ContextRecord;
             c->Rsp=((c->Rsp-128)&~(DWORD64)15)-40;
             c->Rcx=(DWORD64)(uintptr_t)buffer;
             c->Rdx=1;
-            c->Rip=(DWORD64)(uintptr_t)gow3_longjmp;
+            c->Rip=(DWORD64)(uintptr_t)kzsf_longjmp;
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
@@ -2078,15 +2138,15 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
                  !module;
         if (ours) return fatal_exception(info);
     }
-    /* GOW3_STRICT_HANDLES=1: a closed or invalid handle used anywhere is reported (diagnostics). */
+    /* KZSF_STRICT_HANDLES=1: a closed or invalid handle used anywhere is reported (diagnostics). */
     if (code==0xC0000008 /* STATUS_INVALID_HANDLE */) return fatal_exception(info);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }
-/* Stall watchdog: after GOW3_STALL_SECONDS, dump every thread's RIP so a hang can be
+/* Stall watchdog: after KZSF_STALL_SECONDS, dump every thread's RIP so a hang can be
  * located (guest offsets when the RIP is inside the image). */
 /* Print every process thread's RIP (guest offsets when inside the image) and, with
- * GOW3_TRACE_IMPORTS=1, the last HLE import that thread called (read from its TEB slot). */
+ * KZSF_TRACE_IMPORTS=1, the last HLE import that thread called (read from its TEB slot). */
 /* NtQueryInformationThread(ThreadBasicInformation) requires exactly the native struct size
  * (48 bytes on x64: AffinityMask/Priority/BasePriority included) or fails STATUS_INFO_LENGTH_MISMATCH. */
 typedef struct { LONG ExitStatus; ULONG Pad; void *TebBaseAddress; void *UniqueProcess; void *UniqueThread;
@@ -2105,15 +2165,23 @@ static void dump_thread_rips(void) {
             if (entry.th32ThreadID==GetCurrentThreadId()) continue; /* never suspend ourselves */
             HANDLE thread=OpenThread(THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,entry.th32ThreadID);
             if (!thread) continue;
-            SuspendThread(thread);
             CONTEXT context; memset(&context,0,sizeof(context));
             context.ContextFlags=CONTEXT_CONTROL|CONTEXT_INTEGER;
-            if (GetThreadContext(thread,&context)) {
+            uint32_t last=0;
+            ThreadBasicInfo tbi; memset(&tbi,0,sizeof(tbi));
+            if (query_thread_info) query_thread_info(thread,0,&tbi,sizeof(tbi),NULL);
+            if (SuspendThread(thread)==(DWORD)-1) { CloseHandle(thread); continue; }
+            int captured=GetThreadContext(thread,&context);
+            if (captured && tbi.TebBaseAddress)
+                last=*(volatile uint32_t *)((char *)tbi.TebBaseAddress+trace_off);
+            /* A suspended thread may own stderr or the loader lock. Capture
+             * only raw state while it is paused; resume before module lookup,
+             * formatting, or logging. Otherwise the diagnostic itself hangs
+             * the game (observed with the main thread inside fprintf). */
+            ResumeThread(thread);
+            CloseHandle(thread);
+            if (captured) {
                 describe_address(where,sizeof(where),(uintptr_t)context.Rip);
-                uint32_t last=0;
-                ThreadBasicInfo tbi; memset(&tbi,0,sizeof(tbi));
-                if (query_thread_info && query_thread_info(thread,0,&tbi,sizeof(tbi),NULL)==0 && tbi.TebBaseAddress)
-                    last=*(volatile uint32_t *)((char *)tbi.TebBaseAddress+trace_off);
                 /* The tracer stores index+1; 0 means the thread never entered a traced import. */
                 char lastbuf[160]="(none)";
                 if (last && last-1<import_count)
@@ -2122,31 +2190,29 @@ static void dump_thread_rips(void) {
                         (unsigned long)entry.th32ThreadID,where,(void *)context.Rsp,
                         (void *)context.Rax,(void *)context.Rdi,lastbuf);
             }
-            ResumeThread(thread);
-            CloseHandle(thread);
         } while (Thread32Next(snapshot,&entry));
         CloseHandle(snapshot);
     }
 }
-/* Freeze watchdog: if no frame is presented for GOW3_FREEZE_SECONDS, dump the thread RIPs
- * (and exit when GOW3_FREEZE_EXIT=1), so a hang reports itself instead of waiting. */
-extern unsigned long long gow3gpu_flip_count(void);
+/* Freeze watchdog: if no frame is presented for KZSF_FREEZE_SECONDS, dump the thread RIPs
+ * (and exit when KZSF_FREEZE_EXIT=1), so a hang reports itself instead of waiting. */
+extern unsigned long long kzsfgpu_flip_count(void);
 /* GPU-side equeue state (registered events, blocked waiters, recent activity). */
-extern void gow3gpu_equeue_dump(void);
+extern void kzsfgpu_equeue_dump(void);
 static DWORD WINAPI freeze_watchdog(LPVOID argument) {
     DWORD seconds=(DWORD)(uintptr_t)argument;
-    unsigned long long last=gow3gpu_flip_count();
+    unsigned long long last=kzsfgpu_flip_count();
     unsigned stalled=0;
     for (;;) {
         Sleep(1000);
-        unsigned long long now=gow3gpu_flip_count();
+        unsigned long long now=kzsfgpu_flip_count();
         if (now!=last) { last=now; stalled=0; continue; }
         if (++stalled<seconds) continue;
         fprintf(stderr,"STOP: no frame presented for %lu s (frozen); hle_seq=%u; thread RIPs:\n",
                 (unsigned long)seconds,(unsigned)hle_seq);
         dump_thread_rips();
         runtime_sema_dump(); /* blocked waiters + the semaphore activity just before the stall */
-        if (gpu_enabled) gow3gpu_equeue_dump(); /* GPU/kernel event-queue waiters and last events */
+        if (gpu_enabled) kzsfgpu_equeue_dump(); /* GPU/kernel event-queue waiters and last events */
         runtime_report(); /* includes files opened/reads: tells a stalled load from a stalled dialog */
         if (trace_imports && hle_seq) {
             fprintf(stderr,"  recent HLE calls (oldest first):\n");
@@ -2160,11 +2226,11 @@ static DWORD WINAPI freeze_watchdog(LPVOID argument) {
         }
         fflush(NULL);
         stalled=0;
-        if (getenv("GOW3_FREEZE_EXIT")) TerminateProcess(GetCurrentProcess(),4);
+        if (getenv("KZSF_FREEZE_EXIT")) TerminateProcess(GetCurrentProcess(),4);
     }
 }
-/* Reports every GOW3_STALL_SECONDS (repeat), so a hang that starts after the first interval is
- * still captured. GOW3_STALL_ONCE=1 restores the old single report. Set GOW3_STALL_SECONDS=0 to
+/* Reports every KZSF_STALL_SECONDS (repeat), so a hang that starts after the first interval is
+ * still captured. KZSF_STALL_ONCE=1 restores the old single report. Set KZSF_STALL_SECONDS=0 to
  * disable. Frames are still presented during a loading hang, so the freeze watchdog never fires. */
 static DWORD WINAPI stall_watchdog(LPVOID argument) {
     DWORD seconds=(DWORD)(uintptr_t)argument;
@@ -2177,7 +2243,7 @@ static DWORD WINAPI stall_watchdog(LPVOID argument) {
                 reports,(unsigned long)seconds,(unsigned)hle_seq,trace_imports,runtime_pad_reads(),runtime_pad_name());
         dump_thread_rips();
         runtime_sema_dump();
-        if (gpu_enabled) gow3gpu_equeue_dump();
+        if (gpu_enabled) kzsfgpu_equeue_dump();
         runtime_report();
         uint32_t total=hle_seq;
         if (total) {
@@ -2193,7 +2259,7 @@ static DWORD WINAPI stall_watchdog(LPVOID argument) {
             }
         }
         fflush(NULL);
-        if (getenv("GOW3_STALL_ONCE")) return 0;
+        if (getenv("KZSF_STALL_ONCE")) return 0;
     }
 }
 /* Guest code reads its TCB with `mov rax, gs:[0]` (link_*.py rewrote fs:[0]); on Windows
@@ -2202,8 +2268,8 @@ uint32_t runtime_thread_tcb_offset(void);
 /* The guest converts its inline rdtsc to seconds with a constant baked for the retail PS4 TSC
  * (~1.594 GHz). The guest runs natively, so rdtsc is this host's TSC (typically 3-5 GHz) and any
  * time-derived gameplay runs too fast. Rewrite that constant to 1/host-TSC. Only the known value
- * is touched; GOW3_TSC_HZ overrides the measured frequency. */
-#define GOW3_PS4_TSC_SECONDS 6.273525587907613e-10
+ * is touched; KZSF_TSC_HZ overrides the measured frequency. */
+#define KZSF_PS4_TSC_SECONDS 6.273525587907613e-10
 static uint64_t patch_guest_clock(unsigned char *img, uint64_t size, Segment *segments, uint64_t ns) {
     const char *disabled=getenv("KZSF_ORIGINAL_CLOCK");
     if (disabled && !strcmp(disabled,"1")) {
@@ -2211,7 +2277,7 @@ static uint64_t patch_guest_clock(unsigned char *img, uint64_t size, Segment *se
         return 0;
     }
     uint64_t hz=0;
-    const char *env=getenv("GOW3_TSC_HZ");
+    const char *env=getenv("KZSF_TSC_HZ");
     if (env) hz=strtoull(env,NULL,10);
     if (hz<100000000ull || hz>20000000000ull) {
         uint64_t t0=__builtin_ia32_rdtsc(), n0=runtime_process_time_counter();
@@ -2261,7 +2327,7 @@ static uint64_t patch_guest_clock(unsigned char *img, uint64_t size, Segment *se
         printf("Guest clock: virtual PS4 TSC at 1594000000 Hz; %zu instruction sites; original constants retained\n",count);
         return count;
     }
-    double want=1.0/(double)hz, from=GOW3_PS4_TSC_SECONDS;
+    double want=1.0/(double)hz, from=KZSF_PS4_TSC_SECONDS;
     const char *unified=getenv("KZSF_UNIFIED_TSC");
     if (unified && !strcmp(unified,"1")) {
         runtime_set_native_tsc(hz);
@@ -2314,7 +2380,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
         }
     }
     /* GPU page tracking (write-protected guest pages) is resolved first. */
-    if (gpu_enabled && sig == SIGSEGV && gow3gpu_handle_fault(context, info->si_addr)) return;
+    if (gpu_enabled && sig == SIGSEGV && kzsfgpu_handle_fault(context, info->si_addr)) return;
     /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
     if ((sig == SIGSEGV || sig == SIGBUS) && runtime_fault_recover) {
         sigjmp_buf *recover = runtime_fault_recover;
@@ -2344,7 +2410,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
     else
         snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
     { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
-    if (gpu_enabled) gow3gpu_dump_guest_writes(context);
+    if (gpu_enabled) kzsfgpu_dump_guest_writes(context);
     /* Host call chain (frames with unwind info; guest frames end it). */
     void *frames[32];
     int depth = backtrace(frames, 32);
@@ -2436,46 +2502,46 @@ static int mapped(Segment *segments, uint64_t count, uint64_t address, uint64_t 
             address - segments[i].address <= segments[i].size - bytes) return 1;
     return 0;
 }
-extern ABI float gow3_orbs_gain(void *player, float requested);
-extern void gow3_orbs_status(int supported);
-extern uintptr_t gow3_cheat_flag(unsigned id);
-extern uintptr_t gow3_actor_slots_address(void);
-extern void gow3_actor_status(int supported);
-extern void gow3_cheat_status(unsigned id);
-extern uintptr_t gow3_damage_multiplier(int taken);
-extern uintptr_t gow3_orb_pickup_multiplier(unsigned kind);
-extern void gow3_stat_multipliers_status(int damage, int orb_pickup);
+extern ABI float kzsf_orbs_gain(void *player, float requested);
+extern void kzsf_orbs_status(int supported);
+extern uintptr_t kzsf_cheat_flag(unsigned id);
+extern uintptr_t kzsf_actor_slots_address(void);
+extern void kzsf_actor_status(int supported);
+extern void kzsf_cheat_status(unsigned id);
+extern uintptr_t kzsf_damage_multiplier(int taken);
+extern uintptr_t kzsf_orb_pickup_multiplier(unsigned kind);
+extern void kzsf_stat_multipliers_status(int damage, int orb_pickup);
 
 /* The hooks below find their sites by signature (src/signature.h), so they work in any region
  * and version of the game whose code matches; a site that is not found leaves its feature off. */
 static void install_cheats(Segment *segments, uint64_t count, uint64_t size) {
     const char *names[] = {"health", "magic", "item meter", "Rage of Sparta", "red orbs",
                            "Very Hard unlock", "infinite double jumps"};
-    uint64_t at[GOW3_CHEAT_HOOK_COUNT];
-    for (unsigned i = 0; i < GOW3_CHEAT_HOOK_COUNT; ++i)
-        at[i] = gow3_signature_find(image, size, &gow3_cheat_hooks[i].site);
-    for (unsigned id = 0; id < GOW3_CHEAT_COUNT; ++id) {
+    uint64_t at[KZSF_CHEAT_HOOK_COUNT];
+    for (unsigned i = 0; i < KZSF_CHEAT_HOOK_COUNT; ++i)
+        at[i] = kzsf_signature_find(image, size, &kzsf_cheat_hooks[i].site);
+    for (unsigned id = 0; id < KZSF_CHEAT_COUNT; ++id) {
         int valid = 1;
-        for (unsigned i = 0; i < GOW3_CHEAT_HOOK_COUNT; ++i) {
-            const Gow3CheatHook *hook = &gow3_cheat_hooks[i];
+        for (unsigned i = 0; i < KZSF_CHEAT_HOOK_COUNT; ++i) {
+            const KzsfCheatHook *hook = &kzsf_cheat_hooks[i];
             if (hook->id != id) continue;
             if (at[i] == UINT64_MAX || !mapped(segments, count, at[i], hook->length) ||
-                !gow3_cheat_signature_match(hook, image + at[i], size - at[i])) valid = 0;
+                !kzsf_cheat_signature_match(hook, image + at[i], size - at[i])) valid = 0;
         }
         if (!valid) {
             printf("Cheats: %s unavailable (code not found in this eboot.bin)\n", names[id]);
             continue;
         }
         unsigned char *stubs = allocate(page_size);
-        int32_t relative[GOW3_CHEAT_HOOK_COUNT] = {0};
-        for (unsigned i = 0; i < GOW3_CHEAT_HOOK_COUNT; ++i) {
-            const Gow3CheatHook *hook = &gow3_cheat_hooks[i];
+        int32_t relative[KZSF_CHEAT_HOOK_COUNT] = {0};
+        for (unsigned i = 0; i < KZSF_CHEAT_HOOK_COUNT; ++i) {
+            const KzsfCheatHook *hook = &kzsf_cheat_hooks[i];
             if (hook->id != id) continue;
             unsigned char *stub = stubs + i * 256;
             int64_t delta = (int64_t)(uintptr_t)stub - (int64_t)(uintptr_t)(image + at[i] + 5);
             if (delta < INT32_MIN || delta > INT32_MAX) { valid = 0; break; }
             relative[i] = (int32_t)delta;
-            gow3_cheat_build_stub(stub, hook, gow3_cheat_flag(id),
+            kzsf_cheat_build_stub(stub, hook, kzsf_cheat_flag(id),
                                  (uintptr_t)(image + at[i] + hook->length));
         }
         if (!valid) {
@@ -2483,14 +2549,14 @@ static void install_cheats(Segment *segments, uint64_t count, uint64_t size) {
             continue;
         }
         protect(stubs, page_size, 5);
-        for (unsigned i = 0; i < GOW3_CHEAT_HOOK_COUNT; ++i) {
-            const Gow3CheatHook *hook = &gow3_cheat_hooks[i];
+        for (unsigned i = 0; i < KZSF_CHEAT_HOOK_COUNT; ++i) {
+            const KzsfCheatHook *hook = &kzsf_cheat_hooks[i];
             if (hook->id != id) continue;
             image[at[i]] = 0xe9;
             memcpy(image + at[i] + 1, &relative[i], 4);
             memset(image + at[i] + 5, 0x90, hook->length - 5);
         }
-        gow3_cheat_status(id);
+        kzsf_cheat_status(id);
         printf("Cheats: %s ready (live toggle, initially disabled unless saved)\n", names[id]);
     }
 }
@@ -2498,9 +2564,9 @@ static void install_cheats(Segment *segments, uint64_t count, uint64_t size) {
 /* Damage hook for the enemy health bar (src/actor_hook.h). Always
  * installed when the code matches: it only records values; the overlay decides what to show. */
 static void install_actor_watch(Segment *segments, uint64_t count, uint64_t size) {
-    const uint64_t at = gow3_signature_find(image, size, &gow3_actor_site);
-    if (at == UINT64_MAX || !mapped(segments, count, at, GOW3_ACTOR_HOOK_LENGTH) ||
-        !gow3_actor_signature_match(image + at, size - at)) {
+    const uint64_t at = kzsf_signature_find(image, size, &kzsf_actor_site);
+    if (at == UINT64_MAX || !mapped(segments, count, at, KZSF_ACTOR_HOOK_LENGTH) ||
+        !kzsf_actor_signature_match(image + at, size - at)) {
         printf("Health display: unavailable (code not found in this eboot.bin)\n");
         return;
     }
@@ -2510,19 +2576,19 @@ static void install_actor_watch(Segment *segments, uint64_t count, uint64_t size
         printf("Health display: unavailable (hook outside relative-jump range)\n");
         return;
     }
-    gow3_actor_build_stub(stub, gow3_actor_slots_address(), (uintptr_t)(image + at + GOW3_ACTOR_HOOK_LENGTH));
+    kzsf_actor_build_stub(stub, kzsf_actor_slots_address(), (uintptr_t)(image + at + KZSF_ACTOR_HOOK_LENGTH));
     protect(stub, page_size, 5);
     const int32_t relative = (int32_t)delta;
     image[at] = 0xe9;
     memcpy(image + at + 1, &relative, 4);
-    memset(image + at + 5, 0x90, GOW3_ACTOR_HOOK_LENGTH - 5);
-    gow3_actor_status(1);
+    memset(image + at + 5, 0x90, KZSF_ACTOR_HOOK_LENGTH - 5);
+    kzsf_actor_status(1);
     printf("Health display: damage hook ready (enemy health bar in the menu)\n");
 }
 
 static void install_orb_multiplier(Segment *segments, uint64_t count, uint64_t size) {
     uint64_t calls[3];
-    const uint64_t setter_at = gow3_orb_find(image, size, calls);
+    const uint64_t setter_at = kzsf_orb_find(image, size, calls);
     if (setter_at == UINT64_MAX) {
         printf("Red orbs: multiplier unavailable (code not found in this eboot.bin)\n");
         return;
@@ -2533,9 +2599,9 @@ static void install_orb_multiplier(Segment *segments, uint64_t count, uint64_t s
     /* SysV call sites: preserve the receiver across the helper, then tail-call the original
      * setter. Its cap and upgrade notifications remain in the game's own code. */
     unsigned char *stub = allocate(page_size);
-    uintptr_t helper = (uintptr_t)gow3_orbs_gain, setter = (uintptr_t)(image + setter_at);
+    uintptr_t helper = (uintptr_t)kzsf_orbs_gain, setter = (uintptr_t)(image + setter_at);
     unsigned char code[26];
-    gow3_orb_build_stub(code, helper, setter);
+    kzsf_orb_build_stub(code, helper, setter);
     int32_t displacements[3];
     for (unsigned i = 0; i < 3; ++i) {
         int64_t delta = (int64_t)(uintptr_t)stub - (int64_t)(uintptr_t)(image + calls[i] + 5);
@@ -2549,7 +2615,7 @@ static void install_orb_multiplier(Segment *segments, uint64_t count, uint64_t s
     protect(stub, page_size, 5);
     for (unsigned i = 0; i < 3; ++i)
         memcpy(image + calls[i] + 1, &displacements[i], 4);
-    gow3_orbs_status(1);
+    kzsf_orbs_status(1);
     printf("Red orbs: live multiplier ready (3 validated gain paths, 0.1x to 100x)\n");
 }
 /* Writes a jump from image+at to `stub`; the rest of the replaced bytes become nops (the stub
@@ -2631,26 +2697,26 @@ static void install_kzsf_cheats(Segment *segments, uint64_t count, uint64_t size
     }
 }
 static void install_stat_multipliers(Segment *segments, uint64_t count, uint64_t size) {
-    const uint64_t damage_at = gow3_signature_find(image, size, &gow3_damage_site);
-    const uint64_t pickup_at = gow3_signature_find(image, size, &gow3_orb_pickup_site);
-    int damage = damage_at != UINT64_MAX && mapped(segments, count, damage_at, GOW3_DAMAGE_HOOK_LENGTH) &&
-                 gow3_damage_signature_match(image + damage_at, size - damage_at);
-    int pickup = pickup_at != UINT64_MAX && mapped(segments, count, pickup_at, GOW3_ORB_PICKUP_LENGTH) &&
-                 gow3_orb_pickup_signature_match(image + pickup_at, size - pickup_at);
+    const uint64_t damage_at = kzsf_signature_find(image, size, &kzsf_damage_site);
+    const uint64_t pickup_at = kzsf_signature_find(image, size, &kzsf_orb_pickup_site);
+    int damage = damage_at != UINT64_MAX && mapped(segments, count, damage_at, KZSF_DAMAGE_HOOK_LENGTH) &&
+                 kzsf_damage_signature_match(image + damage_at, size - damage_at);
+    int pickup = pickup_at != UINT64_MAX && mapped(segments, count, pickup_at, KZSF_ORB_PICKUP_LENGTH) &&
+                 kzsf_orb_pickup_signature_match(image + pickup_at, size - pickup_at);
     unsigned char *stubs = damage || pickup ? allocate(page_size) : NULL;
     if (damage) {
-        gow3_damage_build_stub(stubs, gow3_damage_multiplier(1), gow3_damage_multiplier(0),
-                               (uintptr_t)(image + damage_at + GOW3_DAMAGE_HOOK_LENGTH));
+        kzsf_damage_build_stub(stubs, kzsf_damage_multiplier(1), kzsf_damage_multiplier(0),
+                               (uintptr_t)(image + damage_at + KZSF_DAMAGE_HOOK_LENGTH));
     }
     if (pickup) {
-        gow3_orb_pickup_build_stub(stubs + 256, gow3_orb_pickup_multiplier(0), gow3_orb_pickup_multiplier(1),
-                                   gow3_orb_pickup_multiplier(2),
-                                   (uintptr_t)(image + pickup_at + GOW3_ORB_PICKUP_LENGTH));
+        kzsf_orb_pickup_build_stub(stubs + 256, kzsf_orb_pickup_multiplier(0), kzsf_orb_pickup_multiplier(1),
+                                   kzsf_orb_pickup_multiplier(2),
+                                   (uintptr_t)(image + pickup_at + KZSF_ORB_PICKUP_LENGTH));
     }
     if (stubs) protect(stubs, page_size, 5);
-    damage = damage && install_jump(damage_at, GOW3_DAMAGE_HOOK_LENGTH, stubs);
-    pickup = pickup && install_jump(pickup_at, GOW3_ORB_PICKUP_LENGTH, stubs + 256);
-    gow3_stat_multipliers_status(damage, pickup);
+    damage = damage && install_jump(damage_at, KZSF_DAMAGE_HOOK_LENGTH, stubs);
+    pickup = pickup && install_jump(pickup_at, KZSF_ORB_PICKUP_LENGTH, stubs + 256);
+    kzsf_stat_multipliers_status(damage, pickup);
     printf("Multipliers: damage %s, green/blue/gold orbs %s\n", damage ? "ready" : "unavailable",
            pickup ? "ready" : "unavailable");
 }
@@ -2696,10 +2762,10 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
 void runtime_restart(void) {
     fflush(NULL);
 #ifdef _WIN32
-    /* run.py sets GOW3_RESTART_COMMAND: the launch command line, started again (new patches). */
-    const char *command=getenv("GOW3_RESTART_COMMAND");
+    /* run.py sets KZSF_RESTART_COMMAND: the launch command line, started again (new patches). */
+    const char *command=getenv("KZSF_RESTART_COMMAND");
     puts("Runtime: restarting through run.py");
-    if (!command || !*command) { fputs("runtime_restart: GOW3_RESTART_COMMAND is not set\n",stderr); _exit(1); }
+    if (!command || !*command) { fputs("runtime_restart: KZSF_RESTART_COMMAND is not set\n",stderr); _exit(1); }
     char *line=_strdup(command);
     /* Same output handles: a launcher reading the game's log keeps reading the new launch. */
     STARTUPINFOA startup={.cb=sizeof(startup),.dwFlags=STARTF_USESTDHANDLES,
@@ -2713,10 +2779,10 @@ void runtime_restart(void) {
     /* The new launch waits for this process's GPU device to go away (run.py --after). */
     TerminateProcess(GetCurrentProcess(),0);
 #else
-    const char *command = getenv("GOW3_RESTART_COMMAND");
+    const char *command = getenv("KZSF_RESTART_COMMAND");
     syscall(SYS_close_range, 3u, ~0u, 0u);
     if (command && *command) {
-        puts("Runtime: restarting through GOW3_RESTART_COMMAND");
+        puts("Runtime: restarting through KZSF_RESTART_COMMAND");
         execl("/bin/sh", "sh", "-c", command, (char *)NULL);
     } else {
         puts("Runtime: restarting through run.sh");
@@ -2727,12 +2793,12 @@ void runtime_restart(void) {
 #endif
 }
 
-/* The guest code needs the PS4's instruction sets (#33, #66); GOW3_CPU_CHECK=0 skips this. A
+/* The guest code needs the PS4's instruction sets (#33, #66); KZSF_CPU_CHECK=0 skips this. A
  * missing fatal set prints STOP and returns 0; the rewritable ones go to cpu_missing_sets, named
  * in missing. */
 static int cpu_supported(char *missing, size_t size) {
     missing[0] = 0;
-    const char *check = getenv("GOW3_CPU_CHECK");
+    const char *check = getenv("KZSF_CPU_CHECK");
     if (check && !strcmp(check, "0")) return 1;
     const CpuFeatureWords words = cpu_feature_words();
     if (cpu_missing_fatal(words, missing, size)) {
@@ -2799,11 +2865,11 @@ int main(int argc, char **argv) {
     }
     if (!cpu_supported(missing, sizeof missing)) return 20;
     if (cpu_missing_sets) printf("CPU: missing %s\n", missing);
-    /* GOW3_ISA_REWRITE=0 never rewrites, =1 rewrites every site; by default the sets the CPU lacks. */
-    const char *policy = getenv("GOW3_ISA_REWRITE");
+    /* KZSF_ISA_REWRITE=0 never rewrites, =1 rewrites every site; by default the sets the CPU lacks. */
+    const char *policy = getenv("KZSF_ISA_REWRITE");
     unsigned isa_sets = policy && !strcmp(policy, "1") ? 0xffffffffu : policy && !strcmp(policy, "0") ? 0 : cpu_missing_sets;
     if (cpu_missing_sets && !isa_sets) {
-        printf("STOP: this CPU lacks %s and the rewrite is disabled (GOW3_ISA_REWRITE=0)\n", missing);
+        printf("STOP: this CPU lacks %s and the rewrite is disabled (KZSF_ISA_REWRITE=0)\n", missing);
         return 20;
     }
     if (cpu_missing_sets && !isa_file) {
@@ -2839,27 +2905,27 @@ int main(int argc, char **argv) {
         if (sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))
             runtime_savedata_configure(id);
     }
-    gow3gpu_register_kernel();
+    kzsfgpu_register_kernel();
 #ifdef _WIN32
     SYSTEM_INFO system_info; GetSystemInfo(&system_info); page_size = system_info.dwPageSize;
     AddVectoredExceptionHandler(1, vectored_fault);
     SetUnhandledExceptionFilter(unhandled_fault);
-    const char *stall=getenv("GOW3_STALL_SECONDS");
+    const char *stall=getenv("KZSF_STALL_SECONDS");
     if (stall) {
         int seconds=atoi(stall);
         if (seconds>0) CreateThread(NULL,0,stall_watchdog,(LPVOID)(uintptr_t)seconds,0,NULL);
     }
-    const char *freeze=getenv("GOW3_FREEZE_SECONDS");
+    const char *freeze=getenv("KZSF_FREEZE_SECONDS");
     if (freeze) {
         int seconds=atoi(freeze);
         if (seconds>0) CreateThread(NULL,0,freeze_watchdog,(LPVOID)(uintptr_t)seconds,0,NULL);
     }
-    if (getenv("GOW3_STRICT_HANDLES")) {
+    if (getenv("KZSF_STRICT_HANDLES")) {
         PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY strict={0};
         strict.RaiseExceptionOnInvalidHandleReference=1;
         strict.HandleExceptionsPermanentlyEnabled=1;
         if (!SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy,&strict,sizeof(strict)))
-            fprintf(stderr,"GOW3_STRICT_HANDLES: policy not set (%lu)\n",GetLastError());
+            fprintf(stderr,"KZSF_STRICT_HANDLES: policy not set (%lu)\n",GetLastError());
     }
     (void)timeout_seconds; /* no watchdog on Windows */
 #else
@@ -3034,10 +3100,10 @@ int main(int argc, char **argv) {
         sfo_value(sfo,"ATTRIBUTE",NULL,0,&attributes);
         uint64_t sdk=0;
         if (procparam) memcpy(&sdk,image+procparam+16,8); /* procparam: size, magic, count, sdk_version */
-        Gow3GpuConfig gpu={title,serial,user_dir ? user_dir : "user",(uint32_t)sdk,attributes,1920,1080};
+        KzsfGpuConfig gpu={title,serial,user_dir ? user_dir : "user",(uint32_t)sdk,attributes,1920,1080};
         gpu_enabled=1; /* page tracking starts while the rasterizer registers guest memory */
-        if (gow3gpu_init(&gpu)) fail("GPU initialization failed");
-        printf("GPU: window and Vulkan presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,gow3gpu_symbol_count());
+        if (kzsfgpu_init(&gpu)) fail("GPU initialization failed");
+        printf("GPU: window and Vulkan presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,kzsfgpu_symbol_count());
     }
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
     unsigned char *data_traps = allocate((import_count + 1) * page_size);
@@ -3052,7 +3118,7 @@ int main(int argc, char **argv) {
         t[8] = 0x48; t[9] = 0xb8; memcpy(t + 10, &handler, 8);
         t[18] = 0xff; t[19] = 0xe0;
     }
-    if (getenv("GOW3_TRACE_IMPORTS")) {
+    if (getenv("KZSF_TRACE_IMPORTS")) {
         trace_imports=1;
         if (import_count > TRACE_STUB_CAP) fail("too many imports to trace");
         trace_pool=trace_stub_store;
@@ -3268,7 +3334,7 @@ int main(int argc, char **argv) {
                     printf("Killzone: checkpoint pool/index/object guard installed\n");
                 }
                 if(getenv("KZSF_CHARACTER_OVERLAY_TEST") && !strcmp(getenv("KZSF_CHARACTER_OVERLAY_TEST"),"1"))
-                    gow3gpu_character_selector_enable(1);
+                    kzsfgpu_character_selector_enable(1);
                 printf("Killzone: isolated Engineer render-pose adapter installed; experimental F7 appearance\n");
             }
             protect(bridge,camera_bridge_area,5);
@@ -3366,7 +3432,7 @@ int main(int argc, char **argv) {
             fflush(NULL);
             _exit(20); /* no destructors: GPU threads are running */
         }
-        if (isa_sets == 0xffffffffu) printf("ISA: forced rewrite of all %u sites (GOW3_ISA_REWRITE=1), %u skipped\n", r.rewritten, r.skipped);
+        if (isa_sets == 0xffffffffu) printf("ISA: forced rewrite of all %u sites (KZSF_ISA_REWRITE=1), %u skipped\n", r.rewritten, r.skipped);
         else printf("ISA: CPU lacks %s: %u sites rewritten (%u jmp, %u relocated, %u int3), %u skipped\n",
                     missing, r.rewritten, r.jmp, r.relocated, r.int3, r.skipped);
         runtime_set_report_hook(isa_report_hook);

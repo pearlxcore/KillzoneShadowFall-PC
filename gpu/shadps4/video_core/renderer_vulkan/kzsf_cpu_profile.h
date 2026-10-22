@@ -4,7 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include "gow3_toggles.h"
+#include "kzsf_toggles.h"
 
 namespace Vulkan::CpuRenderProfile {
 enum Stage { Filter, Pipeline, Targets, Resources, RenderState, Geometry, Commands,
@@ -21,7 +21,7 @@ using Clock=std::chrono::steady_clock;
 struct Totals {
     std::array<uint64_t,Count> ns{},calls{};
     Clock::time_point start=Clock::now();
-    uint64_t frames=Gow3Stats::gpu_frames.load(std::memory_order_relaxed);
+    uint64_t frames=KzsfStats::gpu_frames.load(std::memory_order_relaxed);
 };
 inline thread_local Totals totals;
 class Span {
@@ -35,7 +35,7 @@ public:
         if(!active) return;
         const auto now=Clock::now();Add(now);active=false;
         if(now-totals.start<std::chrono::seconds(5)) return;
-        const auto frame=Gow3Stats::gpu_frames.load(std::memory_order_relaxed);
+        const auto frame=KzsfStats::gpu_frames.load(std::memory_order_relaxed);
         const auto frames=frame-totals.frames;
         if(!frames) return;
         std::printf("CPU render profile: frames=%llu elapsed_ms=%.1f (wall time includes waits; stages exclude each other)\n",

@@ -95,7 +95,7 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) 
     else {
         /* Priority-ordered semaphores (attr 2) are served FIFO: there is no
            PS4 priority scheduler, host threads run at equal priority. */
-        if (getenv("GOW3_TRACE_SEMA")) fprintf(stderr,"Runtime: blocking wait on semaphore %u '%s' (need %d, count %d)\n",id,s->name,need,s->count); /* deadlock diagnosis */
+        if (getenv("KZSF_TRACE_SEMA")) fprintf(stderr,"Runtime: blocking wait on semaphore %u '%s' (need %d, count %d)\n",id,s->name,need,s->count); /* deadlock diagnosis */
         log_event('w',id,need,s->count);
         Waiter w={.need=need,.tid=current_tid()};
         pthread_condattr_t attr;

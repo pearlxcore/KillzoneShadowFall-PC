@@ -6,8 +6,8 @@ import kzsf_local as ui
 
 def main():
     capture='--play' not in sys.argv
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],capture_output=True,text=True)
-    if 'gow3-probe' in running.stdout.lower():
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],capture_output=True,text=True)
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the current game first, then run this BAT again.'); return 1
     values=ui.load_preferences()
     ok,reason=ui.validate_game(values['game_dir'])
@@ -17,7 +17,7 @@ def main():
     folder=ui.ROOT/'out'/(('health-test-' if capture else 'player-assists-')+time.strftime('%Y%m%d-%H%M%S'))
     folder.mkdir(parents=True)
     spec=ui.launch_spec(values,folder)
-    if capture: spec['command'][0]=str(ui.ROOT/'out/gow3-probe-health-trace.exe')
+    if capture: spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-health-trace.exe')
     spec['env']['KZSF_HEALTH_TRACE']='1' if capture else '0'
     if not Path(spec['command'][0]).is_file(): print('Health capture build missing.'); return 1
     os.environ.update(spec.pop('env'))

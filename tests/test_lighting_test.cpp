@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// GOW3_LIGHTING_TEST=shading,msdepth,dref,bias (vk_lighting_test.h): the four changes of the
-// KrachDev/shadPS4_GOW3 "lighting and scanline" build, each behind its own token so a tester
+// KZSF_LIGHTING_TEST=shading,msdepth,dref,bias (vk_lighting_test.h): the four changes of the
+// KrachDev/shadPS4_KZSF "lighting and scanline" build, each behind its own token so a tester
 // can bisect them. No game or Vulkan device required.
 #include <cassert>
 #include <cstdio>

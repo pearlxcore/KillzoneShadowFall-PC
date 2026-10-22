@@ -5,20 +5,20 @@ from pathlib import Path
 
 from paths import ROOT
 sys.path.insert(0, str(ROOT / 'launcher'))
-import gow3_launcher_win as launcher  # noqa: E402
+import kzsf_launcher_win as launcher  # noqa: E402
 
 
 class FontFileTest(unittest.TestCase):
     def test_font_file_is_a_launcher_asset_under_port_dir(self):
-        # Frozen builds find launcher assets next to the exe (PORT_DIR / 'launcher'), like gow3.ico.
-        self.assertEqual(launcher.FONT_FILE, launcher.PORT_DIR / 'launcher' / 'gowfont.ttf')
+        # Frozen builds find launcher assets next to the exe (PORT_DIR / 'launcher'), like kzsf.ico.
+        self.assertEqual(launcher.FONT_FILE, launcher.PORT_DIR / 'launcher' / 'kzsf-font.ttf')
         self.assertTrue(launcher.FONT_FILE.is_file())
 
     def test_windows_package_ships_the_font(self):
         script = (ROOT / 'packaging' / 'windows' / 'package.sh').read_text(encoding='utf-8')
         copies = [line for line in script.splitlines()
-                  if 'launcher/gowfont.ttf' in line and '"$dest/launcher/"' in line]
-        self.assertTrue(copies, 'package.sh must copy launcher/gowfont.ttf into $dest/launcher/')
+                  if 'launcher/kzsf-font.ttf' in line and '"$dest/launcher/"' in line]
+        self.assertTrue(copies, 'package.sh must copy launcher/kzsf-font.ttf into $dest/launcher/')
 
 
 class RegisterFontTest(unittest.TestCase):

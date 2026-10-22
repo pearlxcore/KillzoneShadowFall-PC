@@ -298,6 +298,6 @@ def add_to_steam(game, command, icon, steam_root=None, running=None):
             entry['LastPlayTime'] = shortcuts[slot].get('LastPlayTime', 0)
         shortcuts[slot] = entry
         if file.is_file():
-            shutil.copy2(file, file.with_name('shortcuts.vdf.gow3-backup'))
+            shutil.copy2(file, file.with_name('shortcuts.vdf.kzsf-backup'))
         file.write_bytes(dump_vdf(tree))
     return {'accounts': len(accounts), 'updated': updated, 'app_id': app_id}

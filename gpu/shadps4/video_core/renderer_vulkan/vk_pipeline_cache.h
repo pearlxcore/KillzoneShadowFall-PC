@@ -54,8 +54,8 @@ struct Program {
 
     Shader::Info info;
     ModuleList modules{};
-    size_t last_used = 0; ///< gow3: permutation of the previous lookup, compared first
-    /// gow3: `info` as translated, for draw-preparation workers (they must not read `info`,
+    size_t last_used = 0; ///< kzsf: permutation of the previous lookup, compared first
+    /// kzsf: `info` as translated, for draw-preparation workers (they must not read `info`,
     /// whose user data the GPU thread rewrites every draw). Guarded by programs_mutex.
     std::unique_ptr<Shader::Info> info_template;
     std::shared_ptr<AsyncShaderCompilation> pending;
@@ -90,7 +90,7 @@ union Regs;
 
 namespace Vulkan {
 
-/// gow3: state of one graphics/compute pipeline selection. The GPU thread owns one
+/// kzsf: state of one graphics/compute pipeline selection. The GPU thread owns one
 /// (PipelineCache::sel); draw-preparation workers use their own with their register copies.
 struct PipelineSelection {
     const AmdGpu::Regs* regs{};
@@ -105,7 +105,7 @@ struct PipelineSelection {
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
 };
 
-/// gow3: a draw-preparation worker's own program state (see vk_draw_prep.h).
+/// kzsf: a draw-preparation worker's own program state (see vk_draw_prep.h).
 struct PrepWorker {
     struct Stage {
         const Program* program;
@@ -128,10 +128,10 @@ public:
                            AmdGpu::Liverpool* liverpool, u32 sparse_page_shift);
     ~PipelineCache();
 
-    /// Loads the pipelines of earlier sessions. gow3: called by the presenter once the window
+    /// Loads the pipelines of earlier sessions. kzsf: called by the presenter once the window
     /// can show a loading screen; `progress(done, total)` follows the pipelines read.
     void WarmUp(const std::function<void(u32 done, u32 total, const char* stage)>& progress = {});
-    /// gow3: the same load on low-priority threads while the game runs; the GPU thread takes
+    /// kzsf: the same load on low-priority threads while the game runs; the GPU thread takes
     /// the results a few at a time (PumpWarmUp). False when it cannot (zip archive store).
     bool StartBackgroundWarmUp();
     void StartOnDemand();
@@ -145,15 +145,15 @@ public:
     const GraphicsPipeline* GetGraphicsPipeline(const DrawIndirectParams params = {},
                                                 const PreparedDraw* prepared = nullptr);
 
-    /// gow3: worker side of draw preparation: selects the pipeline key for `sel.regs` without
+    /// kzsf: worker side of draw preparation: selects the pipeline key for `sel.regs` without
     /// creating anything. False when a program or permutation does not exist yet.
     bool PrepareGraphicsPipeline(PipelineSelection& sel);
 
-    /// gow3: GPU-thread side: the pipeline for a prepared draw after checking that registers
+    /// kzsf: GPU-thread side: the pipeline for a prepared draw after checking that registers
     /// and flattened user data match; null to take the regular path.
     const GraphicsPipeline* TryPreparedPipeline(const PreparedDraw& prepared);
 
-    /// gow3: the prepared draw the last GetGraphicsPipeline used, or null (regular path).
+    /// kzsf: the prepared draw the last GetGraphicsPipeline used, or null (regular path).
     [[nodiscard]] const PreparedDraw* UsedPrepared() const noexcept {
         return used_prepared;
     }
@@ -225,19 +225,19 @@ private:
     std::unique_ptr<AsyncCompiler> compiler, capture_compiler;
     std::vector<vk::UniquePipelineCache> worker_pipeline_caches;
     bool worker_caches_seeded = false;
-    /// gow3: GOW3_PARALLEL_WARMUP: WarmUp builds the cached pipelines on these threads.
+    /// kzsf: KZSF_PARALLEL_WARMUP: WarmUp builds the cached pipelines on these threads.
     struct WarmupPool;
     WarmupPool* warmup_pool = nullptr;
     std::atomic<u64> warmup_prepare_ns{}, warmup_module_ns{}, warmup_build_ns{};
     std::mutex warmup_results_mutex;
     std::vector<std::pair<GraphicsPipelineKey, std::unique_ptr<GraphicsPipeline>>> warmup_graphics;
     std::vector<std::pair<ComputePipelineKey, std::unique_ptr<ComputePipeline>>> warmup_compute;
-    /// gow3: StartBackgroundWarmUp state; owned here, deleted by StopWarmUp.
+    /// kzsf: StartBackgroundWarmUp state; owned here, deleted by StopWarmUp.
     BackgroundWarmup* background = nullptr;
     tsl::robin_map<GraphicsPipelineKey, std::shared_ptr<AsyncGraphicsCompilation>> pending_graphics;
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
     std::vector<Program*> pending_programs;
-    /// gow3: exclusive for program/permutation insertions, shared for worker lookups.
+    /// kzsf: exclusive for program/permutation insertions, shared for worker lookups.
     std::shared_mutex programs_mutex;
     u64 prepared_hits = 0, prepared_misses = 0;
     const PreparedDraw* used_prepared = nullptr;

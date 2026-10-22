@@ -6,7 +6,7 @@
 #include <setjmp.h>
 #ifdef _WIN32
 #include "../src/compat_win.h"
-using sigjmp_buf = gow3_jmp_buf;
+using sigjmp_buf = kzsf_jmp_buf;
 #endif
 // Renderer tests have no guest process. Clock/host-thread services work; guest accesses abort.
 extern "C" {

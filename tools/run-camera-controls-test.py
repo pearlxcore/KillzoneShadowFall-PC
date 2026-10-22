@@ -21,14 +21,14 @@ def main():
                   depth_of_field=args.mode not in ('dof','all'))
     folder=ui.ROOT/'out'/('camera-'+args.mode+'-'+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/'out/gow3-probe-camera-controls.exe')
-    spec['env']['GOW3_CONFIG']=str(folder/'settings.ini')
+    spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-camera-controls.exe')
+    spec['env']['KZSF_CONFIG']=str(folder/'settings.ini')
     report={key:values[key] for key in ('fov_percent','camera_shake','depth_of_field','motion_blur')}
     if args.report_only:
         print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],capture_output=True,text=True,
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],capture_output=True,text=True,
                            creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the current game before starting this test.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:

@@ -42,7 +42,7 @@ public:
     FrameGenerator(const Instance& instance, Scheduler& scheduler);
     ~FrameGenerator();
 
-    /// Switched on in the settings (Gow3Settings::frame_gen), with a provider that can run.
+    /// Switched on in the settings (KzsfSettings::frame_gen), with a provider that can run.
     [[nodiscard]] bool Wanted() const;
     /// Frames generated per game frame with the current settings (output images needed).
     [[nodiscard]] u32 GeneratedCount() const;

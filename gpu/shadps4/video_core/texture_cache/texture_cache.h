@@ -9,7 +9,7 @@
 #include "video_core/texture_cache/readback_queue.h"
 #include "video_core/texture_cache/readback_sources.h"
 #include <chrono>
-#include "gow3_toggles.h"
+#include "kzsf_toggles.h"
 #include <optional>
 #include <cstdlib>
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
@@ -96,12 +96,12 @@ public:
                  PageManager& tracker);
     ~TextureCache();
 
-    /// gow3: changes whenever an image is registered or unregistered.
+    /// kzsf: changes whenever an image is registered or unregistered.
     [[nodiscard]] u64 RegistryGeneration() const noexcept {
         return registry_generation.load(std::memory_order_acquire);
     }
 
-    /// gow3: FindImage's access tick for an image found by a memoized lookup. The LRU touch
+    /// kzsf: FindImage's access tick for an image found by a memoized lookup. The LRU touch
     /// FindImage also does happens in UpdateImage (FindTexture), which every binding reaches.
     void MarkFound(ImageId image_id) {
         slot_images[image_id].tick_accessed_last = scheduler.CurrentTick();
@@ -132,7 +132,7 @@ public:
     /// Retrieves image whose address matches provided
     [[nodiscard]] ImageId FindImageFromRange(VAddr address, size_t size, bool ensure_valid = true);
 
-    /// gow3: a FindView result remembered by the caller for the same image and view info.
+    /// kzsf: a FindView result remembered by the caller for the same image and view info.
     struct ViewMemo {
         ImageId image_id{};
         const void* backing = nullptr;
@@ -151,7 +151,7 @@ public:
     /// Retrieves the depth target with specified properties
     [[nodiscard]] ImageView& FindDepthTarget(ImageId image_id, const ImageDesc& desc);
 
-    /// gow3: whether UpdateImage has nothing to do for this image (its fast path).
+    /// kzsf: whether UpdateImage has nothing to do for this image (its fast path).
     [[nodiscard]] bool IsUpToDate(ImageId image_id) const {
         const Image& image = slot_images[image_id];
         const u32 flags = std::atomic_ref<u32>(const_cast<u32&>(reinterpret_cast<const u32&>(image.flags)))
@@ -166,11 +166,11 @@ public:
 
     /// Updates image contents if it was modified by CPU.
     void UpdateImage(ImageId image_id) {
-        // gow3: a clean image already tracked and touched in this GC period needs nothing.
+        // kzsf: a clean image already tracked and touched in this GC period needs nothing.
         // Every texture binding comes here; the mutex (shared with the fault handlers of the
         // guest threads) was ~3% of the GPU thread. Flags are read atomically: an invalidation
         // racing with this check races the same way with the locked path.
-        if (!Gow3Toggle::Disabled(Gow3Toggle::UpdateImageFastPath)) {
+        if (!KzsfToggle::Disabled(KzsfToggle::UpdateImageFastPath)) {
             const Image& image = slot_images[image_id];
             const u32 flags = std::atomic_ref<u32>(const_cast<u32&>(reinterpret_cast<const u32&>(image.flags)))
                                   .load(std::memory_order_acquire);
@@ -192,7 +192,7 @@ public:
         SynchronizeAlias(image_id);
     }
 
-    /// gow3: a GPU write to the image (render target, storage): images sharing its memory
+    /// kzsf: a GPU write to the image (render target, storage): images sharing its memory
     /// copy from it before their next read. From cuesta4/shadPS4 (eltutz), which fixed God of
     /// War III's exposure: it is measured into a small image and read through an alias.
     void PublishAliasWrite(ImageId image_id);
@@ -214,7 +214,7 @@ public:
     void RefreshImage(Image& image);
 
     /// Retrieves the sampler that matches the provided S# descriptor.
-    /// extra_lod_bias: gow3, added to the S#'s bias (reduced scene rendering).
+    /// extra_lod_bias: kzsf, added to the S#'s bias (reduced scene rendering).
     [[nodiscard]] vk::Sampler GetSampler(const AmdGpu::Sampler& sampler,
                                          AmdGpu::BorderColorBuffer border_color_base,
                                          bool is_depth, float extra_lod_bias = 0.0f);
@@ -225,7 +225,7 @@ public:
         auto& image = slot_images[id];
         return !uid || image.image_uid == uid ? &image : nullptr;
     }
-    /// gow3 diagnostics: writes level 0 of a color image to GOW3_DIAG_DIR as raw pixels
+    /// kzsf diagnostics: writes level 0 of a color image to KZSF_DIAG_DIR as raw pixels
     /// (<seq>_<tag>_<address>_<w>x<h>_p<pitch>_b<bytes per pixel>_f<vk format>.raw). Waits for
     /// the GPU.
     void DiagDumpImage(ImageId image_id, const char* tag);
@@ -370,7 +370,7 @@ private:
     /// Copies image memory back to CPU.
     void DownloadImageMemory(ImageId image_id, bool sync = false);
 
-    /// gow3: a recorded image-to-staging copy, written to guest memory after a GPU wait.
+    /// kzsf: a recorded image-to-staging copy, written to guest memory after a GPU wait.
     struct PendingDownload {
         VAddr guest_address;
         u32 size;
@@ -435,7 +435,7 @@ private:
     tsl::robin_map<u64, Sampler> samplers;
     std::unordered_set<ImageId> download_images;
     u64 total_used_memory = 0;
-    u64 gc_evictions = 0, gc_downloads = 0; ///< gow3: pressure report
+    u64 gc_evictions = 0, gc_downloads = 0; ///< kzsf: pressure report
     std::chrono::steady_clock::time_point gc_report_time{};
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
@@ -449,14 +449,14 @@ private:
     Common::LeastRecentlyUsedCache<u64, u64> sampler_lru_cache;
     const bool readback_linear_images;
     const bool deferred_readbacks = [] {
-        const char* value = std::getenv("GOW3_DEFERRED_READBACK");
+        const char* value = std::getenv("KZSF_DEFERRED_READBACK");
         return value && value[0] == '1';
     }();
-    /// gow3: GOW3_STALE_READBACK=1 (needs deferred readbacks). A pending copy only blocks CPU
+    /// kzsf: KZSF_STALE_READBACK=1 (needs deferred readbacks). A pending copy only blocks CPU
     /// writes: CPU reads see the version the GPU published last (one frame late) instead of
     /// waiting for the GPU. Writes still wait, so no byte is lost.
     const bool stale_readbacks = deferred_readbacks && [] {
-        const char* value = std::getenv("GOW3_STALE_READBACK");
+        const char* value = std::getenv("KZSF_STALE_READBACK");
         return value && value[0] == '1';
     }();
     template <bool track>
@@ -479,7 +479,7 @@ private:
     void RetireReadbacks();
     PageTable page_table;
     std::mutex mutex;
-    /// gow3: images with the same guest address (guarded by `mutex`). `backing` holds the
+    /// kzsf: images with the same guest address (guarded by `mutex`). `backing` holds the
     /// complete contents; `writer` is a newer write not yet copied into it.
     struct AliasState {
         u64 backing_uid{};
@@ -505,7 +505,7 @@ private:
     [[nodiscard]] bool CommitAliasWriter(AliasState& state);
     void CopyAlias(ImageId src_id, ImageId dst_id, const Extent3D& extent);
     void InvalidateAlias(Image& image);
-    // gow3: FindImage results for unchanged image registrations (guarded by `mutex`).
+    // kzsf: FindImage results for unchanged image registrations (guarded by `mutex`).
     struct FindImageCacheEntry {
         VAddr address = 0;
         u64 size = 0;

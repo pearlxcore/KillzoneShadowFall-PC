@@ -22,7 +22,7 @@ typedef struct _stat64 HostStat;
 #define host_stat(path,s) _stat64(path,s)
 #define host_fstat(fd,s) _fstat64(fd,s)
 #define host_lseek _lseeki64
-#define O_DIRECTORY 0x40000000 /* gow3 marker, removed before _open */
+#define O_DIRECTORY 0x40000000 /* kzsf marker, removed before _open */
 #else
 typedef struct stat HostStat;
 #define host_stat(path,s) stat(path,s)
@@ -189,8 +189,8 @@ static File *get(int fd) {
     if (fd<3 || fd>=MAX_FILES || !files[fd].used) return NULL;
     return &files[fd];
 }
-/* GOW3_AUDIO_TRACE=1: sound file opens and failed reads (missing game sounds). */
-static int audio_trace(void) { static int v=-1; if (v<0) { const char *e=getenv("GOW3_AUDIO_TRACE"); v=e && e[0]=='1'; } return v; }
+/* KZSF_AUDIO_TRACE=1: sound file opens and failed reads (missing game sounds). */
+static int audio_trace(void) { static int v=-1; if (v<0) { const char *e=getenv("KZSF_AUDIO_TRACE"); v=e && e[0]=='1'; } return v; }
 static int file_trace(void) { const char *e=getenv("KZSF_FILE_TRACE"); return e && e[0]=='1'; }
 /* Game mounts (including linked mod overlays) are read-only. Saves use other mounts. */
 static int game_path(const char *p) {
@@ -202,9 +202,9 @@ static int game_path(const char *p) {
 /* All operations return >=0 or -(host errno); wrappers adapt the convention. */
 static int64_t do_open(const char *guest,int flags,int mode) {
     if (game_path(guest) && (flags & (3|0x8|0x200|0x400|0x800))) return -EROFS;
-    /* Diagnostic: GOW3_NO_MOVIES=1 makes Bink movie opens fail, to test whether the
+    /* Diagnostic: KZSF_NO_MOVIES=1 makes Bink movie opens fail, to test whether the
      * cutscene/movie path is what triggers the transition crash. */
-    if (strstr(guest,".bk2") && getenv("GOW3_NO_MOVIES")) return -ENOENT;
+    if (strstr(guest,".bk2") && getenv("KZSF_NO_MOVIES")) return -ENOENT;
     char path[1024];
     int e=translate(guest,path,sizeof(path));
     if (e) return -e;
@@ -251,7 +251,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
     ++opens;
     pthread_mutex_unlock(&lock);
     if (file_trace() || (audio_trace() && strstr(guest,"sound/"))) printf("File trace: open(%s) -> fd %d, %lld bytes\n",guest,fd,(long long)s.st_size);
-    const char *mod_trace=getenv("GOW3_MOD_TRACE"), *mod_root=getenv("GOW3_MODS_DIR");
+    const char *mod_trace=getenv("KZSF_MOD_TRACE"), *mod_root=getenv("KZSF_MODS_DIR");
     if (mod_trace && mod_trace[0]=='1' && mod_root) {
         char actual[PATH_MAX],root[PATH_MAX];
         static unsigned traced;

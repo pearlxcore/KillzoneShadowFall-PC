@@ -130,7 +130,7 @@ For source builds and release packaging, see [Building on Windows](docs/BUILD-WI
 
 The original x86-64 game code runs through a custom PS4 runtime, with GPU commands and shaders translated to Vulkan. This project builds on:
 
-- [Felipe Prado's gow3_pc](https://github.com/FelipePrado0/gow3_pc) — direct upstream runtime, renderer integration and launcher/menu foundation.
+- [Felipe Prado's kzsf_pc](https://github.com/FelipePrado0/gow3_pc) — direct upstream runtime, renderer integration and launcher/menu foundation.
 - [deadinside28's bloodborne_pc](https://github.com/deadinside28/bloodborne_pc) and [Supermedo's Windows port](https://github.com/Supermedo/bloodborne_pc) — native-port foundations.
 - [shadPS4](https://github.com/shadps4-emu/shadPS4) and [cuesta4's renderer work](https://github.com/cuesta4/shadPS4/tree/eltutz) — GPU and shader translation.
 - Celogamez and the GoldHEN cheat community — published cheat work used as a starting point.

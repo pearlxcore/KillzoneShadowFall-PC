@@ -28,21 +28,21 @@ def main():
                   film_grain=args.mode not in ('grain','both'))
     folder=ui.ROOT/'out'/('post-fx-'+args.mode+'-'+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/'out/gow3-probe-post-effects.exe')
-    spec['env']['GOW3_CONFIG']=str(folder/'settings.ini')
+    spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-post-effects.exe')
+    spec['env']['KZSF_CONFIG']=str(folder/'settings.ini')
     report={key:values.get(key) for key in ('motion_blur','depth_of_field','bloom','film_grain')}
     report['mode']=args.mode
     if args.report_only:
         print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
                            capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():
+    if 'kzsf-probe' in running.stdout.lower():
         print('Close the current Killzone game first, then run this BAT again.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:
         print(reason);return 1
     if not Path(spec['command'][0]).is_file():
-        print('The post-effects test build is missing: out/gow3-probe-post-effects.exe');return 1
+        print('The post-effects test build is missing: out/kzsf-probe-post-effects.exe');return 1
     folder.mkdir(parents=True)
     if ui.CONFIG.is_file():shutil.copyfile(ui.CONFIG,folder/'settings.ini')
     ui.write_keys(folder/'settings.ini',{k:str(int(v)) for k,v in report.items() if isinstance(v,bool)})

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// gow3: frame generation's depth input, taken where the upscaler runs (before the game's
+// kzsf: frame generation's depth input, taken where the upscaler runs (before the game's
 // post-processing): the scene depth as R32F. The motion vectors come from CameraMotion.
 #version 450
 #extension GL_EXT_samplerless_texture_functions : require

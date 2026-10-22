@@ -8,11 +8,11 @@ def main():
     parser.add_argument('--report-only',action='store_true');args=parser.parse_args()
     values=ui.load_preferences();values['sprint_turn_speed']=str(args.percent)
     folder=ui.ROOT/'out'/('sprint-turn-'+str(args.percent)+'-'+time.strftime('%Y%m%d-%H%M%S'))
-    spec=ui.launch_spec(values,folder);spec['env']['GOW3_CONFIG']=str(folder/'settings.ini')
+    spec=ui.launch_spec(values,folder);spec['env']['KZSF_CONFIG']=str(folder/'settings.ini')
     if args.report_only:
         print(json.dumps(dict(percent=args.percent,executable=spec['command'][0],hook=spec['env']['KZSF_PLAYER_TURN']),indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():print('Close the current game first.');return 1
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
+    if 'kzsf-probe' in running.stdout.lower():print('Close the current game first.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:print(reason);return 1
     folder.mkdir(parents=True)

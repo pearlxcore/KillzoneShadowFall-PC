@@ -17,10 +17,10 @@ int main(int argc,char **argv) {
     assert(argc==2); /* Runner supplies an isolated temporary directory. */
     runtime_savedata_configure("CUSA00190");
     char path[700],expected[700];
-    _putenv_s("GOW3_SAVEDATA_DIR","");
+    _putenv_s("KZSF_SAVEDATA_DIR","");
     root(1,NULL,path,sizeof(path));
     assert(!strcmp(path,"unused-user-root/savedata/1/CUSA00190"));
-    _putenv_s("GOW3_SAVEDATA_DIR",argv[1]);
+    _putenv_s("KZSF_SAVEDATA_DIR",argv[1]);
     root(2,"OTHER",path,sizeof(path));
     snprintf(expected,sizeof(expected),"%s/2/OTHER",argv[1]);
     assert(!strcmp(path,expected));

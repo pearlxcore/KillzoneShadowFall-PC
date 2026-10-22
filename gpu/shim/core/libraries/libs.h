@@ -1,6 +1,6 @@
-// gow3: shadPS4 registers HLE functions with LIB_FUNCTION(nid, library,
+// kzsf: shadPS4 registers HLE functions with LIB_FUNCTION(nid, library,
 // version, module, fn). Here the registrations fill a table that the C
-// loader queries by NID (see gow3gpu.cpp: gow3gpu_resolve).
+// loader queries by NID (see kzsfgpu.cpp: kzsfgpu_resolve).
 #pragma once
 #include <string>
 #include "common/types.h"

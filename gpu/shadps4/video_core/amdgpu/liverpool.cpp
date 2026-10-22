@@ -8,8 +8,8 @@
 #include <sys/resource.h>
 #endif
 #include <time.h>
-#include "gow3_copy.h"
-#include "gow3_toggles.h"
+#include "kzsf_copy.h"
+#include "kzsf_toggles.h"
 #include <cstdio>
 #include <boost/preprocessor/stringize.hpp>
 
@@ -24,7 +24,7 @@
 #include "core/memory.h"
 #include "core/platform.h"
 #include "video_core/amdgpu/liverpool.h"
-#include "gow3_write_log.h"
+#include "kzsf_write_log.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -88,7 +88,7 @@ Liverpool::~Liverpool() {
 
 void Liverpool::ProcessCommands() {
     if (num_commands && rasterizer) {
-        rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands); // gow3: commands touch the caches
+        rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands); // kzsf: commands touch the caches
     }
     // Process incoming commands with high priority
     while (num_commands) {
@@ -107,10 +107,10 @@ void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
 #ifndef _WIN32
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
-        Gow3Stats::gpu_thread_clock.store(static_cast<int>(clock));
+        KzsfStats::gpu_thread_clock.store(static_cast<int>(clock));
     }
 #else
-    Gow3Stats::gpu_thread_id.store(GetCurrentThreadId());
+    KzsfStats::gpu_thread_id.store(GetCurrentThreadId());
 #endif
     gpu_id = std::this_thread::get_id();
 #if defined(__linux__) || defined(_WIN32)
@@ -123,7 +123,7 @@ void Liverpool::Process(std::stop_token stoken) {
             std::unique_lock lk{submit_mutex};
             Common::CondvarWait(submit_cv, lk, stoken,
                                 [this] { return num_commands || num_submits || submit_done; });
-            Gow3Stats::gpu_idle_ns.fetch_add(
+            KzsfStats::gpu_idle_ns.fetch_add(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - idle_start).count(),
                 std::memory_order_relaxed);
@@ -174,7 +174,7 @@ void Liverpool::Process(std::stop_token stoken) {
             submit_done = false;
         }
 
-        // gow3: the guest takes GPU idle (sceGnmSubmitDone) as its work being done and frees
+        // kzsf: the guest takes GPU idle (sceGnmSubmitDone) as its work being done and frees
         // the objects that hold its fence labels. The labels must be written before: the draw
         // recording thread and the fences it deferred to the Vulkan recording thread
         // (RecorderFences). Else a late fence write lands in freed memory (a corrupted guest
@@ -196,7 +196,7 @@ void Liverpool::Process(std::stop_token stoken) {
 }
 
 namespace {
-/// gow3: packets the GPU command thread handles while the draw recording thread may still
+/// kzsf: packets the GPU command thread handles while the draw recording thread may still
 /// work on earlier draws (register state, draws it hands over, nested buffers). Every other
 /// packet first waits for that thread to run dry (Rasterizer::DrainDrawPipe).
 bool PipelinedOpcode(PM4ItOpcode opcode) {
@@ -249,7 +249,7 @@ void SignalEop(const PM4CmdEventWriteEop& eop) {
     eop.SignalFence(
         [](void* address, u64 data, u32 num_bytes) {
             auto* memory = Core::Memory::Instance();
-            Gow3WriteLog::Note(reinterpret_cast<u64>(address), &data, num_bytes, Gow3WriteLog::Fence);
+            KzsfWriteLog::Note(reinterpret_cast<u64>(address), &data, num_bytes, KzsfWriteLog::Fence);
             if (!memory->TryWriteBacking(address, &data, num_bytes)) {
                 memcpy(address, &data, num_bytes);
             }
@@ -257,7 +257,7 @@ void SignalEop(const PM4CmdEventWriteEop& eop) {
         [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop); });
 }
 
-// gow3: end-of-pipe/-shader events run in order with the draws (Rasterizer::RunInOrder: on
+// kzsf: end-of-pipe/-shader events run in order with the draws (Rasterizer::RunInOrder: on
 // the draw recording thread when the draw pipeline is in use).
 void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto eop = *reinterpret_cast<const PM4CmdEventWriteEop*>(data);
@@ -271,16 +271,16 @@ void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
     }
     rasterizer.ProcessDownloadImages();
     // Guest memory copies on the copy threads precede the fence the guest sees.
-    // GOW3_ASYNC_FENCES=1 writes it once they are done instead of waiting for them; measured
+    // KZSF_ASYNC_FENCES=1 writes it once they are done instead of waiting for them; measured
     // slower (79 vs 83 FPS): the guest waits on these fences, and later fences stall it more
     // than the wait costs.
     static const bool async_fences = [] {
-        const char* env = std::getenv("GOW3_ASYNC_FENCES");
+        const char* env = std::getenv("KZSF_ASYNC_FENCES");
         return env && env[0] == '1';
     }();
-    if (async_fences && !Gow3Toggle::Disabled(Gow3Toggle::AsyncFences)) {
-        Gow3Copy::AfterCopies([eop] { SignalEop(eop); });
-    } else if (Vulkan::DrawPipe::OnStageB() && !Gow3Toggle::Disabled(Gow3Toggle::RecorderFences)) {
+    if (async_fences && !KzsfToggle::Disabled(KzsfToggle::AsyncFences)) {
+        KzsfCopy::AfterCopies([eop] { SignalEop(eop); });
+    } else if (Vulkan::DrawPipe::OnStageB() && !KzsfToggle::Disabled(KzsfToggle::RecorderFences)) {
         // The draw recording thread does not wait: the Vulkan recording thread signals the
         // fence after the copies queued before it.
         rasterizer.SignalAfterHostCopies([eop] { SignalEop(eop); });
@@ -346,8 +346,8 @@ void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
     // precede writes the guest sees.
     rasterizer.WaitHostCopies();
     rasterizer.WaitDeferredSignals();
-    Gow3WriteLog::Note(write_data->Address<u64>(), write_data->data,
-                     (header->type3.count.Value() - 2) * sizeof(u32), Gow3WriteLog::WriteData);
+    KzsfWriteLog::Note(write_data->Address<u64>(), write_data->data,
+                     (header->type3.count.Value() - 2) * sizeof(u32), KzsfWriteLog::WriteData);
     std::memcpy(write_data->Address<u64*>(), write_data->data,
                 (header->type3.count.Value() - 2) * sizeof(u32));
 }
@@ -360,7 +360,7 @@ void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
     rasterizer.ProcessDownloadImages();
     event_eos.SignalFence([](void* address, u64 value, u32 num_bytes) {
         auto* memory = Core::Memory::Instance();
-        Gow3WriteLog::Note(reinterpret_cast<u64>(address), &value, num_bytes, Gow3WriteLog::Fence);
+        KzsfWriteLog::Note(reinterpret_cast<u64>(address), &value, num_bytes, KzsfWriteLog::Fence);
         if (!memory->TryWriteBacking(address, &value, num_bytes)) {
             memcpy(address, &value, num_bytes);
         }
@@ -381,8 +381,8 @@ void Liverpool::NotePendingFences(const auto& event) {
     }
     constexpr bool is_eop = requires { event.SignalFence([](void*, u64, u32) {}, [] {}); };
     const auto note = [&](void* address, u64 data, u32 num_bytes) {
-        Gow3WriteLog::NoteIntent(reinterpret_cast<u64>(address), &data, num_bytes,
-                               is_eop ? Gow3WriteLog::FenceIntent : Gow3WriteLog::EosIntent);
+        KzsfWriteLog::NoteIntent(reinterpret_cast<u64>(address), &data, num_bytes,
+                               is_eop ? KzsfWriteLog::FenceIntent : KzsfWriteLog::EosIntent);
         pending_fences.push_back({reinterpret_cast<VAddr>(address), data, num_bytes, position});
         rasterizer->NotePendingGpuWrite(reinterpret_cast<VAddr>(address), num_bytes);
     };
@@ -444,7 +444,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
             break;
         }
         case PM4ItOpcode::DumpConstRam: {
-            // gow3: earlier draws on the recording thread may still read constants here.
+            // kzsf: earlier draws on the recording thread may still read constants here.
             if (rasterizer) {
                 rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonConstRam);
             }
@@ -487,7 +487,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
     FIBER_EXIT;
 }
 
-// gow3: graphics-register effects of a type-3 packet. The GPU thread and the draw-preparation
+// kzsf: graphics-register effects of a type-3 packet. The GPU thread and the draw-preparation
 // workers both go through this function, and both fold every register-writing packet into a
 // running checksum: equal checksums at a draw mean equal register files.
 u64 Liverpool::HashRegisterPacket(u64 checksum, const u32* words, u32 count) {
@@ -619,7 +619,7 @@ void Liverpool::ApplyGraphicsRegisterPacket(Regs& regs, const PM4Header* header,
     checksum = HashRegisterPacket(checksum, reinterpret_cast<const u32*>(header), count + 1);
 }
 
-// gow3: GOW3_DCB_STATS=1 — structure of graphics command buffers (read-only scan, printed every
+// kzsf: KZSF_DCB_STATS=1 — structure of graphics command buffers (read-only scan, printed every
 // 5 s): how many buffers, draws per buffer, state set before the first draw. Input for
 // processing command buffers on several threads.
 namespace {
@@ -732,7 +732,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     if (draw_prep) {
         draw_prep->BeginSubmission(seq, regs, gfx_reg_checksum);
     }
-    static const bool dcb_stats = EmulatorSettingsImpl::Flag("GOW3_DCB_STATS", false);
+    static const bool dcb_stats = EmulatorSettingsImpl::Flag("KZSF_DCB_STATS", false);
     const int dcb_depth = g_dcb_depth;
     if (dcb_stats) {
         ScanDcb(dcb, dcb_depth);
@@ -792,11 +792,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 case PM4CmdNop::PayloadType::PatchedFlip: {
                     // There is no evidence that GPU CP drives flip events by parsing
                     // special NOP packets. For convenience lets assume that it does.
-                    // gow3: after the writes before it (the buffer label: WriteData, which
+                    // kzsf: after the writes before it (the buffer label: WriteData, which
                     // may still be queued on the draw recording thread).
                     if (rasterizer) {
                         rasterizer->RunInOrder(&SignalFlip, header, sizeof(u32),
-                                               Gow3Toggle::PipelinedMemoryWrites);
+                                               KzsfToggle::PipelinedMemoryWrites);
                     } else {
                         Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
                     }
@@ -928,7 +928,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break; // registers: ApplyGraphicsRegisterPacket
             }
             case PM4ItOpcode::SetPredication: {
-                // gow3: once; God of War III sets it around most draws (~1000 lines a frame).
+                // kzsf: once; God of War III sets it around most draws (~1000 lines a frame).
                 static std::once_flag predication_logged;
                 std::call_once(predication_logged,
                                [] { LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION"); });
@@ -1176,7 +1176,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     break;
                 }
                 if (rasterizer->RunInOrder(&RunDmaData, dma_data, sizeof(PM4DmaData),
-                                           Gow3Toggle::PipelinedMemoryWrites) &&
+                                           KzsfToggle::PipelinedMemoryWrites) &&
                     (dma_data->dst_sel == DmaDataDst::Memory ||
                      dma_data->dst_sel == DmaDataDst::MemoryUsingL2)) {
                     rasterizer->NotePendingGpuWrite(dma_data->DstAddress<VAddr>(),
@@ -1190,11 +1190,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 ASSERT(!write_data->wr_one_addr.Value());
                 if (rasterizer) {
                     // In order with the draws (on the draw recording thread when in use).
-                    Gow3WriteLog::NoteIntent(write_data->Address<u64>(), write_data->data,
+                    KzsfWriteLog::NoteIntent(write_data->Address<u64>(), write_data->data,
                                            (count - 2) * sizeof(u32),
-                                           Gow3WriteLog::WriteDataIntent);
+                                           KzsfWriteLog::WriteDataIntent);
                     if (rasterizer->RunInOrder(&RunWriteData, header, (count + 1) * sizeof(u32),
-                                               Gow3Toggle::PipelinedMemoryWrites)) {
+                                               KzsfToggle::PipelinedMemoryWrites)) {
                         NotePendingWrite(*write_data, (count - 2) * sizeof(u32));
                         rasterizer->NotePendingGpuWrite(write_data->Address<VAddr>(),
                                                         (count - 2) * sizeof(u32));
@@ -1256,11 +1256,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     vo_port->WaitVoLabel([&] { return wait_reg_mem->Test(regs.reg_array); });
                     break;
                 }
-                // gow3: a fence handed to the draw recording thread counts as written: that
+                // kzsf: a fence handed to the draw recording thread counts as written: that
                 // thread runs everything in stream order.
                 if (u32 value; wait_reg_mem->mem_space.Value() ==
                                    PM4CmdWaitRegMem::MemSpace::Memory &&
-                               !Gow3Toggle::Disabled(Gow3Toggle::PendingFenceWaits) &&
+                               !KzsfToggle::Disabled(KzsfToggle::PendingFenceWaits) &&
                                PendingFenceValue(wait_reg_mem->Address<VAddr>(), value) &&
                                wait_reg_mem->TestValue(value)) {
                     break;
@@ -1353,17 +1353,17 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     if (draw_prep) {
         draw_prep->EndSubmission();
     }
-    if (seq != NoSeq && Gow3Stats::enabled) {
-        Gow3Stats::submissions.fetch_add(1, std::memory_order_relaxed);
-#ifndef _WIN32 // gow3: per-thread rusage statistics are Linux-only
+    if (seq != NoSeq && KzsfStats::enabled) {
+        KzsfStats::submissions.fetch_add(1, std::memory_order_relaxed);
+#ifndef _WIN32 // kzsf: per-thread rusage statistics are Linux-only
         if (rusage usage{}; getrusage(RUSAGE_THREAD, &usage) == 0) {
-            Gow3Stats::gpu_user_us.store(u64(usage.ru_utime.tv_sec) * 1000000 + usage.ru_utime.tv_usec,
+            KzsfStats::gpu_user_us.store(u64(usage.ru_utime.tv_sec) * 1000000 + usage.ru_utime.tv_usec,
                                        std::memory_order_relaxed);
-            Gow3Stats::gpu_sys_us.store(u64(usage.ru_stime.tv_sec) * 1000000 + usage.ru_stime.tv_usec,
+            KzsfStats::gpu_sys_us.store(u64(usage.ru_stime.tv_sec) * 1000000 + usage.ru_stime.tv_usec,
                                       std::memory_order_relaxed);
-            Gow3Stats::gpu_invol_switches.store(usage.ru_nivcsw, std::memory_order_relaxed);
-            Gow3Stats::gpu_vol_switches.store(usage.ru_nvcsw, std::memory_order_relaxed);
-            Gow3Stats::gpu_minor_faults.store(usage.ru_minflt, std::memory_order_relaxed);
+            KzsfStats::gpu_invol_switches.store(usage.ru_nivcsw, std::memory_order_relaxed);
+            KzsfStats::gpu_vol_switches.store(usage.ru_nvcsw, std::memory_order_relaxed);
+            KzsfStats::gpu_minor_faults.store(usage.ru_minflt, std::memory_order_relaxed);
         }
 #endif
     }
@@ -1387,7 +1387,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
     while (!acb.empty()) {
         ProcessCommands();
         if (rasterizer) {
-            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCompute); // gow3: compute work uses the caches
+            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCompute); // kzsf: compute work uses the caches
         }
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
@@ -1521,7 +1521,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             } else {
                 std::memcpy(&regs.reg_array[Regs::ShRegWordOffset + set_data->reg_offset],
                             header + 2, set_size);
-                // gow3: interleaves with the graphics stream at an unpredictable point, so
+                // kzsf: interleaves with the graphics stream at an unpredictable point, so
                 // draw-preparation workers cannot reproduce it: make their checksums differ.
                 gfx_reg_checksum = HashRegisterPacket(gfx_reg_checksum ^ 0xA5C0A5C0A5C0ull,
                                                       reinterpret_cast<const u32*>(header),
@@ -1581,7 +1581,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::WriteData: {
-            // gow3: copies deferred to the recording thread precede writes the guest sees, and
+            // kzsf: copies deferred to the recording thread precede writes the guest sees, and
             // so do graphics fences deferred to it (the pipe was drained before this packet).
             if (rasterizer) {
                 rasterizer->WaitHostCopies();
@@ -1618,7 +1618,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::ReleaseMem: {
-            // gow3: copies deferred to the recording thread precede writes the guest sees, and
+            // kzsf: copies deferred to the recording thread precede writes the guest sees, and
             // so do graphics fences deferred to it (the pipe was drained before this packet).
             if (rasterizer) {
                 rasterizer->WaitHostCopies();

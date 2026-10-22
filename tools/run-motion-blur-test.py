@@ -18,15 +18,15 @@ def main():
     values.update(motion_blur=args.on,upscaler='none')
     folder=ui.ROOT/'out'/('motion-blur-'+('on-' if args.on else 'off-')+time.strftime('%Y%m%d-%H%M%S'))
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/'out/gow3-probe-motion-blur.exe')
-    spec['env']['GOW3_CONFIG']=str(folder/'settings.ini')
+    spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-motion-blur.exe')
+    spec['env']['KZSF_CONFIG']=str(folder/'settings.ini')
     report=dict(motion_blur=args.on,upscaler='none',executable=spec['command'][0],
                 disable_flag=spec['env']['KZSF_DISABLE_MOTION_BLUR'])
     if args.report_only:
         print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],capture_output=True,text=True,
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],capture_output=True,text=True,
                            creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():print('Close the current game first.');return 1
+    if 'kzsf-probe' in running.stdout.lower():print('Close the current game first.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:print(reason);return 1
     if not Path(spec['command'][0]).is_file():print('Motion blur test build is missing.');return 1

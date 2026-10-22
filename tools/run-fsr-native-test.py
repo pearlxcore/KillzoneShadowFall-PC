@@ -13,23 +13,23 @@ import kzsf_local as ui
 
 def build_spec(values,folder,validation=False,quality=False,taa=False):
     spec=ui.launch_spec(values,folder)
-    spec['command'][0]=str(ui.ROOT/('out/gow3-probe-fsr-quality.exe' if quality else 'out/gow3-probe-fsr-native.exe'))
-    if taa: spec['command'][0]=str(ui.ROOT/'out/gow3-probe-taa.exe')
+    spec['command'][0]=str(ui.ROOT/('out/kzsf-probe-fsr-quality.exe' if quality else 'out/kzsf-probe-fsr-native.exe'))
+    if taa: spec['command'][0]=str(ui.ROOT/'out/kzsf-probe-taa.exe')
     env=spec['env']
-    for key in ('KZSF_FSR_QUALITY','KZSF_ENGINE_TURN','KZSF_ALLOCATION_DUMP','GOW3_RENDER_RES','GOW3_PRESET_FILE',
-                'GOW3_UPSCALE_BEFORE_CS','GOW3_UI_TRIGGER_VS','GOW3_DEBUG_MOTION','GOW3_OBJECT_MOTION_ALL'):
+    for key in ('KZSF_FSR_QUALITY','KZSF_ENGINE_TURN','KZSF_ALLOCATION_DUMP','KZSF_RENDER_RES','KZSF_PRESET_FILE',
+                'KZSF_UPSCALE_BEFORE_CS','KZSF_UI_TRIGGER_VS','KZSF_DEBUG_MOTION','KZSF_OBJECT_MOTION_ALL'):
         env.pop(key,None)
     env.update(KZSF_FSR_NATIVE='1',KZSF_DIRECT_TSC='1',KZSF_HEALTH_TRACE='0',
-        GOW3_UPSCALER='taa' if taa else 'fsr3',GOW3_UPSCALE_PRESET='0',GOW3_OUTPUT_RES='1920x1080',
-        GOW3_JITTER='0',GOW3_REACTIVE='0',GOW3_OBJECT_MOTION='0',GOW3_RCAS='0',
-        GOW3_READBACK_LINEAR='1',GOW3_PRECOMPILE='1',GOW3_BACKGROUND_WARMUP='0',
-        GOW3_FREEZE_SECONDS='0',GOW3_UPSCALER_DIAGNOSTICS='1',
-        GOW3_CONFIG=str(folder/'settings.ini'))
+        KZSF_UPSCALER='taa' if taa else 'fsr3',KZSF_UPSCALE_PRESET='0',KZSF_OUTPUT_RES='1920x1080',
+        KZSF_JITTER='0',KZSF_REACTIVE='0',KZSF_OBJECT_MOTION='0',KZSF_RCAS='0',
+        KZSF_READBACK_LINEAR='1',KZSF_PRECOMPILE='1',KZSF_BACKGROUND_WARMUP='0',
+        KZSF_FREEZE_SECONDS='0',KZSF_UPSCALER_DIAGNOSTICS='1',
+        KZSF_CONFIG=str(folder/'settings.ini'))
     if quality:
-        env.update(KZSF_FSR_QUALITY='1',GOW3_UPSCALE_PRESET='1',
-                   GOW3_SCENE_DEBUG=str(folder/'scene-debug.trigger'))
+        env.update(KZSF_FSR_QUALITY='1',KZSF_UPSCALE_PRESET='1',
+                   KZSF_SCENE_DEBUG=str(folder/'scene-debug.trigger'))
     if validation:
-        env.update(GOW3_VK_VALIDATION='1',GOW3_VK_STOP_ON_ERROR='1',
+        env.update(KZSF_VK_VALIDATION='1',KZSF_VK_STOP_ON_ERROR='1',
                    VK_LAYER_PATH=str(ui.ROOT/'out/vulkan-validation/clang64/bin'))
     return spec
 
@@ -44,18 +44,18 @@ def main():
     values=ui.load_preferences()
     folder=ui.ROOT/'out'/(('taa-native-' if args.taa else 'fsr-quality-' if args.quality else 'fsr-native-')+time.strftime('%Y%m%d-%H%M%S'))
     spec=build_spec(values,folder,args.validation,args.quality,args.taa)
-    keys=('KZSF_FSR_NATIVE','KZSF_DIRECT_TSC','GOW3_FPS_LIMIT','GOW3_DMEM_MB','GOW3_UPSCALER',
-          'GOW3_UPSCALE_PRESET','GOW3_OUTPUT_RES','GOW3_JITTER','GOW3_REACTIVE','GOW3_OBJECT_MOTION',
-          'GOW3_READBACK_LINEAR','GOW3_PRECOMPILE','GOW3_FREEZE_SECONDS',
+    keys=('KZSF_FSR_NATIVE','KZSF_DIRECT_TSC','KZSF_FPS_LIMIT','KZSF_DMEM_MB','KZSF_UPSCALER',
+          'KZSF_UPSCALE_PRESET','KZSF_OUTPUT_RES','KZSF_JITTER','KZSF_REACTIVE','KZSF_OBJECT_MOTION',
+          'KZSF_READBACK_LINEAR','KZSF_PRECOMPILE','KZSF_FREEZE_SECONDS',
           'KZSF_UNLIMITED_HEALTH','KZSF_INFINITE_AMMO')
     report={'executable':spec['command'][0],'settings':{k:spec['env'][k] for k in keys},
             'phase':('experimental native 1080p TAA, camera-only motion, jitter OFF; visual validation pending' if args.taa else 'experimental 720p scene proxies -> 1080p FSR; FPS/image validation pending' if args.quality else
                      'native-resolution camera-only integration; no FPS gain or complete temporal quality claimed')}
     report['settings']['KZSF_FSR_QUALITY']=spec['env'].get('KZSF_FSR_QUALITY','0')
     if args.report_only: print(json.dumps(report,indent=2));return 0
-    running=subprocess.run(['tasklist','/FI','IMAGENAME eq gow3-probe*','/FO','CSV','/NH'],
+    running=subprocess.run(['tasklist','/FI','IMAGENAME eq kzsf-probe*','/FO','CSV','/NH'],
         capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
-    if 'gow3-probe' in running.stdout.lower():print('Close the current game first.');return 1
+    if 'kzsf-probe' in running.stdout.lower():print('Close the current game first.');return 1
     ok,reason=ui.validate_game(values['game_dir'])
     if not ok:print(reason);return 1
     if not Path(spec['command'][0]).is_file():print('Native FSR test executable missing.');return 1

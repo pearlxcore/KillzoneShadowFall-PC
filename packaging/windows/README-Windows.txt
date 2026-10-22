@@ -1,4 +1,4 @@
-God of War III Remastered for PC (gow3_pc)
+God of War III Remastered for PC (kzsf_pc)
 ==========================================
 
 No game files are included. You need your own copy of God of War III Remastered: CUSA01623 with
@@ -13,7 +13,7 @@ Requirements
   Nothing else: Python and the libraries are inside this folder.
 
 Starting
-1. Extract this folder anywhere, for example C:\Games\gow3-windows (not inside the zip).
+1. Extract this folder anywhere, for example C:\Games\kzsf-windows (not inside the zip).
 2. Open "God of War III.exe". If Windows shows "Windows protected your PC", click More info,
    then Run anyway: the program is not digitally signed.
 3. Click "Choose the game folder", then Browse... next to Game folder, and select the folder
@@ -41,7 +41,7 @@ Next time
 
 Data
 - Saves, shader cache and the log: user\ next to God of War III.exe (keep it when updating).
-- Settings: gow3.ini next to God of War III.exe; launcher options in %APPDATA%\gow3-launcher.
+- Settings: kzsf.ini next to God of War III.exe; launcher options in %APPDATA%\kzsf-launcher.
 - Generated files (prepared game image, patches): out\.
 
 Problems
@@ -52,7 +52,7 @@ Problems
   Do not rename shadPS4's param.sfo to param.bin; the formats differ.
   The save dialog displays at most 32 entries. If the imported slot is missing, test
   with a separate Saves folder containing only that slot; keep the original saves.
-- RTSS/Afterburner and ReShade must target bin\gow3-probe.exe, not the launcher.
+- RTSS/Afterburner and ReShade must target bin\kzsf-probe.exe, not the launcher.
   Select Vulkan in the ReShade installer. Report the overlay versions if it still fails.
 - Black screen at start: Advanced -> Clear shader cache, then start again.
 - The game does not open: check the Log page, and send user\last_run.log with your report.
