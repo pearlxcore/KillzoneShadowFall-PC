@@ -2,8 +2,6 @@
 
 A Windows 10/11 PC port of **Killzone Shadow Fall**, with Vulkan graphics, mouse and controller support, and a dedicated launcher.
 
-**Current release: v0.2.0.**
-
 **Bring your own decrypted PS4 game dump: CUSA00190, update 01.81. No game files are included.**
 
 ## Support
