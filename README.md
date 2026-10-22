@@ -6,6 +6,10 @@ A Windows 10/11 PC port of **Killzone Shadow Fall**, with Vulkan graphics, mouse
 
 **Bring your own decrypted PS4 game dump: CUSA00190, update 01.81. No game files are included.**
 
+## Support
+
+[![Support me on Ko-fi](launcher/kofi.png)](https://ko-fi.com/R6R524N7X)
+
 ## Get started
 
 1. Download a [Windows package](https://github.com/pearlxcore/KillzoneShadowFall-PC/releases) and extract it.
@@ -145,10 +149,6 @@ Choose optional **Shader cache folder** and **Saved-data folder** paths under **
 Use **Advanced → Open latest session logs** when reporting a problem. Include your GPU/driver, chapter and checkpoint, selected model/settings, and relevant logs. **Do not upload game files.**
 
 For source builds and release packaging, see [Building on Windows](docs/BUILD-WINDOWS.md).
-
-## Support
-
-[![Support me on Ko-fi](launcher/kofi.png)](https://ko-fi.com/R6R524N7X)
 
 ## Credits
 
