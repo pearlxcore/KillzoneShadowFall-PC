@@ -128,6 +128,7 @@ An optional [starter shader cache](https://github.com/pearlxcore/KillzoneShadowF
 <img width="1922" height="1112" alt="3" src="https://github.com/user-attachments/assets/f9c832cd-a764-473b-bc95-f71f190125f0" />
 <img width="1922" height="1112" alt="4" src="https://github.com/user-attachments/assets/a10f8460-2763-4a6c-b8da-1a9917793a6d" />
 <img width="1922" height="1112" alt="5" src="https://github.com/user-attachments/assets/79dda350-5229-482c-9419-de0aea1fccae" />
+<img width="2240" height="1298" alt="image" src="https://github.com/user-attachments/assets/e63e7b57-82a7-47ab-bebd-4286bfdc85c9" />
 
 ## Saves and troubleshooting
 
