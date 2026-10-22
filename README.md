@@ -60,6 +60,7 @@ Enable their checkboxes on Home, then use **F8** for third person or **F9** to d
 
 https://github.com/user-attachments/assets/f92258e0-bf7a-4fe3-8411-33209a6baa48
 
+<img width="2233" height="1291" alt="image" src="https://github.com/user-attachments/assets/8f225b96-2f9c-4e5c-b5a6-d07f0e5e72b9" />
 
 
 Play as characters such as Echo, Sinclair or VSA Engineer. Select appearances in the in-game menu or cycle them with **F7 + Left/Right**; **F7 alone** toggles the selected appearance and default player. Models from other chapters load on selection, so switching may take a moment.
